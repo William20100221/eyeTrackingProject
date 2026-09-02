@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="d32246f4-b85b-4aab-bba6-a9a136df3240" name="Changes" comment="Initial commit: eye tracking project">
+      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="2.6788252002962178E-89" />
+      <entry key="MS500" value="1.930140284726934E-18" />
+      <entry key="S2" value="3.727324627136139E-5" />
+      <entry key="S5" value="0.016926177368672364" />
+      <entry key="S10" value="0.13010064322927986" />
+      <entry key="S30" value="0.5067104120523265" />
+      <entry key="S60" value="0.7121191702176143" />
+      <entry key="M2" value="0.8813931414106497" />
+      <entry key="M5" value="1.7087604952667428" />
+      <entry key="M10" value="3.4827031622999436" />
+      <entry key="M15" value="4.926259556395236" />
+      <entry key="M30" value="7.52396971454959" />
+      <entry key="H1" value="12.148121306853598" />
+      <entry key="H2" value="27.667646487935684" />
+      <entry key="H4" value="57.0085464011078" />
+      <entry key="D1" value="147.23184287996003" />
+      <entry key="W1" value="189.10552861544832" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="1.0" />
+      <entry key="MS500" value="1.0000001346763627" />
+      <entry key="S2" value="1.0191567946883306" />
+      <entry key="S5" value="1.2055555171857302" />
+      <entry key="S10" value="1.4533823079760944" />
+      <entry key="S30" value="1.7682245685627964" />
+      <entry key="S60" value="1.8765514777691292" />
+      <entry key="M2" value="1.9444201174079347" />
+      <entry key="M5" value="2.1307206720488927" />
+      <entry key="M10" value="2.4711977180096047" />
+      <entry key="M15" value="2.736142267836337" />
+      <entry key="M30" value="3.2013554675212674" />
+      <entry key="H1" value="3.94085325396413" />
+      <entry key="H2" value="6.292027307203501" />
+      <entry key="H4" value="10.753002155950504" />
+      <entry key="D1" value="22.58989927230275" />
+      <entry key="W1" value="27.094812479431486" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="4.49310376281677E-4" />
+      <entry key="MS500" value="0.21404711002730226" />
+      <entry key="S2" value="0.6942656193469103" />
+      <entry key="S5" value="1.055586196437842" />
+      <entry key="S10" value="1.4819092744585656" />
+      <entry key="S30" value="2.233712217871975" />
+      <entry key="S60" value="2.5667842540983394" />
+      <entry key="M2" value="2.8135870994482657" />
+      <entry key="M5" value="3.8277588494281347" />
+      <entry key="M10" value="5.941881763632315" />
+      <entry key="M15" value="7.651724592130569" />
+      <entry key="M30" value="10.718016602525749" />
+      <entry key="H1" value="16.08421973501073" />
+      <entry key="H2" value="33.95588343802541" />
+      <entry key="H4" value="67.7583741846827" />
+      <entry key="D1" value="169.82061012196638" />
+      <entry key="W1" value="216.2001428848704" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 0,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3IKc5W5KNpDEWIvAWJZASBl5qis" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.camera.executor": "Run",
+    "Python.capture.executor": "Run",
+    "Python.landmarker.executor": "Run",
+    "Python.path.executor": "Run",
+    "Python.play.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
+    "git-widget-placeholder": "master",
+    "junie.onboarding.icon.badge.shown": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.jshint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.jshint": "",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "to.speed.mode.migration.done": "true"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\zican\PycharmProjects\eyeTrackingProject\eyetracking\core" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-821f704e66d9-5bd6d13a2a75-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-262.9437.214" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="d32246f4-b85b-4aab-bba6-a9a136df3240" name="Changes" comment="" />
+      <created>1787516517525</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1787516517525</updated>
+      <workItem from="1787516518537" duration="17106000" />
+      <workItem from="1787880121805" duration="1730000" />
+      <workItem from="1788140563404" duration="14395000" />
+      <workItem from="1788293238983" duration="5772000" />
+    </task>
+    <task id="LOCAL-00001" summary="Initial commit: eye tracking project">
+      <option name="closed" value="true" />
+      <created>1788310832540</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1788310832540</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Initial commit: eye tracking project" />
+    <option name="LAST_COMMIT_MESSAGE" value="Initial commit: eye tracking project" />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$play.coverage" NAME="play Coverage Results" MODIFIED="1788169653011" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/testing" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$capture.coverage" NAME="capture Coverage Results" MODIFIED="1788307687757" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/testing" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$camera.coverage" NAME="camera Coverage Results" MODIFIED="1788293820819" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/services" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$path.coverage" NAME="path Coverage Results" MODIFIED="1788309299838" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$landmarker.coverage" NAME="landmarker Coverage Results" MODIFIED="1788295171376" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/services" />
+  </component>
+</project>
