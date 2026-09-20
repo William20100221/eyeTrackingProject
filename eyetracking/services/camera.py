@@ -12,13 +12,12 @@ class Camera:
     def __init__(self):
         devices = FilterGraph().get_input_devices()
         print(devices)
-        chice = int(input("Choose device(s) to capture: "))-1
+        choice = int(input("Choose device(s) to capture: "))-1
 
-        self._cap = cv.VideoCapture(chice)   # does NOT run at import
+        self._cap = cv.VideoCapture(choice)   # does NOT run at import
         if not self._cap.isOpened():
             print("Cannot open camera")
             raise RuntimeError("Cannot open camera")
-
     def read_rgb(self):
         ret, frame = self._cap.read()
         # if frame is read correctly ret is True

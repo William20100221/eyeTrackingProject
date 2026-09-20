@@ -1,6 +1,5 @@
-
-
 from dataclasses import dataclass
+import numpy as np
 
 @dataclass(frozen=True)
 class HeadPose:
@@ -18,3 +17,4 @@ class FrameResult:
     head_pose: HeadPose | None
     blink_score_left: float
     blink_score_right: float
+    landmarks: np.ndarray | None

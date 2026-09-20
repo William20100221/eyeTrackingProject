@@ -5,7 +5,16 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d32246f4-b85b-4aab-bba6-a9a136df3240" name="Changes" comment="Initial commit: eye tracking project">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/eyetracking/services/drawing.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/eyetracking/testing/path_test.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/eyetracking/ui/assistant_overlay.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/path.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/roadmap.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/roadmap.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/eyetracking/core/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/eyetracking/core/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/eyetracking/path.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/eyetracking/services/camera.py" beforeDir="false" afterPath="$PROJECT_DIR$/eyetracking/services/camera.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/eyetracking/services/landmarker.py" beforeDir="false" afterPath="$PROJECT_DIR$/eyetracking/services/landmarker.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -22,63 +31,67 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="2.6788252002962178E-89" />
-      <entry key="MS500" value="1.930140284726934E-18" />
-      <entry key="S2" value="3.727324627136139E-5" />
-      <entry key="S5" value="0.016926177368672364" />
-      <entry key="S10" value="0.13010064322927986" />
-      <entry key="S30" value="0.5067104120523265" />
-      <entry key="S60" value="0.7121191702176143" />
-      <entry key="M2" value="0.8813931414106497" />
-      <entry key="M5" value="1.7087604952667428" />
-      <entry key="M10" value="3.4827031622999436" />
-      <entry key="M15" value="4.926259556395236" />
-      <entry key="M30" value="7.52396971454959" />
-      <entry key="H1" value="12.148121306853598" />
-      <entry key="H2" value="27.667646487935684" />
-      <entry key="H4" value="57.0085464011078" />
-      <entry key="D1" value="147.23184287996003" />
-      <entry key="W1" value="189.10552861544832" />
+      <entry key="MS100" value="1.000000000845193" />
+      <entry key="MS500" value="1.0155414764104946" />
+      <entry key="S2" value="1.500970903827184" />
+      <entry key="S5" value="2.411073408566672" />
+      <entry key="S10" value="3.2514320846993074" />
+      <entry key="S30" value="4.257246193264684" />
+      <entry key="S60" value="4.603830103095381" />
+      <entry key="M2" value="4.85928619739961" />
+      <entry key="M5" value="6.108297490919192" />
+      <entry key="M10" value="8.623995621741734" />
+      <entry key="M15" value="10.645918466194365" />
+      <entry key="M30" value="14.418663178484445" />
+      <entry key="H1" value="17.887059373723545" />
+      <entry key="H2" value="20.64825784859156" />
+      <entry key="H4" value="22.575409834112918" />
+      <entry key="D1" value="76.41906767568446" />
+      <entry key="W1" value="296.9618081506831" />
     </decayedCancelled>
     <decayedSelected>
-      <entry key="MS100" value="1.0" />
-      <entry key="MS500" value="1.0000001346763627" />
-      <entry key="S2" value="1.0191567946883306" />
-      <entry key="S5" value="1.2055555171857302" />
-      <entry key="S10" value="1.4533823079760944" />
-      <entry key="S30" value="1.7682245685627964" />
-      <entry key="S60" value="1.8765514777691292" />
-      <entry key="M2" value="1.9444201174079347" />
-      <entry key="M5" value="2.1307206720488927" />
-      <entry key="M10" value="2.4711977180096047" />
-      <entry key="M15" value="2.736142267836337" />
-      <entry key="M30" value="3.2013554675212674" />
-      <entry key="H1" value="3.94085325396413" />
-      <entry key="H2" value="6.292027307203501" />
-      <entry key="H4" value="10.753002155950504" />
-      <entry key="D1" value="22.58989927230275" />
-      <entry key="W1" value="27.094812479431486" />
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="1.5484785212951302E-162" />
+      <entry key="S5" value="1.8878264833074033E-65" />
+      <entry key="S10" value="4.3449125230635015E-33" />
+      <entry key="S30" value="1.63177526519733E-11" />
+      <entry key="S60" value="4.039523851978298E-6" />
+      <entry key="M2" value="0.0020100489559002226" />
+      <entry key="M5" value="0.08547785607990609" />
+      <entry key="M10" value="0.3341962122020549" />
+      <entry key="M15" value="0.5641521099432626" />
+      <entry key="M30" value="1.0176823043637304" />
+      <entry key="H1" value="1.410244690444753" />
+      <entry key="H2" value="1.6744830081688475" />
+      <entry key="H4" value="1.83555001351227" />
+      <entry key="D1" value="10.142669543450722" />
+      <entry key="W1" value="41.41768659477401" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="4.49310376281677E-4" />
-      <entry key="MS500" value="0.21404711002730226" />
-      <entry key="S2" value="0.6942656193469103" />
-      <entry key="S5" value="1.055586196437842" />
-      <entry key="S10" value="1.4819092744585656" />
-      <entry key="S30" value="2.233712217871975" />
-      <entry key="S60" value="2.5667842540983394" />
-      <entry key="M2" value="2.8135870994482657" />
-      <entry key="M5" value="3.8277588494281347" />
-      <entry key="M10" value="5.941881763632315" />
-      <entry key="M15" value="7.651724592130569" />
-      <entry key="M30" value="10.718016602525749" />
-      <entry key="H1" value="16.08421973501073" />
-      <entry key="H2" value="33.95588343802541" />
-      <entry key="H4" value="67.7583741846827" />
-      <entry key="D1" value="169.82061012196638" />
-      <entry key="W1" value="216.2001428848704" />
+      <entry key="MS100" value="0.001161335073253063" />
+      <entry key="MS500" value="0.2603411090015516" />
+      <entry key="S2" value="0.9645160121037957" />
+      <entry key="S5" value="1.9419086811468438" />
+      <entry key="S10" value="2.9072454056636405" />
+      <entry key="S30" value="4.102306561513548" />
+      <entry key="S60" value="4.519777610886314" />
+      <entry key="M2" value="4.816964423003618" />
+      <entry key="M5" value="6.171196761923905" />
+      <entry key="M10" value="8.941915442654006" />
+      <entry key="M15" value="11.19677524282752" />
+      <entry key="M30" value="15.427662438868188" />
+      <entry key="H1" value="19.292080502807263" />
+      <entry key="H2" value="22.31976473654497" />
+      <entry key="H4" value="24.409337840532313" />
+      <entry key="D1" value="86.56094699762467" />
+      <entry key="W1" value="338.3791165446972" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -96,11 +109,14 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.assistant_overlay.executor": "Run",
     "Python.camera.executor": "Run",
     "Python.capture.executor": "Run",
     "Python.landmarker.executor": "Run",
     "Python.path.executor": "Run",
+    "Python.path_test.executor": "Run",
     "Python.play.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
@@ -115,11 +131,14 @@
     "node.js.selected.package.jshint": "",
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "ml.llm.AcpAgentsConfigurable",
     "to.speed.mode.migration.done": "true"
   }
 }]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\zican\PycharmProjects\eyeTrackingProject" />
+      <recent name="C:\Users\zican\PycharmProjects\eyeTrackingProject\eyetracking\testing" />
       <recent name="C:\Users\zican\PycharmProjects\eyeTrackingProject\eyetracking\core" />
     </key>
   </component>
@@ -140,7 +159,10 @@
       <workItem from="1787516518537" duration="17106000" />
       <workItem from="1787880121805" duration="1730000" />
       <workItem from="1788140563404" duration="14395000" />
-      <workItem from="1788293238983" duration="5772000" />
+      <workItem from="1788293238983" duration="25120000" />
+      <workItem from="1788729956392" duration="668000" />
+      <workItem from="1789786690683" duration="659000" />
+      <workItem from="1789897008319" duration="4905000" />
     </task>
     <task id="LOCAL-00001" summary="Initial commit: eye tracking project">
       <option name="closed" value="true" />
@@ -150,7 +172,23 @@
       <option name="project" value="LOCAL" />
       <updated>1788310832540</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Initial commit: eye tracking project">
+      <option name="closed" value="true" />
+      <created>1788311039158</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1788311039158</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Initial commit: eye tracking project">
+      <option name="closed" value="true" />
+      <created>1788311116335</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1788311116335</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -171,11 +209,24 @@
     <MESSAGE value="Initial commit: eye tracking project" />
     <option name="LAST_COMMIT_MESSAGE" value="Initial commit: eye tracking project" />
   </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/.venv/Lib/site-packages/mediapipe/tasks/python/__init__.py</url>
+          <line>16</line>
+          <option name="timeStamp" value="2" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+  </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/eyeTrackingProject$play.coverage" NAME="play Coverage Results" MODIFIED="1788169653011" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/testing" />
-    <SUITE FILE_PATH="coverage/eyeTrackingProject$capture.coverage" NAME="capture Coverage Results" MODIFIED="1788307687757" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/testing" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$path_test.coverage" NAME="path_test Coverage Results" MODIFIED="1788311542417" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/testing" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$capture.coverage" NAME="capture Coverage Results" MODIFIED="1788381157974" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/testing" />
     <SUITE FILE_PATH="coverage/eyeTrackingProject$camera.coverage" NAME="camera Coverage Results" MODIFIED="1788293820819" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/services" />
-    <SUITE FILE_PATH="coverage/eyeTrackingProject$path.coverage" NAME="path Coverage Results" MODIFIED="1788309299838" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$assistant_overlay.coverage" NAME="assistant_overlay Coverage Results" MODIFIED="1789897902606" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/ui" />
+    <SUITE FILE_PATH="coverage/eyeTrackingProject$path.coverage" NAME="path Coverage Results" MODIFIED="1788346282994" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking" />
     <SUITE FILE_PATH="coverage/eyeTrackingProject$landmarker.coverage" NAME="landmarker Coverage Results" MODIFIED="1788295171376" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/eyetracking/services" />
   </component>
 </project>

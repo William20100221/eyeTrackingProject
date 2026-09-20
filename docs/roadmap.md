@@ -1,6 +1,6 @@
 # Roadmap — where you are and what's left
 
-*Written 2026-09-01. Deadline ~2026-09-30, so roughly 4 weeks.*
+*Last updated 2026-09-07. Deadline is roughly early October — about 4 weeks.*
 
 ## Quick version
 

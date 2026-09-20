@@ -1,5 +1,47 @@
-#Mediapipe Wrapper
-from pathlib import Path;
-p = Path('eyetracking/services/landmarker.py').resolve()
-print(p)
-[print(i, x) for i, x in enumerate(p.parents)]
+"""MediaPipe wrapper: camera frames in, FrameResult out.
+
+This is the ONLY module in the project that imports mediapipe. Everything
+downstream works with eyetracking.core.models types.
+"""
+from __future__ import annotations
+
+from typing import Self
+import mediapipe as mp
+import numpy as np
+from mediapipe.tasks.python import BaseOptions
+from mediapipe.tasks.python import vision
+
+from eyetracking.core.models import FrameResult, HeadPose
+from path import find_model
+
+from path import find_model, Path
+from eyetracking.core.models import FrameResult, HeadPose
+
+class FaceLandmarker:
+    def __init__(self, MODEL_PATH: Path | None = None) -> None:
+        self.MODEL_PATH = find_model()
+        base_options = BaseOptions(model_asset_path=self.MODEL_PATH)
+        options = vision.FaceLandmarkerOptions(base_options=base_options,
+                                               output_face_blendshapes=True,
+                                               output_facial_transformation_matrixes=True,
+                                               num_faces=1)
+        self._detector = vision.FaceLandmarker.create_from_options(options)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self._detector.close()
+
+    def close(self) -> None:
+        if self._detector is not None:
+            self._detector.close()
+            self._detector = None
+
+
+    # def detect(self, rgb_frame: np.ndarray, timestamp_ms: int) -> FrameResult:
+    #
+    #     video = mp.Image.create_from_file(rgb_frame)
+    #     detection_result = detector.detect(video)
+    #
+    #     annotated_image = drawing.draw_landmarks_on_image(video.numpy_view(), detection_result)
