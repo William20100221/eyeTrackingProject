@@ -4,18 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d32246f4-b85b-4aab-bba6-a9a136df3240" name="Changes" comment="Initial commit: eye tracking project">
-      <change afterPath="$PROJECT_DIR$/eyetracking/services/drawing.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/eyetracking/testing/path_test.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/eyetracking/ui/assistant_overlay.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/path.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/roadmap.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/roadmap.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/eyetracking/core/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/eyetracking/core/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/eyetracking/path.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/eyetracking/services/camera.py" beforeDir="false" afterPath="$PROJECT_DIR$/eyetracking/services/camera.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/eyetracking/services/landmarker.py" beforeDir="false" afterPath="$PROJECT_DIR$/eyetracking/services/landmarker.py" afterDir="false" />
-    </list>
+    <list default="true" id="d32246f4-b85b-4aab-bba6-a9a136df3240" name="Changes" comment="Qt Camera Permission Mediapipe" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -37,61 +26,61 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.000000000845193" />
-      <entry key="MS500" value="1.0155414764104946" />
-      <entry key="S2" value="1.500970903827184" />
-      <entry key="S5" value="2.411073408566672" />
-      <entry key="S10" value="3.2514320846993074" />
-      <entry key="S30" value="4.257246193264684" />
-      <entry key="S60" value="4.603830103095381" />
-      <entry key="M2" value="4.85928619739961" />
-      <entry key="M5" value="6.108297490919192" />
-      <entry key="M10" value="8.623995621741734" />
-      <entry key="M15" value="10.645918466194365" />
-      <entry key="M30" value="14.418663178484445" />
-      <entry key="H1" value="17.887059373723545" />
-      <entry key="H2" value="20.64825784859156" />
-      <entry key="H4" value="22.575409834112918" />
-      <entry key="D1" value="76.41906767568446" />
-      <entry key="W1" value="296.9618081506831" />
+      <entry key="MS100" value="1.0000009415746016" />
+      <entry key="MS500" value="1.0983497969846696" />
+      <entry key="S2" value="2.43901792141868" />
+      <entry key="S5" value="4.660310015241636" />
+      <entry key="S10" value="7.077821231482551" />
+      <entry key="S30" value="11.491242753048478" />
+      <entry key="S60" value="13.73932804314791" />
+      <entry key="M2" value="15.264198398503925" />
+      <entry key="M5" value="17.338590670554144" />
+      <entry key="M10" value="20.129691042257388" />
+      <entry key="M15" value="22.25891813967959" />
+      <entry key="M30" value="26.171840360700447" />
+      <entry key="H1" value="29.739209698234692" />
+      <entry key="H2" value="32.564624992467856" />
+      <entry key="H4" value="34.53021018792897" />
+      <entry key="D1" value="88.39592128663438" />
+      <entry key="W1" value="308.9493671097139" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
       <entry key="MS500" value="0.0" />
-      <entry key="S2" value="1.5484785212951302E-162" />
-      <entry key="S5" value="1.8878264833074033E-65" />
-      <entry key="S10" value="4.3449125230635015E-33" />
-      <entry key="S30" value="1.63177526519733E-11" />
-      <entry key="S60" value="4.039523851978298E-6" />
-      <entry key="M2" value="0.0020100489559002226" />
-      <entry key="M5" value="0.08547785607990609" />
-      <entry key="M10" value="0.3341962122020549" />
-      <entry key="M15" value="0.5641521099432626" />
-      <entry key="M30" value="1.0176823043637304" />
-      <entry key="H1" value="1.410244690444753" />
-      <entry key="H2" value="1.6744830081688475" />
-      <entry key="H4" value="1.83555001351227" />
-      <entry key="D1" value="10.142669543450722" />
-      <entry key="W1" value="41.41768659477401" />
+      <entry key="S2" value="5.631112372438838E-168" />
+      <entry key="S5" value="1.2596145761758187E-67" />
+      <entry key="S10" value="3.5491049240277742E-34" />
+      <entry key="S30" value="7.080103605916129E-12" />
+      <entry key="S60" value="2.660846432158615E-6" />
+      <entry key="M2" value="0.0016313661694113525" />
+      <entry key="M5" value="0.07863059238547832" />
+      <entry key="M10" value="0.320531330767034" />
+      <entry key="M15" value="0.5486670239903026" />
+      <entry key="M30" value="1.0036182363689754" />
+      <entry key="H1" value="1.4004662070301315" />
+      <entry key="H2" value="1.668667568129902" />
+      <entry key="H4" value="1.832359830268362" />
+      <entry key="D1" value="10.139729422784967" />
+      <entry key="W1" value="41.41597123731215" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.001161335073253063" />
-      <entry key="MS500" value="0.2603411090015516" />
-      <entry key="S2" value="0.9645160121037957" />
-      <entry key="S5" value="1.9419086811468438" />
-      <entry key="S10" value="2.9072454056636405" />
-      <entry key="S30" value="4.102306561513548" />
-      <entry key="S60" value="4.519777610886314" />
-      <entry key="M2" value="4.816964423003618" />
-      <entry key="M5" value="6.171196761923905" />
-      <entry key="M10" value="8.941915442654006" />
-      <entry key="M15" value="11.19677524282752" />
-      <entry key="M30" value="15.427662438868188" />
-      <entry key="H1" value="19.292080502807263" />
-      <entry key="H2" value="22.31976473654497" />
-      <entry key="H4" value="24.409337840532313" />
-      <entry key="D1" value="86.56094699762467" />
-      <entry key="W1" value="338.3791165446972" />
+      <entry key="MS100" value="0.9460585254603531" />
+      <entry key="MS500" value="1.0859979563767885" />
+      <entry key="S2" value="2.4267468700993664" />
+      <entry key="S5" value="4.624709110219963" />
+      <entry key="S10" value="7.012689450742178" />
+      <entry key="S30" value="11.401661183852823" />
+      <entry key="S60" value="13.670884067178278" />
+      <entry key="M2" value="15.222764082921291" />
+      <entry key="M5" value="17.39347533743214" />
+      <entry key="M10" value="20.433098931340016" />
+      <entry key="M15" value="22.793640852948585" />
+      <entry key="M30" value="27.166385809227705" />
+      <entry key="H1" value="31.134232993480165" />
+      <entry key="H2" value="34.2301988160373" />
+      <entry key="H4" value="36.36088680609412" />
+      <entry key="D1" value="98.53485004019946" />
+      <entry key="W1" value="350.36495863652664" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -162,7 +151,7 @@
       <workItem from="1788293238983" duration="25120000" />
       <workItem from="1788729956392" duration="668000" />
       <workItem from="1789786690683" duration="659000" />
-      <workItem from="1789897008319" duration="4905000" />
+      <workItem from="1789897008319" duration="5257000" />
     </task>
     <task id="LOCAL-00001" summary="Initial commit: eye tracking project">
       <option name="closed" value="true" />
@@ -188,7 +177,15 @@
       <option name="project" value="LOCAL" />
       <updated>1788311116335</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Qt Camera Permission Mediapipe">
+      <option name="closed" value="true" />
+      <created>1789935486398</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1789935486398</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -207,7 +204,8 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Initial commit: eye tracking project" />
-    <option name="LAST_COMMIT_MESSAGE" value="Initial commit: eye tracking project" />
+    <MESSAGE value="Qt Camera Permission Mediapipe" />
+    <option name="LAST_COMMIT_MESSAGE" value="Qt Camera Permission Mediapipe" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
