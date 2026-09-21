@@ -12,14 +12,13 @@ from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision
 
 from eyetracking.core.models import FrameResult, HeadPose
-from path import find_model
-
 from path import find_model, Path
-from eyetracking.core.models import FrameResult, HeadPose
+
+
 
 class FaceLandmarker:
     def __init__(self, MODEL_PATH: Path | None = None) -> None:
-        self.MODEL_PATH = find_model()
+        self.MODEL_PATH = str(find_model())
         base_options = BaseOptions(model_asset_path=self.MODEL_PATH)
         options = vision.FaceLandmarkerOptions(base_options=base_options,
                                                output_face_blendshapes=True,

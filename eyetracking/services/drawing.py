@@ -1,3 +1,9 @@
+"""
+Draw face mesh and irises onto an image, and can plot a bar chart of the 52 expression scores
+Function should be used after/when landmarker.py
+"""
+
+
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
