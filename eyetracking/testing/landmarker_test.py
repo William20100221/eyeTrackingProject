@@ -1,3 +1,4 @@
+from eyetracking.core.models import FrameResult
 from eyetracking.services import landmarker
 
 #testing/capture.py
@@ -7,9 +8,8 @@ from eyetracking.services.camera import Camera
 from eyetracking.services.landmarker import FaceLandmarker
 
 
-def open_camera():
+def open_camera_and_detect(lm : FaceLandmarker):
     cam = Camera()
-
     while True:
         new_frame = cam.read_rgb()
 
@@ -23,15 +23,16 @@ def open_camera():
             return None
 
         cv.imshow("preview", cv.cvtColor(new_frame, cv.COLOR_RGB2BGR))
+        raw = lm.detect(new_frame)
+        print(raw)
 
-    return new_frame
 
-
+    return raw
 
 
 if __name__ == "__main__":
     lm = FaceLandmarker()
-    open_camera()
+    open_camera_and_detect(lm = lm)
     cv.destroyAllWindows()
 
 # When everything done, release the capture
