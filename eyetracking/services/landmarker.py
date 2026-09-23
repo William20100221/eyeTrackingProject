@@ -1,4 +1,5 @@
-"""MediaPipe wrapper: camera frames in, FrameResult out.
+"""
+MediaPipe wrapper: camera frames in, FrameResult out.
 
 This is the ONLY module in the project that imports mediapipe. Everything
 downstream works with eyetracking.core.models types.
@@ -9,6 +10,7 @@ from typing import Self
 import mediapipe as mp
 import numpy as np
 import time
+import math
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision
 
@@ -51,8 +53,49 @@ class FaceLandmarker:
     #
     #     annotated_image = drawing.draw_landmarks_on_image(video.numpy_view(), detection_result)
 
-    def detect(self, rgb_frame: np.ndarray):
+    def detect(self, rgb_frame: np.ndarray) -> FrameResult:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         raw = self._detector.detect_for_video(mp_image, self.get_last_timestamp())
-        return raw
+        face_blendshapes = raw.face_blendshapes[0]
+
+        for category in face_blendshapes:
+            if category.category_name == "eyeBlinkLeft":
+                blink_score_left = float(category.score)
+                #Debug
+                print(blink_score_left)
+            if category.category_name == "eyeBlinkRight":
+                blink_score_right = float(category.score)
+                #Debug
+                print(blink_score_right)
+
+        if not raw.face_landmarks:
+            return FrameResult(timestamp_ms = self.get_last_timestamp(),
+                               face_found=False,
+                               head_pose=None,
+                               blink_score_left = blink_score_left,
+                               blink_score_right = blink_score_right,
+                               landmarks = None)
+
+        else:
+            landmarks = raw.face_landmarks[0]
+            raw_landmark_lst = []
+            for landmark in landmarks:
+                 raw_landmark_lst.append([landmark.x, landmark.y, landmark.z])
+
+            m = raw.facial_transformation_matrixes[0]
+            a = math.degrees(math.asin(-m[2][0]))
+            b = math.degrees(math.atan2(m[2][1], m[2][2]))
+            c = math.degrees(math.atan2(m[1][0], m[0][0]))
+            frame_result = FrameResult(timestamp_ms = self.get_last_timestamp(),
+                                       face_found=True,
+                                       head_pose=HeadPose(a,b,c),
+                                       blink_score_left=blink_score_left,
+                                       blink_score_right=blink_score_right,
+                                       landmarks = np.array(raw_landmark_lst))
+
+
+        return frame_result
+
+
+
 

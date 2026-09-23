@@ -6,6 +6,7 @@ import cv2 as cv
 import numpy as np
 from eyetracking.services.camera import Camera
 from eyetracking.services.landmarker import FaceLandmarker
+import eyetracking.services.drawing as drawing
 
 
 def open_camera_and_detect(lm : FaceLandmarker):
@@ -22,9 +23,12 @@ def open_camera_and_detect(lm : FaceLandmarker):
             cam.release()
             return None
 
-        cv.imshow("preview", cv.cvtColor(new_frame, cv.COLOR_RGB2BGR))
         raw = lm.detect(new_frame)
         print(raw)
+        drawing_frame = drawing.draw_landmarks_on_image(new_frame, raw)
+        cv.imshow("preview", cv.cvtColor(drawing_frame, cv.COLOR_RGB2BGR))
+        print("--------------------------------------------------------------")
+
 
 
     return raw
