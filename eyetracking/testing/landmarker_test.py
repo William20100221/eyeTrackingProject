@@ -25,6 +25,11 @@ def open_camera_and_detect(lm : FaceLandmarker):
 
         raw = lm.detect(new_frame)
         print(raw)
+        try:
+            yaw = raw.head_pose.yaw
+            print(yaw)
+        except AttributeError as e:
+            print(e)
         drawing_frame = drawing.draw_landmarks_on_image(new_frame, raw)
         cv.imshow("preview", cv.cvtColor(drawing_frame, cv.COLOR_RGB2BGR))
         print("--------------------------------------------------------------")

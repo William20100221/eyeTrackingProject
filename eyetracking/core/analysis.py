@@ -1,4 +1,6 @@
-
+"""
+Checking Blink
+"""
 
 from .models import FrameResult
 
