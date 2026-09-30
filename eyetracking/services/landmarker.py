@@ -56,17 +56,21 @@ class FaceLandmarker:
     def detect(self, rgb_frame: np.ndarray) -> FrameResult:
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         raw = self._detector.detect_for_video(mp_image, self.get_last_timestamp())
-        face_blendshapes = raw.face_blendshapes[0]
+        try:
+            face_blendshapes = raw.face_blendshapes[0]
+        except IndexError as e:
+            print(e)
+            return None
 
         for category in face_blendshapes:
             if category.category_name == "eyeBlinkLeft":
                 blink_score_left = float(category.score)
                 #Debug
-                print(blink_score_left)
+                print({f"blink_score_left: {blink_score_left}"})
             if category.category_name == "eyeBlinkRight":
                 blink_score_right = float(category.score)
                 #Debug
-                print(blink_score_right)
+                print(f"blink_score_right: {blink_score_right}")
 
         if not raw.face_landmarks:
             return FrameResult(timestamp_ms = self.get_last_timestamp(),
@@ -78,9 +82,13 @@ class FaceLandmarker:
 
         else:
             landmarks = raw.face_landmarks[0]
+            if landmarks is None:
+                return None
             raw_landmark_lst = []
             for landmark in landmarks:
-                 raw_landmark_lst.append([landmark.x, landmark.y, landmark.z])
+                raw_landmark_lst.append([landmark.x, landmark.y, landmark.z])
+
+            raw_landmark_lst = np.array(raw_landmark_lst)
 
             m = raw.facial_transformation_matrixes[0]
             a = math.degrees(math.asin(-m[2][0]))
@@ -91,7 +99,7 @@ class FaceLandmarker:
                                        head_pose=HeadPose(a,b,c),
                                        blink_score_left=blink_score_left,
                                        blink_score_right=blink_score_right,
-                                       landmarks = np.array(raw_landmark_lst))
+                                       landmarks = raw_landmark_lst)
 
 
         return frame_result

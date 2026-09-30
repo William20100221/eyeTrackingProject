@@ -6,6 +6,7 @@ Function should be used after/when landmarker.py
 
 import mediapipe as mp
 from mediapipe.tasks import python
+from eyetracking.core.models import HeadPose, FrameResult
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.components.containers.landmark import NormalizedLandmark
 from mediapipe.tasks.python.vision import drawing_utils
@@ -14,7 +15,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def draw_landmarks_on_image(rgb_image, detection_result):
+def draw_landmarks_on_image(rgb_image, detection_result: FrameResult | None):
+    if detection_result is None:
+        print("drawing.py draw_landmarks_on_image() : No detection result, no drawing")
+        return rgb_image
     face_landmarks_list = detection_result.landmarks
     annotated_image = np.copy(rgb_image)
 
@@ -22,7 +26,7 @@ def draw_landmarks_on_image(rgb_image, detection_result):
         return annotated_image
 
     # Loop through the detected faces to visualize.
-    face_landmarks = [NormalizedLandmark(x=x, y=y, z=y) for x,y,z in face_landmarks_list]
+    face_landmarks = [NormalizedLandmark(x=x, y=y, z=z) for x,y,z in face_landmarks_list]
 
 
 

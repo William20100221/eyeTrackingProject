@@ -1,5 +1,6 @@
 # --- Project-specific ---
 /docs
+/data
 
 # --- Python bytecode ---
 __pycache__/

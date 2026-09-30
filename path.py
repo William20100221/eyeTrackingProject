@@ -9,6 +9,9 @@ _MODULE_PATH = Path(__file__).resolve()
 # Never call .resolve() on this -- that would measure it against the cwd.
 MODEL_RELPATH = Path("models") / "face_landmarker.task"
 
+# Saved calibrations. This file sits in the project root, so its folder IS the root.
+DATA_DIR = _MODULE_PATH.parent / "data"
+
 
 def find_model(relpath: Path = MODEL_RELPATH) -> Path:
     """Return an absolute path to the model file.
