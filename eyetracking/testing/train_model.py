@@ -1,8 +1,15 @@
 """
-Train on the latest saved calibration and print how accurate the model is.
+Train on a saved calibration and print how accurate the model is.
 
-    python -m eyetracking.testing.train_model
+    python -m eyetracking.testing.train_model                 (newest file)
+    python -m eyetracking.testing.train_model data/<file>.json
+
+Give the file when comparing versions (branches), so every version is
+measured on the SAME data.
 """
+import sys
+from pathlib import Path
+
 from PySide6.QtGui import QGuiApplication
 
 from eyetracking.core.gaze_model import GazeModel, leave_one_dot_out, mean_error_px
@@ -10,7 +17,7 @@ from eyetracking.services.storage import latest_calibration, load_calibration
 
 
 def main() -> None:
-    path = latest_calibration()
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else latest_calibration()
     if path is None:
         print("No calibration saved yet: run the calibration window first")
         return
