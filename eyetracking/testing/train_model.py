@@ -37,7 +37,7 @@ def main() -> None:
     errors = leave_one_dot_out(samples, w, h)
     print("Each dot tested by a model that never saw it:")
     for (x, y), err in errors.items():
-        print(f"  dot ({x:.1f}, {y:.1f}): {err:.0f} px")
+        print(f"  dot ({x:.2f}, {y:.2f}): {err:.0f} px")
     print(f"  average: {sum(errors.values()) / len(errors):.0f} px")
 
 

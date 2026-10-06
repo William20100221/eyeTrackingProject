@@ -12,10 +12,11 @@ from typing import Sequence
 from eyetracking.core.models import CalibrationSample
 
 
-def nine_point_grid(margin: float = 0.1) -> list[tuple[float, float]]:
-    """3x3 grid of (x, y) screen fractions, row by row.
+def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
+    """n x n grid of (x, y) screen fractions, row by row.
+    9 dots is too few to fit a curve AND test it: use 5x5 (25) at least.
     `margin` keeps the dots off the very edge of the screen."""
-    positions = [margin, 0.5, 1 - margin]
+    positions = [round(margin + (1 - 2 * margin) * i / (n - 1), 4) for i in range(n)]
     return [(x, y) for y in positions for x in positions]
 
 

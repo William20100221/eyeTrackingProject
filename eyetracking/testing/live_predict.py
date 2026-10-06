@@ -6,7 +6,7 @@ Checkpoint: live gaze predictions printed in the console (no window yet).
 
 Trains on a saved calibration, then for every camera frame:
 
-    camera -> MediaPipe -> 18 features -> model -> (x, y) on screen
+    camera -> MediaPipe -> 10 features -> model -> (x, y) on screen
 
 x and y are fractions of the screen (0 = left/top, 1 = right/bottom), the
 same as the calibration dots. Look at different parts of the screen and

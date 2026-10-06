@@ -1,5 +1,5 @@
 """
-Calibration page: nine dots, one at a time, full screen (PySide6).
+Calibration page: a grid of dots, one at a time, full screen (PySide6).
 
 Only drawing and timing live here. The dot bookkeeping is in
 core/calibration.py, the camera is in services/tracker.py, and a finished
@@ -25,7 +25,7 @@ from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from eyetracking.core.calibration import CalibrationSession, nine_point_grid
+from eyetracking.core.calibration import CalibrationSession, point_grid
 from eyetracking.core.models import CalibrationSample
 from eyetracking.services.storage import save_calibration
 from eyetracking.services.tracker import EyeTracker
@@ -54,7 +54,7 @@ class CalibrationWindow(QWidget):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._get_features = get_features
-        self._session = CalibrationSession(targets or nine_point_grid())
+        self._session = CalibrationSession(targets or point_grid())
         self._phase = "intro"          # intro -> settle -> collect -> ... -> done
         self._clock = QElapsedTimer()  # time spent in the current phase
         self._timer = QTimer(self)
@@ -185,9 +185,9 @@ def main() -> int:
 
     def on_finished(samples: list[CalibrationSample]) -> None:
         print(f"Collected {len(samples)} samples")
-        for tx, ty in nine_point_grid():
+        for tx, ty in point_grid():
             count = sum(1 for s in samples if (s.target_x, s.target_y) == (tx, ty))
-            print(f"  dot ({tx:.1f}, {ty:.1f}): {count} samples")
+            print(f"  dot ({tx:.2f}, {ty:.2f}): {count} samples")
 
         if tracker is None:
             print("--mouse mode: fake data, not saved")

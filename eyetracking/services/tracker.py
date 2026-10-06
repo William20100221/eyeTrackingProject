@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Self
 
 from eyetracking.core.analysis import is_blinking
-from eyetracking.core.features import eye_points
+from eyetracking.core.features import gaze_features
 from eyetracking.core.models import FrameResult
 from eyetracking.services.camera import Camera
 from eyetracking.services.landmarker import FaceLandmarker
@@ -37,12 +37,7 @@ class EyeTracker:
         result = self.read()
         if result is None or not result.face_found or is_blinking(result):
             return None
-        points = eye_points(result)
-        if points is None:
-            return None
-        # PLACEHOLDER: the 6 raw eye points (x, y, z each = 18 numbers).
-        # Swap this for your normalised features from features.py when ready.
-        return tuple(points.flatten().tolist())
+        return gaze_features(result)
 
     def close(self) -> None:
         self._landmarker.close()

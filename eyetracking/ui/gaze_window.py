@@ -5,7 +5,7 @@ Live gaze demo: a dot on a full-screen window where the model thinks you look.
     python -m eyetracking.ui.gaze_window data/<file>.json
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
-The faint rings are the 9 calibration positions. Look at one and see where
+The faint rings are the calibration positions (5x5 grid). Look at one and see where
 the dot lands: a quick visual accuracy check. Esc quits.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
@@ -21,7 +21,7 @@ from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from eyetracking.core.calibration import nine_point_grid
+from eyetracking.core.calibration import point_grid
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.services.storage import latest_calibration, load_calibration
 from eyetracking.services.tracker import EyeTracker
@@ -42,7 +42,7 @@ class GazeWindow(QWidget):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._get_point = get_point
-        self._targets = list(targets or nine_point_grid())
+        self._targets = list(targets or point_grid())
         self._point: tuple[float, float] | None = None   # last prediction, 0..1
         self._stale = True                                # no prediction this tick
 
