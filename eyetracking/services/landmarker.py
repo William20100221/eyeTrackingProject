@@ -14,14 +14,17 @@ import math
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision
 
+from pathlib import Path
+
 from eyetracking.core.models import FrameResult, HeadPose
-from path import find_model, Path
+from path import find_model
 
 
 
 class FaceLandmarker:
     def __init__(self, MODEL_PATH: Path | None = None) -> None:
-        self.MODEL_PATH = str(find_model())
+        # use the path you pass in; otherwise find models/face_landmarker.task
+        self.MODEL_PATH = str(MODEL_PATH or find_model())
         base_options = BaseOptions(model_asset_path=self.MODEL_PATH)
         options = vision.FaceLandmarkerOptions(base_options=base_options,
                                                output_face_blendshapes=True,
@@ -38,7 +41,7 @@ class FaceLandmarker:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        self._detector.close()
+        self.close()   # safe even if close() was already called
 
     def close(self) -> None:
         if self._detector is not None:
@@ -46,63 +49,46 @@ class FaceLandmarker:
             self._detector = None
 
 
-    # def detect(self, rgb_frame: np.ndarray, timestamp_ms: int) -> FrameResult:
-    #
-    #     video = mp.Image.create_from_file(rgb_frame)
-    #     detection_result = detector.detect(video)
-    #
-    #     annotated_image = drawing.draw_landmarks_on_image(video.numpy_view(), detection_result)
-
     def detect(self, rgb_frame: np.ndarray) -> FrameResult:
+        # ONE timestamp per frame: MediaPipe needs it to go up on every call,
+        # and the FrameResult should carry the same time MediaPipe saw
+        timestamp_ms = self.get_last_timestamp()
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        raw = self._detector.detect_for_video(mp_image, self.get_last_timestamp())
-        try:
-            face_blendshapes = raw.face_blendshapes[0]
-        except IndexError as e:
-            print(e)
-            return None
+        raw = self._detector.detect_for_video(mp_image, timestamp_ms)
 
-        for category in face_blendshapes:
-            if category.category_name == "eyeBlinkLeft":
-                blink_score_left = float(category.score)
-                #Debug
-                print({f"blink_score_left: {blink_score_left}"})
-            if category.category_name == "eyeBlinkRight":
-                blink_score_right = float(category.score)
-                #Debug
-                print(f"blink_score_right: {blink_score_right}")
-
+        # face found = landmarks came back (blendshapes only exist if that option is on)
         if not raw.face_landmarks:
-            return FrameResult(timestamp_ms = self.get_last_timestamp(),
+            return FrameResult(timestamp_ms = timestamp_ms,
                                face_found=False,
                                head_pose=None,
-                               blink_score_left = blink_score_left,
-                               blink_score_right = blink_score_right,
+                               blink_score_left = 0.0,
+                               blink_score_right = 0.0,
                                landmarks = None)
 
-        else:
-            landmarks = raw.face_landmarks[0]
-            if landmarks is None:
-                return None
-            raw_landmark_lst = []
-            for landmark in landmarks:
-                raw_landmark_lst.append([landmark.x, landmark.y, landmark.z])
+        blink_score_left = blink_score_right = 0.0
+        if raw.face_blendshapes:
+            for category in raw.face_blendshapes[0]:
+                if category.category_name == "eyeBlinkLeft":
+                    blink_score_left = float(category.score)
+                elif category.category_name == "eyeBlinkRight":
+                    blink_score_right = float(category.score)
 
-            raw_landmark_lst = np.array(raw_landmark_lst)
+        raw_landmark_lst = []
+        for landmark in raw.face_landmarks[0]:
+            raw_landmark_lst.append([landmark.x, landmark.y, landmark.z])
+        raw_landmark_lst = np.array(raw_landmark_lst)
 
-            m = raw.facial_transformation_matrixes[0]
-            a = math.degrees(math.asin(-m[2][0]))
-            b = math.degrees(math.atan2(m[2][1], m[2][2]))
-            c = math.degrees(math.atan2(m[1][0], m[0][0]))
-            frame_result = FrameResult(timestamp_ms = self.get_last_timestamp(),
-                                       face_found=True,
-                                       head_pose=HeadPose(a,b,c),
-                                       blink_score_left=blink_score_left,
-                                       blink_score_right=blink_score_right,
-                                       landmarks = raw_landmark_lst)
-
-
-        return frame_result
+        m = raw.facial_transformation_matrixes[0]
+        # clamp: rounding can push the value a hair past 1, and asin(1.0000001) crashes
+        yaw = math.degrees(math.asin(max(-1.0, min(1.0, -m[2][0]))))
+        pitch = math.degrees(math.atan2(m[2][1], m[2][2]))
+        roll = math.degrees(math.atan2(m[1][0], m[0][0]))
+        return FrameResult(timestamp_ms = timestamp_ms,
+                           face_found=True,
+                           head_pose=HeadPose(yaw, pitch, roll),
+                           blink_score_left=blink_score_left,
+                           blink_score_right=blink_score_right,
+                           landmarks = raw_landmark_lst)
 
 
 

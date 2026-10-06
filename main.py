@@ -1,12 +1,12 @@
+"""
+Entry point:  python main.py
 
+For now this starts the calibration window (the finished part of the app).
+When ui/main_window.py exists, start that here instead.
+"""
+import sys
 
-import PySide6.QtGui as QtGui
+from eyetracking.ui.calibration_window import main
 
-import PySide6.QtWidgets
-app = PySide6.QtWidgets.QApplication([])
-
-from PySide6.QtWidgets import QApplication
-app2 = QApplication([])
-
-from PySide6 import QtWidgets
-app3 = QtWidgets.QApplication([])
+if __name__ == "__main__":
+    sys.exit(main())
