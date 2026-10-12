@@ -1,12 +1,12 @@
 """
 Entry point:  python main.py
 
-For now this starts the calibration window (the finished part of the app).
-When ui/main_window.py exists, start that here instead.
+Starts the whole app (eyetracking/app.py): floating ball + chat panel,
+with calibrate / check / read commands. Add --mouse to try it without a camera.
 """
 import sys
 
-from eyetracking.ui.calibration_window import main
+from eyetracking.app import main
 
 if __name__ == "__main__":
     sys.exit(main())
