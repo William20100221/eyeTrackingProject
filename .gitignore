@@ -1,6 +1,7 @@
 # --- Project-specific ---
 /docs
 /data
+graphify-out/
 
 # --- Python bytecode ---
 __pycache__/
