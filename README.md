@@ -1,8 +1,8 @@
-# Eye-Tracking Reading Assistant
+## Eye-Tracking Reading Assistant
 
 Read on your computer and find out what you missed. Using only your webcam, the app tracks which paragraphs you actually read. An AI then summarises the parts you skipped and quizzes you on them.
 
-# Install Requirements
+## Install Requirements
 
 This project is built with Mediapipe, OpenCV, scikit-learn and PySide6 (Qt) which all requires to be installed
 
