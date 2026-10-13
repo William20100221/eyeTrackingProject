@@ -5,6 +5,10 @@ R_OUTER, R_INNER, R_UPPER, R_LOWER, R_IRIS = 33, 133, 159, 145, 468
 L_INNER, L_OUTER, L_UPPER, L_LOWER, L_IRIS = 362, 263, 386, 374, 473
 NOSE_TIP = 1
 
+# how many numbers gaze_features() returns. Saved calibrations with a different
+# count come from an older version of this file and can't be trained on.
+N_FEATURES = 10
+
 
 def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
     """Head-invariant gaze features: WHERE the iris sits inside each eye.

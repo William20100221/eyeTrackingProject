@@ -1,8 +1,8 @@
 """
 Live gaze demo: a dot on a full-screen window where the model thinks you look.
 
-    python -m eyetracking.ui.gaze_window                    (newest calibration)
-    python -m eyetracking.ui.gaze_window data/<file>.json
+    python -m eyetracking.ui.gaze_window                    (all calibrations, newest weighted most)
+    python -m eyetracking.ui.gaze_window data/<file>.json   (just that one)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
 The faint rings are the calibration positions (5x5 grid). Look at one and see where
@@ -22,8 +22,9 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid
+from eyetracking.core.features import N_FEATURES
 from eyetracking.core.gaze_model import GazeModel
-from eyetracking.services.storage import latest_calibration, load_calibration
+from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
 
 TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
@@ -150,15 +151,18 @@ def main() -> int:
         tracker = None
         get_point = fake_point_from_mouse
     else:
+        # one file if given, otherwise every saved calibration, the newest weighted most
         files = [a for a in sys.argv[1:] if not a.startswith("--")]
-        path = Path(files[0]) if files else latest_calibration()
-        if path is None:
+        if files:
+            samples, weights = load_calibration(Path(files[0])), None
+        else:
+            samples, weights = load_all_calibrations(N_FEATURES)
+        if not samples:
             print("No calibration saved yet: run the calibration window first")
             return 1
 
-        model = GazeModel()
-        model.fit(load_calibration(path))
-        print(f"Trained on {path.name}")
+        model = GazeModel().fit(samples, weights)
+        print(f"Trained on {len(samples)} samples")
         tracker = EyeTracker()             # asks which camera, in the console
 
         def get_point() -> tuple[float, float] | None:

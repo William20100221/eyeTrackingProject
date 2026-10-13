@@ -1,10 +1,10 @@
 """
 Checkpoint: live gaze predictions printed in the console (no window yet).
 
-    python -m eyetracking.testing.live_predict                  (newest calibration)
-    python -m eyetracking.testing.live_predict data/<file>.json
+    python -m eyetracking.testing.live_predict                  (all calibrations)
+    python -m eyetracking.testing.live_predict data/<file>.json (just that one)
 
-Trains on a saved calibration, then for every camera frame:
+Trains on the saved calibrations (newest weighted most), then for every camera frame:
 
     camera -> MediaPipe -> 10 features -> model -> (x, y) on screen
 
@@ -16,8 +16,9 @@ import sys
 import time
 from pathlib import Path
 
+from eyetracking.core.features import N_FEATURES
 from eyetracking.core.gaze_model import GazeModel
-from eyetracking.services.storage import latest_calibration, load_calibration
+from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
 
 PRINT_EVERY_S = 0.2   # 5 lines a second is readable; every frame (~20-30) is not
@@ -31,16 +32,19 @@ def region(x: float, y: float) -> str:
 
 
 def main() -> None:
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else latest_calibration()
-    if path is None:
+    # one file if given, otherwise every saved calibration, the newest weighted most
+    if len(sys.argv) > 1:
+        samples, weights = load_calibration(Path(sys.argv[1])), None
+    else:
+        samples, weights = load_all_calibrations(N_FEATURES)
+    if not samples:
         print("No calibration saved yet: run the calibration window first")
         return
 
     # train on the saved features. Live features come from the SAME function
     # (EyeTracker.read_features), so the model sees the same kind of numbers
-    model = GazeModel()
-    model.fit(load_calibration(path))
-    print(f"Trained on {path.name}. Look around the screen; Ctrl+C to stop.\n")
+    model = GazeModel().fit(samples, weights)
+    print(f"Trained on {len(samples)} samples. Look around the screen; Ctrl+C to stop.\n")
 
     with EyeTracker() as tracker:           # asks which camera, in the console
         frames = skipped = 0

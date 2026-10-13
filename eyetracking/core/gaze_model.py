@@ -14,7 +14,7 @@ from typing import Sequence
 
 import numpy as np
 from sklearn.linear_model import RidgeCV
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
 from eyetracking.core.models import CalibrationSample
@@ -43,10 +43,16 @@ class GazeModel:
             StandardScaler(), PolynomialFeatures(2), RidgeCV(alphas=np.logspace(-3, 3, 13)))
         self._trained = False
 
-    def fit(self, samples: list[CalibrationSample]) -> GazeModel:
+    def fit(self, samples: list[CalibrationSample],
+            sample_weight: Sequence[float] | None = None) -> GazeModel:
         X, y = _xy(samples)
+        # sample_weight: how much each sample counts (newer calibrations more).
+        # A pipeline must be told WHICH step gets it: the last one, the regressor
+        kw = {} if sample_weight is None else {"sample_weight": np.asarray(sample_weight)}
+        if kw and isinstance(self._regressor, Pipeline):
+            kw = {f"{self._regressor.steps[-1][0]}__sample_weight": kw["sample_weight"]}
         # every sklearn model learns with .fit(); a 2-column y trains x and y together
-        self._regressor.fit(X, y)
+        self._regressor.fit(X, y, **kw)
         self._trained = True
         return self   # so GazeModel().fit(samples) hands back the trained model
 
@@ -78,19 +84,26 @@ def mean_error_px(model: GazeModel, samples: list[CalibrationSample],
 
 
 def leave_one_dot_out(samples: list[CalibrationSample],
-                      screen_w: int, screen_h: int) -> dict[tuple[float, float], float]:
+                      screen_w: int, screen_h: int,
+                      weights: Sequence[float] | None = None,
+                      test: list[CalibrationSample] | None = None
+                      ) -> dict[tuple[float, float], float]:
     """For each dot: train on the OTHER dots only, then measure the error on
     this dot. Honest, because the model never saw the dot it's tested on.
-    Edge/corner dots measure extrapolation, so expect them to be worst."""
-    dots = sorted({(s.target_x, s.target_y) for s in samples})
+    Edge/corner dots measure extrapolation, so expect them to be worst.
+    `test` (default: `samples`) = which samples to score, e.g. only the newest
+    session, so models trained on different data are scored the same way."""
+    test = samples if test is None else test
+    dots = sorted({(s.target_x, s.target_y) for s in test})
     errors = {}
     for dot in dots:
-        # hold out a WHOLE dot: samples from the same dot are near-copies, so
-        # testing on any of them would let the model peek at the answer
-        train = [s for s in samples if (s.target_x, s.target_y) != dot]
-        test = [s for s in samples if (s.target_x, s.target_y) == dot]
-        model = GazeModel().fit(train)
-        errors[dot] = mean_error_px(model, test, screen_w, screen_h)
+        # hold out a WHOLE dot (in every session): samples from the same dot are
+        # near-copies, so testing on any of them would let the model peek
+        keep = [i for i, s in enumerate(samples) if (s.target_x, s.target_y) != dot]
+        model = GazeModel().fit([samples[i] for i in keep],
+                                None if weights is None else [weights[i] for i in keep])
+        held_out = [s for s in test if (s.target_x, s.target_y) == dot]
+        errors[dot] = mean_error_px(model, held_out, screen_w, screen_h)
     return errors
 
 
@@ -111,4 +124,15 @@ if __name__ == "__main__":
     inner = [e for (x, y), e in errs.items() if 0.1 < x < 0.9 and 0.1 < y < 0.9]
     print(f"train {fit_err:.0f}px, held-out interior dots {np.mean(inner):.0f}px")
     assert fit_err < 30 and np.mean(inner) < 40
+
+    # weights: an older session where the head sat differently (eye features
+    # shifted). Weighting today's session higher should fit TODAY better.
+    shift = np.array([0.1] * 4 + [0] * 6)
+    old = [CalibrationSample(tuple(np.array(s.features) + shift), s.target_x, s.target_y)
+           for s in samples]
+    both, weights = samples + old, [1.0] * len(samples) + [0.5] * len(old)
+    plain = mean_error_px(GazeModel().fit(both), samples, w, h)
+    weighted = mean_error_px(GazeModel().fit(both, weights), samples, w, h)
+    print(f"today's error: equal weights {plain:.0f}px, newest weighted {weighted:.0f}px")
+    assert weighted < plain
     print("ok")

@@ -29,11 +29,11 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, Q
                                QScrollArea, QVBoxLayout, QWidget)
 
 from eyetracking.core.analysis import is_blinking
-from eyetracking.core.features import gaze_features
+from eyetracking.core.features import N_FEATURES, gaze_features
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.reading import mark_unread, unread_word_count
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
-from eyetracking.services.storage import latest_calibration, load_calibration, save_calibration
+from eyetracking.services.storage import load_all_calibrations, save_calibration
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import AssistantPanel, DwellController, FloatingBall, GazeCursor
@@ -216,15 +216,20 @@ class App(QObject):
 
     # ---- gaze ------------------------------------------------------
     def _load_model(self) -> GazeModel | None:
-        path = None if self.mouse else latest_calibration()
-        return GazeModel().fit(load_calibration(path)) if path else None
+        """Train on every saved calibration, the newest weighted most."""
+        self.samples_used = 0
+        if self.mouse:
+            return None
+        samples, weights = load_all_calibrations(N_FEATURES)
+        self.samples_used = len(samples)
+        return GazeModel().fit(samples, weights) if samples else None
 
     def _model_status(self) -> str:
         if self.mouse:
             return "Mouse mode: the mouse plays your eyes."
         if self.model is None:
             return "No calibration yet: type calibrate first."
-        return f"Gaze model trained on {latest_calibration().name}."
+        return f"Gaze model trained on {self.samples_used} samples, the newest calibration counting most."
 
     def predict(self, features) -> tuple[float, float] | None:
         """Eye features -> (x, y) screen fractions, or None."""
@@ -312,9 +317,9 @@ class App(QObject):
             self.panel.reply("No samples: was your face in view? Try calibrate again.")
         else:
             path = save_calibration(samples)
-            self.model = GazeModel().fit(samples)
+            self.model = self._load_model()       # the new file + all older ones
             self.panel.reply(f"Calibrated with {len(samples)} samples, saved to {path.name}. "
-                             "Gaze model retrained.")
+                             f"Gaze model retrained on {self.samples_used} samples.")
 
     def check(self) -> None:
         if self.mouse:

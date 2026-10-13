@@ -41,6 +41,24 @@ def load_calibration(path: Path) -> list[CalibrationSample]:
             for s in data["samples"]]
 
 
+def load_all_calibrations(n_features: int, older_weight: float = 0.5
+                          ) -> tuple[list[CalibrationSample], list[float]]:
+    """Every saved calibration, newest first, plus a weight per sample:
+    newest file 1.0, every older file `older_weight` (0.5).
+    Older sessions still help, but today's seat, camera and light count most.
+    Files with a different feature count (an older version) are skipped."""
+    # ponytail: every older file weighs the same; decay by age/date if old sessions start to hurt
+    samples, weights = [], []
+    for path in sorted(DATA_DIR.glob("calibration_*.json"), reverse=True):
+        found = load_calibration(path)
+        if not found or len(found[0].features) != n_features:
+            print(f"Skipping {path.name}: older calibration format, not used for training")
+            continue
+        weights += [older_weight if samples else 1.0] * len(found)   # first one kept = newest
+        samples += found
+    return samples, weights
+
+
 def latest_calibration() -> Path | None:
     """Newest saved file, or None if nothing has been saved yet.
     Works because the date-time names sort in time order."""
