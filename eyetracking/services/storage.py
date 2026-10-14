@@ -50,7 +50,11 @@ def load_all_calibrations(n_features: int, older_weight: float = 0.5
     # ponytail: every older file weighs the same; decay by age/date if old sessions start to hurt
     samples, weights = [], []
     for path in sorted(DATA_DIR.glob("calibration_*.json"), reverse=True):
-        found = load_calibration(path)
+        try:
+            found = load_calibration(path)
+        except (OSError, ValueError, KeyError, TypeError) as e:   # damaged or hand-edited file
+            print(f"Skipping {path.name}: can't read it ({e})")
+            continue
         if not found or len(found[0].features) != n_features:
             print(f"Skipping {path.name}: older calibration format, not used for training")
             continue

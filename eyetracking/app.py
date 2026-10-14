@@ -148,7 +148,7 @@ class ReadingWindow(QWidget):
     def _open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open a text", "", "Text files (*.txt)")
         if path:
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8", errors="replace") as f:   # odd characters -> �, not a crash
                 self.set_text(f.read())
 
     def keyPressEvent(self, event) -> None:
@@ -196,7 +196,13 @@ class App(QObject):
         self.panel.message_sent.connect(self.on_message)
         self.background = Background()
 
-        self.tracker = None if mouse else EyeTracker()   # asks which camera, in the console
+        self.tracker = None
+        if not mouse:
+            try:
+                self.tracker = EyeTracker()        # asks which camera, in the console
+            except Exception as e:                 # no camera, wrong number typed, MediaPipe failed
+                print(f"Camera didn't start ({e}): running in mouse mode instead.")
+                self.mouse = True
         self.model = self._load_model()
         self.smoothed: tuple[float, float] | None = None
         self.fullscreen: QWidget | None = None   # calibration / check window, while open
@@ -261,7 +267,7 @@ class App(QObject):
         if point is None:
             return
         # raw gaze jitters; without smoothing the dwell ring never fills
-        # ponytail: plain exponential average; a real filter can go in core/smoothing.py
+        # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
         if self.smoothed is None:
             self.smoothed = point
         else:

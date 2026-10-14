@@ -2,8 +2,8 @@
 Camera + FaceLandmarker glued together: one call reads a frame and gives back
 eye features, or None when the frame is no use (no face, or a blink).
 
-No Qt in here. The calibration window calls read_features() directly, and
-later ui/worker.py can run the same object on a QThread for live tracking.
+No Qt in here. The calibration window and app.py call read_features()
+directly; the same object could run on a QThread if the UI ever stutters.
 """
 from __future__ import annotations
 
@@ -30,7 +30,11 @@ class EyeTracker:
         frame = self._camera.read_rgb()
         if frame is None:
             return None
-        return self._landmarker.detect(frame)
+        try:
+            return self._landmarker.detect(frame)
+        except Exception as e:                   # one bad frame mustn't kill the app: skip it
+            print(f"Skipped a frame: {e}")
+            return None
 
     def read_features(self) -> tuple[float, ...] | None:
         """Features for one frame, or None if this frame should be skipped."""

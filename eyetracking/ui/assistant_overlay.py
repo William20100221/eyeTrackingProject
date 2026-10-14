@@ -635,7 +635,7 @@ class DwellController(QObject):
     #   t = QTimer(); t.timeout.connect(lambda: dwell.feed(QCursor.pos()))
     #   t.start(33)
     #
-    # Smooth the point BEFORE it gets here (eyetracking/core/smoothing.py) -
+    # Smooth the point BEFORE it gets here (app.py: exponential average) -
     # raw gaze jitters several degrees and the dwell ring will never fill.
     # GUI thread only; from the camera thread, emit a Signal (see HOOK 6).
     # =====================================================================
@@ -705,7 +705,8 @@ def main() -> int:
     # on the GUI thread or the whole overlay freezes; and Qt widgets must NOT
     # be touched from the worker thread. A Signal is the bridge across.
     #
-    # In eyetracking/ui/worker.py (currently empty):
+    # app.py reads the camera on the GUI thread for now. If that stutters,
+    # a worker object on a QThread would look like this:
     #
     #   from PySide6.QtCore import QObject, QPoint, Signal, QThread
     #   from eyetracking.core.models import FrameResult
