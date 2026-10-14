@@ -21,8 +21,7 @@ from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from eyetracking.core.calibration import point_grid
-from eyetracking.core.features import N_FEATURES
+from eyetracking.core.calibration import point_grid, training_set
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
@@ -153,12 +152,10 @@ def main() -> int:
     else:
         # one file if given, otherwise every saved calibration, the newest weighted most
         files = [a for a in sys.argv[1:] if not a.startswith("--")]
-        if files:
-            samples, weights = load_calibration(Path(files[0])), None
-        else:
-            samples, weights = load_all_calibrations(N_FEATURES)
+        recordings = [load_calibration(Path(files[0]))] if files else load_all_calibrations()
+        samples, weights, profile = training_set(recordings)
         if not samples:
-            print("No calibration saved yet: run the calibration window first")
+            print("No usable calibration yet: run calibrate first")
             return 1
 
         model = GazeModel().fit(samples, weights)
@@ -166,9 +163,9 @@ def main() -> int:
         tracker = EyeTracker()             # asks which camera, in the console
 
         def get_point() -> tuple[float, float] | None:
-            # the same features the model was trained on, then a prediction
+            # raw features -> scaled with the newest profile, exactly as in training
             features = tracker.read_features()
-            return None if features is None else model.predict(features)
+            return None if features is None else model.predict(profile.scale(features))
 
     window = GazeWindow(get_point=get_point)
     window.showFullScreen()   # full screen, like calibration: same 0..1 -> pixels
