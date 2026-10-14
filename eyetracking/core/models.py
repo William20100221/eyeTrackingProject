@@ -13,6 +13,15 @@ class HeadPose:
     "up/down pitch"
     roll: float
     "tilting your ear toward your shoulder"
+    # where the head IS (not where it points), from MediaPipe's facial
+    # transformation matrix, roughly in cm from the camera. Defaults keep
+    # HeadPose(yaw, pitch, roll) working for code that only has angles.
+    x: float = 0.0
+    "left/right of the camera"
+    y: float = 0.0
+    "up/down"
+    z: float = 0.0
+    "distance from the camera (negative: in front of it)"
 
 @dataclass(frozen=True)
 class FrameResult:
@@ -28,3 +37,12 @@ class CalibrationSample:
     features: tuple[float, ...]   # what the eyes looked like (model INPUT)
     target_x: float               # where the dot was, 0..1 across (model ANSWER)
     target_y: float               # 0..1 down
+
+@dataclass(frozen=True)
+class CalibrationRecording:
+    """Everything one calibration recorded, as RAW features (gaze_features()).
+    Raw on purpose: the eye-range scaling is worked out from sweep + head when
+    the file is loaded, so improving that maths never needs a recalibration."""
+    sweep: tuple[CalibrationSample, ...]   # eyes following a dot edge to edge, head still
+    head: tuple[CalibrationSample, ...]    # eyes on the centre dot, head moving
+    dots: tuple[CalibrationSample, ...]    # the 25-dot grid: the model's training data

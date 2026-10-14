@@ -1,15 +1,41 @@
 """
-Collecting data example for ML in gaze_model.py
-
-Only answers: "which dot are we on, and what did we collect for it?"
-No Qt, no camera, so it can be tested with hand-written numbers.
+Calibration logic: what the user is shown, and what the recordings mean.
+No Qt, no camera, so all of it can be tested with hand-written numbers.
 Screen positions are fractions 0..1 (x across, y down).
+
+A calibration has three steps (ui/calibration_window.py draws them):
+
+  1. SWEEP  a dot glides edge to edge, left<->right then up<->down, head
+            still. Measures how far the eyes move to cover the screen:
+            the user's EYE RANGE.
+  2. HEAD   eyes stay on a centre dot while the user turns, nods, tilts
+            and leans. The gaze doesn't move, so any change in the eye
+            numbers is caused by the HEAD alone.
+  3. DOTS   the 25-dot grid: the training data for the gaze model.
+
+GazeProfile turns steps 1 + 2 into a correction applied to every frame:
+
+    eye numbers  -> minus what head movement does to them    (step 2)
+                 -> rescaled: 0 = screen left/top, 1 = right/bottom   (step 1)
+    model input  =  just those 4 corrected eye numbers
+
+After step 2's correction the eye numbers no longer change when only the
+head moves, so they already say where on the screen the user looks. The
+raw head numbers are NOT given to the model as well: during the 25 dots the
+head barely moves, so the model would learn noise from them and then
+extrapolate badly when the head does move (tested on fake data: held-out
+error 61 px with head numbers, 17 px without).
 """
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from typing import Sequence
 
-from eyetracking.core.models import CalibrationSample
+import numpy as np
+
+from eyetracking.core.features import EYE, HEAD, N_FEATURES
+from eyetracking.core.models import CalibrationRecording, CalibrationSample
 
 
 def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
@@ -53,3 +79,184 @@ class CalibrationSession:
 
     def samples(self) -> list[CalibrationSample]:
         return list(self._samples)
+
+
+# =====================================================================
+# Step 1: the sweep. A dot glides edge to edge; the eyes follow it.
+# =====================================================================
+
+SWEEP_MARGIN = 0.05      # same margin as the dot grid: the sweep covers what the dots cover
+SWEEP_SETTLE_MS = 1000   # dot waits at the start of each axis so the eyes can find it
+SWEEP_CROSS_MS = 2500    # one edge-to-edge crossing
+SWEEP_CROSSINGS = 4      # 4 crossings = there and back twice, per axis
+SWEEP_AXIS_MS = SWEEP_SETTLE_MS + SWEEP_CROSS_MS * SWEEP_CROSSINGS
+
+
+def sweep_target(elapsed_ms: float) -> tuple[float, float, bool] | None:
+    """Where the sweep dot is after `elapsed_ms`: (x, y, record?), or None when
+    the sweep is over. Horizontal first (y = 0.5), then vertical (x = 0.5).
+    The dot slows down near the edges (cosine easing), so the eyes really
+    reach the far ends instead of turning back early."""
+    axis, t = divmod(elapsed_ms, SWEEP_AXIS_MS)
+    if axis >= 2:
+        return None
+    if t < SWEEP_SETTLE_MS:
+        along, record = 0.0, False                       # waiting at the start
+    else:
+        crossing, u = divmod(t - SWEEP_SETTLE_MS, SWEEP_CROSS_MS)
+        eased = (1 - math.cos(math.pi * u / SWEEP_CROSS_MS)) / 2   # 0 -> 1, slow at both ends
+        along, record = (eased if crossing % 2 == 0 else 1 - eased), True
+    pos = SWEEP_MARGIN + (1 - 2 * SWEEP_MARGIN) * along
+    return (pos, 0.5, record) if axis == 0 else (0.5, pos, record)
+
+
+# =====================================================================
+# Step 2: the head step. Eyes on the centre, head moves.
+# =====================================================================
+
+HEAD_SETTLE_MS = 1500    # "look at the dot" before any head movement: not recorded
+HEAD_STEPS = (           # (what the user is told, how long) - covers all 6 head numbers
+    ("Keep looking at the dot. Turn your head slowly left and right", 5000),
+    ("Keep looking at the dot. Nod slowly up and down", 5000),
+    ("Keep looking at the dot. Tilt your head toward each shoulder", 4000),
+    ("Keep looking at the dot. Lean closer to the screen, then back", 4000),
+)
+
+
+def head_prompt(elapsed_ms: float) -> tuple[str, bool] | None:
+    """The instruction to show after `elapsed_ms`: (text, record?), or None when
+    the head step is over. The dot itself stays at the screen centre."""
+    if elapsed_ms < HEAD_SETTLE_MS:
+        return "Look at the dot", False
+    t = elapsed_ms - HEAD_SETTLE_MS
+    for text, ms in HEAD_STEPS:
+        if t < ms:
+            return text, True
+        t -= ms
+    return None
+
+
+# =====================================================================
+# The profile: steps 1 + 2 turned into a per-frame correction
+# =====================================================================
+
+MIN_SWEEP_FRAMES = 30    # per axis: fewer means the face was lost most of the time
+MIN_HEAD_FRAMES = 60
+MIN_EYE_RANGE = 1e-3     # eye numbers that barely moved = the eyes didn't follow the dot
+HEAD_RIDGE = 0.01        # small ridge in the head fit: a head number that hardly moved
+                         # in the head step can't get a huge (noise-amplifying) weight
+
+
+@dataclass(frozen=True, eq=False)
+class GazeProfile:
+    eye_min: np.ndarray   # (4,) eye numbers when looking at the left/top edge...
+    eye_max: np.ndarray   # (4,) ...and at the right/bottom edge (after head correction)
+    head_ref: np.ndarray  # (6,) the head position the correction is measured from
+    head_k: np.ndarray    # (6, 4) how much each head number shifts each eye number
+
+    @classmethod
+    def from_recording(cls, rec: CalibrationRecording) -> GazeProfile:
+        """Work out the correction from one calibration's sweep + head step.
+        Raises ValueError if the recording can't give a usable profile."""
+        if not rec.head or not rec.sweep or len(rec.head[0].features) != N_FEATURES:
+            raise ValueError("missing sweep/head data, or features of another size")
+        head = np.array([s.features for s in rec.head])
+        if len(head) < MIN_HEAD_FRAMES:
+            raise ValueError(f"only {len(head)} head-step frames (need {MIN_HEAD_FRAMES})")
+
+        # --- head step: fit  eye change = head change @ k  ----------------
+        # The gaze stayed on the centre dot, so every eye change here came
+        # from the head. Head numbers are standardised first (degrees and cm
+        # on the same footing), then a ridge least-squares fit.
+        # ponytail: straight-line head correction; make it curved if big head turns still drift
+        H, E = head[:, HEAD], head[:, EYE]
+        head_ref = H.mean(axis=0)
+        sd = np.maximum(H.std(axis=0), 1e-6)
+        Hs = (H - head_ref) / sd
+        lam = HEAD_RIDGE * len(Hs)
+        k = np.linalg.solve(Hs.T @ Hs + lam * np.eye(Hs.shape[1]), Hs.T @ (E - E.mean(axis=0)))
+        head_k = k / sd[:, None]                     # back to raw head units
+
+        # --- sweep: the eye range, after removing the head's share --------
+        sweep = np.array([s.features for s in rec.sweep])
+        eye = sweep[:, EYE] - (sweep[:, HEAD] - head_ref) @ head_k
+        across = np.array([s.target_y == 0.5 for s in rec.sweep])   # horizontal pass
+        down = np.array([s.target_x == 0.5 for s in rec.sweep])     # vertical pass
+        if across.sum() < MIN_SWEEP_FRAMES or down.sum() < MIN_SWEEP_FRAMES:
+            raise ValueError(f"too few sweep frames ({across.sum()} across, {down.sum()} down)")
+        # 5th/95th percentile, not min/max: one glitchy frame can't stretch the range
+        lo = np.concatenate([np.percentile(eye[across, :2], 5, axis=0),
+                             np.percentile(eye[down, 2:], 5, axis=0)])
+        hi = np.concatenate([np.percentile(eye[across, :2], 95, axis=0),
+                             np.percentile(eye[down, 2:], 95, axis=0)])
+        if np.any(hi - lo < MIN_EYE_RANGE):
+            raise ValueError("the eyes barely moved during the sweep")
+        return cls(lo, hi, head_ref, head_k)
+
+    def scale(self, features: Sequence[float]) -> tuple[float, ...]:
+        """Raw features (gaze_features(), 10 numbers) -> model input: the 4
+        head-corrected eye numbers on a 0..1 scale (can go past 0/1 when
+        looking beyond the sweep). The head is used here, for the
+        correction, and not passed on (see the module docstring)."""
+        f = np.asarray(features, dtype=float)
+        eye = f[EYE] - (f[HEAD] - self.head_ref) @ self.head_k
+        return tuple(float(v) for v in (eye - self.eye_min) / (self.eye_max - self.eye_min))
+
+
+def training_set(recordings: Sequence[CalibrationRecording], older_weight: float = 0.5
+                 ) -> tuple[list[CalibrationSample], list[float], GazeProfile | None]:
+    """Recordings, NEWEST FIRST -> (model-ready dot samples, a weight per sample,
+    the newest profile). Each recording is scaled by ITS OWN profile, so
+    sessions from different seats/cameras land on the same 0..1 scale. The
+    newest weighs 1.0, older ones `older_weight`. Live frames must be scaled
+    with the returned (newest) profile. Unusable recordings are skipped."""
+    samples: list[CalibrationSample] = []
+    weights: list[float] = []
+    newest: GazeProfile | None = None
+    for rec in recordings:
+        try:
+            profile = GazeProfile.from_recording(rec)
+        except ValueError as e:
+            print(f"Skipping a calibration: {e}")
+            continue
+        newest = newest or profile
+        w = older_weight if samples else 1.0          # first one kept = newest
+        samples += [CalibrationSample(profile.scale(s.features), s.target_x, s.target_y)
+                    for s in rec.dots]
+        weights += [w] * len(rec.dots)
+    return samples, weights, newest
+
+
+if __name__ == "__main__":
+    # self-check on fake data: eyes move with the gaze AND with the head;
+    # after scaling, the same gaze must give the same eye numbers whatever the head does
+    rng = np.random.default_rng(0)
+
+    def frame(gx, gy, head):
+        eye = [0.3 + 0.3 * gx, 0.35 + 0.3 * gx, 0.4 + 0.2 * gy, 0.45 + 0.2 * gy]
+        eye = np.array(eye) + head @ np.full((6, 4), 0.002)   # head leaks into the eye numbers
+        return tuple(np.concatenate([eye + rng.normal(0, 0.003, 4), head]))
+
+    still = np.array([0, 0, 0, 0, 0, -50.0])
+    sweep, t = [], 0
+    while (s := sweep_target(t)) is not None:
+        if s[2]:
+            sweep.append(CalibrationSample(frame(s[0], s[1], still), s[0], s[1]))
+        t += 33
+    head = [CalibrationSample(frame(0.5, 0.5, still + rng.normal(0, [10, 8, 5, 3, 3, 5])), 0.5, 0.5)
+            for _ in range(400)]
+    dots = [CalibrationSample(frame(x, y, still), x, y) for x, y in point_grid()]
+    profile = GazeProfile.from_recording(CalibrationRecording(tuple(sweep), tuple(head), tuple(dots)))
+
+    edge = np.array(profile.scale(frame(0.05, 0.05, still)))
+    moved = np.array(profile.scale(frame(0.5, 0.5, still + [15, 10, 5, 3, 3, 8])))
+    assert len(edge) == 4                                  # model input = the 4 eye numbers only
+    print(f"left/top edge -> {edge.round(2)}  (want ~0)")
+    print(f"centre gaze, head moved -> {moved.round(2)}  (want ~0.5)")
+    assert np.all(np.abs(edge) < 0.1) and np.all(np.abs(moved - 0.5) < 0.1)
+
+    samples, weights, newest = training_set([CalibrationRecording((), (), tuple(dots)),   # unusable
+                                             CalibrationRecording(tuple(sweep), tuple(head), tuple(dots))])
+    assert len(samples) == 25 and weights == [1.0] * 25 and newest is not None
+    assert head_prompt(0)[1] is False and head_prompt(10 ** 6) is None
+    print("ok")

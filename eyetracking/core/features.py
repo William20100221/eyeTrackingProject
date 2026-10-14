@@ -1,20 +1,32 @@
+"""
+One camera frame -> the RAW gaze features, 10 numbers.
+
+    0-3  eye:  where each iris sits inside its eye
+               [right x, left x, right y, left y]
+    4-6  head angles:   yaw, pitch, roll (degrees)
+    7-9  head position: x, y, z (~cm from the camera)
+
+Raw = straight from the face, not yet adjusted for this user. The
+GazeProfile (core/calibration.py) turns them into the model's 4 inputs: it
+uses the head numbers to remove the part of the eye numbers caused by head
+movement, then rescales them to the eye range measured in the sweep.
+"""
 from eyetracking.core.models import FrameResult
 
 # MediaPipe indices. "right" = the person's right eye (left side of the image).
 R_OUTER, R_INNER, R_UPPER, R_LOWER, R_IRIS = 33, 133, 159, 145, 468
 L_INNER, L_OUTER, L_UPPER, L_LOWER, L_IRIS = 362, 263, 386, 374, 473
-NOSE_TIP = 1
 
-# how many numbers gaze_features() returns. Saved calibrations with a different
-# count come from an older version of this file and can't be trained on.
-N_FEATURES = 10
+N_FEATURES = 10        # how many numbers gaze_features() returns
+EYE = slice(0, 4)      # the eye part
+HEAD = slice(4, 10)    # the head part (angles + position)
 
 
 def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
-    """Head-invariant gaze features: WHERE the iris sits inside each eye.
+    """Raw features for one frame, or None (no face / eye closed).
 
-    Raw landmark coords are mostly "where is the face in the picture", so a
-    1 cm head shift swamps the iris moving. Ratios inside the eye cancel that.
+    The eye numbers are ratios INSIDE the eye (0 at one corner, 1 at the
+    other), so where the face sits in the picture mostly cancels out.
     Each ratio uses one axis only, so the camera's aspect ratio cancels too.
     """
     if r.landmarks is None or r.head_pose is None:
@@ -26,16 +38,13 @@ def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
         span = v[b] - v[a]
         return (v[i] - v[a]) / span if abs(span) > 1e-6 else None
 
-    feats = []
-    for i, (a, b) in ((R_IRIS, (R_OUTER, R_INNER)), (L_IRIS, (L_INNER, L_OUTER))):
-        feats.append(ratio(x, i, a, b))                 # left/right inside the eye
-    for i, (a, b) in ((R_IRIS, (R_UPPER, R_LOWER)), (L_IRIS, (L_UPPER, L_LOWER))):
-        feats.append(ratio(y, i, a, b))                 # up/down between the lids
-    if any(f is None for f in feats):                # eye closed / degenerate
+    eye = [ratio(x, R_IRIS, R_OUTER, R_INNER),     # left/right inside the eye
+           ratio(x, L_IRIS, L_INNER, L_OUTER),
+           ratio(y, R_IRIS, R_UPPER, R_LOWER),     # up/down between the lids
+           ratio(y, L_IRIS, L_UPPER, L_LOWER)]
+    if any(f is None for f in eye):                # eye closed / degenerate
         return None
 
-    face_w = abs(x[L_OUTER] - x[R_OUTER])            # ~ distance to the screen
     hp = r.head_pose
-    feats += [hp.yaw / 30, hp.pitch / 30, hp.roll / 30,   # head turned = eyes compensate
-              x[NOSE_TIP], y[NOSE_TIP], face_w * 5]       # head moved / leaned in
-    return tuple(float(f) for f in feats)
+    head = [hp.yaw, hp.pitch, hp.roll, hp.x, hp.y, hp.z]
+    return tuple(float(f) for f in eye + head)

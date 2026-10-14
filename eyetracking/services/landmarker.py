@@ -83,9 +83,12 @@ class FaceLandmarker:
         yaw = math.degrees(math.asin(max(-1.0, min(1.0, -m[2][0]))))
         pitch = math.degrees(math.atan2(m[2][1], m[2][2]))
         roll = math.degrees(math.atan2(m[1][0], m[0][0]))
+        # the matrix's last column is the head's position (translation),
+        # in the same units as MediaPipe's canonical face model: ~cm
+        x, y, z = (float(m[i][3]) for i in range(3))
         return FrameResult(timestamp_ms = timestamp_ms,
                            face_found=True,
-                           head_pose=HeadPose(yaw, pitch, roll),
+                           head_pose=HeadPose(yaw, pitch, roll, x, y, z),
                            blink_score_left=blink_score_left,
                            blink_score_right=blink_score_right,
                            landmarks = raw_landmark_lst)

@@ -7,7 +7,7 @@ The whole app, wired together.
 
 The floating ball (right edge) is the home screen: click it for the chat
 panel and type a command:
-    calibrate   25 dots, saves the data, retrains the gaze model
+    calibrate   eye sweep + head step + 25 dots (~1 min), saves, retrains the gaze model
     check       full-screen gaze dot, to see today's accuracy
     read        read a text; type "done" (or stare at Done) when finished
 After reading, the AI summarises what you skipped and quizzes you on it.
@@ -29,8 +29,10 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, Q
                                QScrollArea, QVBoxLayout, QWidget)
 
 from eyetracking.core.analysis import is_blinking
-from eyetracking.core.features import N_FEATURES, gaze_features
+from eyetracking.core.calibration import GazeProfile, training_set
+from eyetracking.core.features import gaze_features
 from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.reading import mark_unread, unread_word_count
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
 from eyetracking.services.storage import load_all_calibrations, save_calibration
@@ -45,7 +47,7 @@ SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier 
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
 
 HELP = ("Type a command:\n"
-        "• calibrate: 25 dots, then the gaze model retrains\n"
+        "• calibrate: follow a dot, move your head, then 25 dots (~1 min)\n"
         "• check: full-screen dot to test the accuracy\n"
         "• read: read a text, then type done (or stare at Done)\n"
         "After reading I'll summarise what you skipped and quiz you on it.")
@@ -222,11 +224,14 @@ class App(QObject):
 
     # ---- gaze ------------------------------------------------------
     def _load_model(self) -> GazeModel | None:
-        """Train on every saved calibration, the newest weighted most."""
+        """Train on every saved calibration, the newest weighted most.
+        Also keeps the newest calibration's GazeProfile: live frames must be
+        scaled the same way the training data was (see predict())."""
         self.samples_used = 0
+        self.profile: GazeProfile | None = None
         if self.mouse:
             return None
-        samples, weights = load_all_calibrations(N_FEATURES)
+        samples, weights, self.profile = training_set(load_all_calibrations())
         self.samples_used = len(samples)
         return GazeModel().fit(samples, weights) if samples else None
 
@@ -238,7 +243,7 @@ class App(QObject):
         return f"Gaze model trained on {self.samples_used} samples, the newest calibration counting most."
 
     def predict(self, features) -> tuple[float, float] | None:
-        """Eye features -> (x, y) screen fractions, or None."""
+        """RAW eye features -> (x, y) screen fractions, or None."""
         if features is None:
             return None
         if self.mouse:
@@ -246,7 +251,8 @@ class App(QObject):
         if self.model is None:
             return None
         try:
-            return self.model.predict(features)
+            # head correction + eye-range scaling first, exactly as in training
+            return self.model.predict(self.profile.scale(features))
         except ValueError:                        # the saved file holds an older kind of features
             self.model = None
             self.panel.reply("Your saved calibration is from an older version. Type calibrate.")
@@ -312,20 +318,26 @@ class App(QObject):
     def calibrate(self) -> None:
         get = fake_features_from_mouse if self.mouse else self.tracker.read_features
         window = CalibrationWindow(get_features=get)
-        window.finished.connect(lambda samples: self._calibrated(window, samples))
+        window.finished.connect(lambda rec: self._calibrated(window, rec))
         self._open_fullscreen(window)
 
-    def _calibrated(self, window: CalibrationWindow, samples: list) -> None:
+    def _calibrated(self, window: CalibrationWindow, rec: CalibrationRecording) -> None:
         QTimer.singleShot(800, window.close)      # show "done" briefly
         if self.mouse:
             self.panel.reply("Mouse mode: calibration not saved.")
-        elif not samples:
+            return
+        if not rec.dots:
             self.panel.reply("No samples: was your face in view? Try calibrate again.")
-        else:
-            path = save_calibration(samples)
-            self.model = self._load_model()       # the new file + all older ones
-            self.panel.reply(f"Calibrated with {len(samples)} samples, saved to {path.name}. "
-                             f"Gaze model retrained on {self.samples_used} samples.")
+            return
+        try:
+            GazeProfile.from_recording(rec)       # unusable sweep/head step -> don't save it
+        except ValueError as e:
+            self.panel.reply(f"Calibration didn't work ({e}). Try calibrate again.")
+            return
+        path = save_calibration(rec)
+        self.model = self._load_model()           # the new file + all older ones
+        self.panel.reply(f"Calibrated with {len(rec.dots)} dot samples, saved to {path.name}. "
+                         f"Gaze model retrained on {self.samples_used} samples.")
 
     def check(self) -> None:
         if self.mouse:
