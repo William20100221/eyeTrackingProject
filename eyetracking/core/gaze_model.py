@@ -80,19 +80,22 @@ def mean_error_px(model: GazeModel, samples: list[CalibrationSample],
     # 0.1 across and 0.1 down are different distances
     d = (model.predict_many(X) - y) * (screen_w, screen_h)
     # straight-line distance for every sample (Pythagoras), then the average
-    return float(np.hypot(d[:, 0], d[:, 1]).mean())
+    # nanmean: the line model gives no point (NaN) for a line that misses the screen
+    return float(np.nanmean(np.hypot(d[:, 0], d[:, 1])))
 
 
 def leave_one_dot_out(samples: list[CalibrationSample],
                       screen_w: int, screen_h: int,
                       weights: Sequence[float] | None = None,
-                      test: list[CalibrationSample] | None = None
-                      ) -> dict[tuple[float, float], float]:
+                      test: list[CalibrationSample] | None = None,
+                      make_model=None) -> dict[tuple[float, float], float]:
     """For each dot: train on the OTHER dots only, then measure the error on
     this dot. Honest, because the model never saw the dot it's tested on.
     Edge/corner dots measure extrapolation, so expect them to be worst.
     `test` (default: `samples`) = which samples to score, e.g. only the newest
-    session, so models trained on different data are scored the same way."""
+    session, so models trained on different data are scored the same way.
+    `make_model` (default GazeModel) builds a fresh model, e.g. a LineModel."""
+    make_model = make_model or GazeModel
     test = samples if test is None else test
     dots = sorted({(s.target_x, s.target_y) for s in test})
     errors = {}
@@ -100,7 +103,7 @@ def leave_one_dot_out(samples: list[CalibrationSample],
         # hold out a WHOLE dot (in every session): samples from the same dot are
         # near-copies, so testing on any of them would let the model peek
         keep = [i for i, s in enumerate(samples) if (s.target_x, s.target_y) != dot]
-        model = GazeModel().fit([samples[i] for i in keep],
+        model = make_model().fit([samples[i] for i in keep],
                                 None if weights is None else [weights[i] for i in keep])
         held_out = [s for s in test if (s.target_x, s.target_y) == dot]
         errors[dot] = mean_error_px(model, held_out, screen_w, screen_h)

@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, Q
                                QScrollArea, QVBoxLayout, QWidget)
 
 from eyetracking.core.calibration import GazeProfile, training_set
-from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.line_model import LineModel
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.reading import mark_unread, unread_word_count
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
@@ -38,7 +38,7 @@ from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import AssistantPanel, DwellController, FloatingBall, GazeCursor
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
+from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
 SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier but laggier
@@ -221,17 +221,15 @@ class App(QObject):
         self.panel.reply(f"{self._model_status()}\n\n{HELP}")
 
     # ---- gaze ------------------------------------------------------
-    def _load_model(self) -> GazeModel | None:
-        """Train on every saved calibration, the newest weighted most.
-        Also keeps the newest calibration's GazeProfile: live frames must be
-        scaled the same way the training data was (see predict())."""
+    def _load_model(self) -> LineModel | None:
+        """Train the line model (core/line_model.py) on every saved
+        calibration, the newest weighted most. It works on RAW features."""
         self.samples_used = 0
-        self.profile: GazeProfile | None = None
         if self.mouse:
             return None
-        samples, weights, self.profile = training_set(load_all_calibrations())
+        samples, weights, _ = training_set(load_all_calibrations(), scaled=False)
         self.samples_used = len(samples)
-        return GazeModel().fit(samples, weights) if samples else None
+        return LineModel(screen_geometry()).fit(samples, weights) if samples else None
 
     def _model_status(self) -> str:
         if self.mouse:
@@ -249,8 +247,7 @@ class App(QObject):
         if self.model is None:
             return None
         try:
-            # head correction + eye-range scaling first, exactly as in training
-            return self.model.predict(self.profile.scale(features))
+            return self.model.predict(features)   # raw features -> 3D line -> screen
         except ValueError:                        # the saved file holds an older kind of features
             self.model = None
             self.panel.reply("Your saved calibration is from an older version. Type calibrate.")

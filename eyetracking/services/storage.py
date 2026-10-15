@@ -7,9 +7,9 @@ Files go in <project root>/data, named by date and time, e.g.
 
 File format (FORMAT below). Every feature list is RAW gaze_features():
     {
-      "format":   "gaze-calibration-v2",
+      "format":   "gaze-calibration-v3",
       "saved_at": "2026-10-14T14:03:12",
-      "sweep": [ {"features": [...10], "target_x": .., "target_y": ..}, ... ],
+      "sweep": [ {"features": [...12], "target_x": .., "target_y": ..}, ... ],
       "head":  [ ...same, target = the centre dot... ],
       "dots":  [ ...same, target = the grid dot... ]
     }
@@ -26,7 +26,7 @@ from pathlib import Path
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from path import DATA_DIR
 
-FORMAT = "gaze-calibration-v2"
+FORMAT = "gaze-calibration-v3"   # v3: 12 features (iris height vs the eye corners added)
 PARTS = ("sweep", "head", "dots")
 
 

@@ -22,7 +22,7 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid, training_set
-from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.line_model import LineModel, ScreenGeometry
 from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
 
@@ -143,6 +143,14 @@ def fake_point_from_mouse() -> tuple[float, float]:
     return pos.x() / screen.width(), pos.y() / screen.height()
 
 
+def screen_geometry() -> ScreenGeometry:
+    """The real screen size in cm, from Windows (via Qt). Needs a running Qt app.
+    The webcam is assumed to sit CAMERA_ABOVE_SCREEN_CM above the screen's top
+    edge, centred: change that constant in core/line_model.py if yours isn't."""
+    mm = QApplication.primaryScreen().physicalSize()
+    return ScreenGeometry(mm.width() / 10, mm.height() / 10)
+
+
 def main() -> int:
     app = QApplication(sys.argv)
 
@@ -153,19 +161,19 @@ def main() -> int:
         # one file if given, otherwise every saved calibration, the newest weighted most
         files = [a for a in sys.argv[1:] if not a.startswith("--")]
         recordings = [load_calibration(Path(files[0]))] if files else load_all_calibrations()
-        samples, weights, profile = training_set(recordings)
+        samples, weights, _ = training_set(recordings, scaled=False)
         if not samples:
             print("No usable calibration yet: run calibrate first")
             return 1
 
-        model = GazeModel().fit(samples, weights)
-        print(f"Trained on {len(samples)} samples")
+        model = LineModel(screen_geometry()).fit(samples, weights)
+        print(f"Trained on {len(samples)} samples (blend w = {model.w:.1f})")
         tracker = EyeTracker()             # asks which camera, in the console
 
         def get_point() -> tuple[float, float] | None:
-            # raw features -> scaled with the newest profile, exactly as in training
+            # raw features -> the 3D line -> where it hits the screen
             features = tracker.read_features()
-            return None if features is None else model.predict(profile.scale(features))
+            return None if features is None else model.predict(features)
 
     window = GazeWindow(get_point=get_point)
     window.showFullScreen()   # full screen, like calibration: same 0..1 -> pixels

@@ -218,13 +218,16 @@ class GazeProfile:
         return tuple(float(v) for v in (eye - self.eye_min) / (self.eye_max - self.eye_min))
 
 
-def training_set(recordings: Sequence[CalibrationRecording], older_weight: float = 0.5
+def training_set(recordings: Sequence[CalibrationRecording], older_weight: float = 0.5,
+                 scaled: bool = True
                  ) -> tuple[list[CalibrationSample], list[float], GazeProfile | None]:
     """Recordings, NEWEST FIRST -> (model-ready dot samples, a weight per sample,
     the newest profile). Each recording is scaled by ITS OWN profile, so
     sessions from different seats/cameras land on the same 0..1 scale. The
     newest weighs 1.0, older ones `older_weight`. Live frames must be scaled
-    with the returned (newest) profile. Unusable recordings are skipped."""
+    with the returned (newest) profile. Unusable recordings are skipped.
+    scaled=False: the dots' RAW features instead (the line model works out
+    its own 3D geometry from them), same weights and skipping."""
     samples: list[CalibrationSample] = []
     weights: list[float] = []
     newest: GazeProfile | None = None
@@ -237,7 +240,7 @@ def training_set(recordings: Sequence[CalibrationRecording], older_weight: float
         newest = newest or profile
         w = older_weight if samples else 1.0          # first one kept = newest
         samples += [CalibrationSample(profile.scale(s.features), s.target_x, s.target_y)
-                    for s in rec.dots]
+                    for s in rec.dots] if scaled else list(rec.dots)
         weights += [w] * len(rec.dots)
     return samples, weights, newest
 
@@ -250,7 +253,7 @@ if __name__ == "__main__":
     def frame(gx, gy, head):
         eye = [0.3 + 0.3 * gx, 0.35 + 0.3 * gx, 0.4 + 0.2 * gy, 0.45 + 0.2 * gy]
         eye = np.array(eye) + head @ np.full((6, 4), 0.002)   # head leaks into the eye numbers
-        return tuple(np.concatenate([eye + rng.normal(0, 0.003, 4), head]))
+        return tuple(np.concatenate([eye + rng.normal(0, 0.003, 4), head, [0.0, 0.0]]))   # + iris height (unused here)
 
     still = np.array([0, 0, 0, 0, 0, -50.0])
     sweep = [CalibrationSample(frame(x, y, still), x, y)            # ~20 frames per line dot

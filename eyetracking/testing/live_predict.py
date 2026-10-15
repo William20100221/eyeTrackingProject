@@ -16,9 +16,12 @@ import sys
 import time
 from pathlib import Path
 
+from PySide6.QtWidgets import QApplication
+
 from eyetracking.core.calibration import training_set
-from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.line_model import LineModel
 from eyetracking.services.storage import load_all_calibrations, load_calibration
+from eyetracking.ui.gaze_window import screen_geometry
 from eyetracking.services.tracker import EyeTracker
 
 PRINT_EVERY_S = 0.2   # 5 lines a second is readable; every frame (~20-30) is not
@@ -34,14 +37,14 @@ def region(x: float, y: float) -> str:
 def main() -> None:
     # one file if given, otherwise every saved calibration, the newest weighted most
     recordings = [load_calibration(Path(sys.argv[1]))] if len(sys.argv) > 1 else load_all_calibrations()
-    samples, weights, profile = training_set(recordings)
+    samples, weights, _ = training_set(recordings, scaled=False)
     if not samples:
         print("No usable calibration yet: run calibrate first")
         return
 
-    # train on the scaled features. Live frames go through the SAME scaling
-    # (the newest profile), so the model sees the same kind of numbers
-    model = GazeModel().fit(samples, weights)
+    # the line model needs the screen's real size: Qt knows it (no window shown)
+    _qt = QApplication.instance() or QApplication([])
+    model = LineModel(screen_geometry()).fit(samples, weights)
     print(f"Trained on {len(samples)} samples. Look around the screen; Ctrl+C to stop.\n")
 
     with EyeTracker() as tracker:           # asks which camera, in the console
@@ -55,7 +58,7 @@ def main() -> None:
                     skipped += 1
                     point = None
                 else:
-                    point = model.predict(profile.scale(features))
+                    point = model.predict(features)
 
                 now = time.perf_counter()
                 if now - last_print >= PRINT_EVERY_S:
