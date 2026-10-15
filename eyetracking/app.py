@@ -342,14 +342,15 @@ class App(QObject):
                          f"Gaze model retrained on {self.samples_used} samples.")
 
     def check(self) -> None:
-        if self.mouse:
-            get = fake_point_from_mouse
-        elif self.model is None:
+        if not self.mouse and self.model is None:
             self.panel.reply("Calibrate first: type calibrate.")
             return
-        else:
-            def get():
-                return self.predict(self.tracker.read_features())
+
+        def get():
+            point = self.predict(fake_point_from_mouse() if self.mouse else self.tracker.read_features())
+            if point is not None:
+                self.smoothed = point     # keep it: the overlay carries on from here after quitting check
+            return point
         self._open_fullscreen(GazeWindow(get_point=get))
 
     def read(self) -> None:
