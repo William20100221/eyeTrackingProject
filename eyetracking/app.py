@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, Q
 from eyetracking.core.calibration import GazeProfile, training_set
 from eyetracking.core.line_model import LineModel
 from eyetracking.core.models import CalibrationRecording
+from eyetracking.core.quality import check_recording
 from eyetracking.core.reading import mark_unread, unread_word_count
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
 from eyetracking.services.storage import load_all_calibrations, save_calibration
@@ -328,15 +329,20 @@ class App(QObject):
         if not rec.dots:
             self.panel.reply("No samples: was your face in view? Try calibrate again.")
             return
+        report = check_recording(rec)             # impossible data -> reject, don't save
+        if not report.ok:
+            self.panel.reply(f"Calibration rejected: {report.summary()}. Try calibrate again.")
+            return
         try:
-            GazeProfile.from_recording(rec)       # unusable sweep/head step -> don't save it
+            GazeProfile.from_recording(report.kept)   # unusable sweep/head step -> don't save it
         except ValueError as e:
             self.panel.reply(f"Calibration didn't work ({e}). Try calibrate again.")
             return
-        path = save_calibration(rec)
+        path = save_calibration(rec)              # saved RAW: the checks rerun on loading
         self.model = self._load_model()           # the new file + all older ones
-        self.panel.reply(f"Calibrated with {len(rec.dots)} dot samples, saved to {path.name}. "
-                         f"Gaze model retrained on {self.samples_used} samples.")
+        note = f" Cleaned: {report.summary()}." if report.reasons else ""
+        self.panel.reply(f"Calibrated with {len(report.kept.dots)} good dot samples, saved to {path.name}. "
+                         f"Gaze model retrained on {self.samples_used} samples.{note}")
 
     def check(self) -> None:
         if not self.mouse and self.model is None:

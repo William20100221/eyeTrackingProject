@@ -39,6 +39,7 @@ import numpy as np
 
 from eyetracking.core.features import EYE, HEAD, N_FEATURES
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
+from eyetracking.core.quality import check_recording
 
 
 def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
@@ -232,6 +233,11 @@ def training_set(recordings: Sequence[CalibrationRecording], older_weight: float
     weights: list[float] = []
     newest: GazeProfile | None = None
     for rec in recordings:
+        report = check_recording(rec)          # drop impossible frames / unwatched dots
+        if not report.ok:
+            print(f"Skipping a calibration: {report.summary()}")
+            continue
+        rec = report.kept
         try:
             profile = GazeProfile.from_recording(rec)
         except ValueError as e:
@@ -253,14 +259,15 @@ if __name__ == "__main__":
     def frame(gx, gy, head):
         eye = [0.3 + 0.3 * gx, 0.35 + 0.3 * gx, 0.4 + 0.2 * gy, 0.45 + 0.2 * gy]
         eye = np.array(eye) + head @ np.full((6, 4), 0.002)   # head leaks into the eye numbers
-        return tuple(np.concatenate([eye + rng.normal(0, 0.003, 4), head, [0.0, 0.0]]))   # + iris height (unused here)
+        down = 0.3 * (gy - 0.5) + rng.normal(0, 0.01)             # iris height vs the corners, cm
+        return tuple(np.concatenate([eye + rng.normal(0, 0.003, 4), head, [down, down]]))
 
     still = np.array([0, 0, 0, 0, 0, -50.0])
     sweep = [CalibrationSample(frame(x, y, still), x, y)            # ~20 frames per line dot
              for x, y in sweep_points() for _ in range(20)]
     head = [CalibrationSample(frame(0.5, 0.5, still + rng.normal(0, [10, 8, 5, 3, 3, 5])), 0.5, 0.5)
             for _ in range(400)]
-    dots = [CalibrationSample(frame(x, y, still), x, y) for x, y in point_grid()]
+    dots = [CalibrationSample(frame(x, y, still), x, y) for x, y in point_grid() for _ in range(12)]
     profile = GazeProfile.from_recording(CalibrationRecording(tuple(sweep), tuple(head), tuple(dots)))
 
     edge = np.array(profile.scale(frame(0.05, 0.05, still)))
@@ -272,6 +279,6 @@ if __name__ == "__main__":
 
     samples, weights, newest = training_set([CalibrationRecording((), (), tuple(dots)),   # unusable
                                              CalibrationRecording(tuple(sweep), tuple(head), tuple(dots))])
-    assert len(samples) == 25 and weights == [1.0] * 25 and newest is not None
+    assert len(samples) > 250 and set(weights) == {1.0} and newest is not None   # ~12 frames x 25 dots, a few cleaned out
     assert head_prompt(0)[1] is False and head_prompt(10 ** 6) is None
     print("ok")
