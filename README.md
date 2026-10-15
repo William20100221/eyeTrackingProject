@@ -6,6 +6,30 @@ Read on your computer and find out what you missed. Using only your webcam, the 
 
 This project is built with Mediapipe, OpenCV, scikit-learn and PySide6 (Qt) which all requires to be installed
 
+## Install Library Commands
+
+### Required
+
+```bash
+pip install mediapipe
+pip install opencv-contrib-python
+pip install PySide6
+pip install scikit-learn
+pip install pygrabber
+pip install anthropic
+```
+
+### Optional
+
+Only needed if you use the Gemini or OpenAI reading assistant:
+
+```bash
+pip install google-genai
+pip install openai
+```
+
+> **Tip:** If `pip` isn't recognized, use `python -m pip install <package>` instead.
+
 ## Features
 
 - **Reading tracker:** paragraphs turn green as you read them
