@@ -1,20 +1,9 @@
 """
-Save and load calibrations as JSON, so one calibration can be reused for
-many model experiments without sitting through it again.
+Save and load calibration samples as JSON, so one calibration can be reused
+for many model experiments without sitting through the dots again.
 
 Files go in <project root>/data, named by date and time, e.g.
-    data/calibration_2026-10-14_140312.json
-
-File format (FORMAT below). Every feature list is RAW gaze_features():
-    {
-      "format":   "gaze-calibration-v2",
-      "saved_at": "2026-10-14T14:03:12",
-      "sweep": [ {"features": [...10], "target_x": .., "target_y": ..}, ... ],
-      "head":  [ ...same, target = the centre dot... ],
-      "dots":  [ ...same, target = the grid dot... ]
-    }
-A file without exactly this "format" value (older versions, other files)
-is not loaded: the code has no way to read anything else.
+    data/calibration_2026-09-29_140312.json
 """
 from __future__ import annotations
 
@@ -23,47 +12,59 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from eyetracking.core.models import CalibrationRecording, CalibrationSample
+from eyetracking.core.models import CalibrationSample
 from path import DATA_DIR
 
-FORMAT = "gaze-calibration-v2"
-PARTS = ("sweep", "head", "dots")
 
-
-def save_calibration(rec: CalibrationRecording, path: Path | None = None) -> Path:
-    """Write one calibration to `path` (default: a new timestamped file in data/).
+def save_calibration(samples: list[CalibrationSample], path: Path | None = None) -> Path:
+    """Write samples to `path` (default: a new timestamped file in data/).
     Returns the path it wrote to."""
     now = datetime.now()
     if path is None:
         path = DATA_DIR / f"calibration_{now:%Y-%m-%d_%H%M%S}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = {"format": FORMAT, "saved_at": now.isoformat(timespec="seconds")}
-    data |= {part: [asdict(s) for s in getattr(rec, part)] for part in PARTS}
+    data = {
+        "saved_at": now.isoformat(timespec="seconds"),
+        "samples": [asdict(s) for s in samples],
+    }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     return path
 
 
-def load_calibration(path: Path) -> CalibrationRecording:
-    """Read one file. Raises ValueError if it isn't in the current FORMAT."""
+def load_calibration(path: Path) -> list[CalibrationSample]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    if not isinstance(data, dict) or data.get("format") != FORMAT:
-        raise ValueError(f"not in the current format ({FORMAT})")
     # JSON has no tuples: features come back as a list, so turn it back
-    parts = [tuple(CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
-                   for s in data[part]) for part in PARTS]
-    return CalibrationRecording(*parts)
+    return [CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
+            for s in data["samples"]]
 
 
-def load_all_calibrations() -> list[CalibrationRecording]:
-    """Every readable calibration in data/, NEWEST FIRST (date-time names sort
-    in time order). Unreadable or other-format files are skipped, with a message."""
-    recordings = []
+def load_all_calibrations(n_features: int, older_weight: float = 0.5
+                          ) -> tuple[list[CalibrationSample], list[float]]:
+    """Every saved calibration, newest first, plus a weight per sample:
+    newest file 1.0, every older file `older_weight` (0.5).
+    Older sessions still help, but today's seat, camera and light count most.
+    Files with a different feature count (an older version) are skipped."""
+    # ponytail: every older file weighs the same; decay by age/date if old sessions start to hurt
+    samples, weights = [], []
     for path in sorted(DATA_DIR.glob("calibration_*.json"), reverse=True):
         try:
-            recordings.append(load_calibration(path))
-        except (OSError, ValueError, KeyError, TypeError) as e:   # old format, damaged, hand-edited
-            print(f"Skipping {path.name}: {e}")
-    return recordings
+            found = load_calibration(path)
+        except (OSError, ValueError, KeyError, TypeError) as e:   # damaged or hand-edited file
+            print(f"Skipping {path.name}: can't read it ({e})")
+            continue
+        if not found or len(found[0].features) != n_features:
+            print(f"Skipping {path.name}: older calibration format, not used for training")
+            continue
+        weights += [older_weight if samples else 1.0] * len(found)   # first one kept = newest
+        samples += found
+    return samples, weights
+
+
+def latest_calibration() -> Path | None:
+    """Newest saved file, or None if nothing has been saved yet.
+    Works because the date-time names sort in time order."""
+    files = sorted(DATA_DIR.glob("calibration_*.json"))
+    return files[-1] if files else None

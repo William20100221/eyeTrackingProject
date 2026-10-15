@@ -21,7 +21,7 @@ from eyetracking.core.models import CalibrationSample
 
 
 def _xy(samples: list[CalibrationSample]) -> tuple[np.ndarray, np.ndarray]:
-    # X = the model INPUT: one row per sample, one column per feature (samples x 4 scaled eye numbers)
+    # X = the model INPUT: one row per sample, one column per feature (samples x 10)
     X = np.array([s.features for s in samples])
     # y = the right ANSWERS: one row per sample, where the dot was (samples x 2)
     y = np.array([(s.target_x, s.target_y) for s in samples])
@@ -58,7 +58,7 @@ class GazeModel:
 
     def predict(self, features: Sequence[float]) -> tuple[float, float]:
         # sklearn predicts a whole TABLE of rows at once, so one sample goes in
-        # as a table with 1 row: shape (1, 4), not (4,)
+        # as a table with 1 row: shape (1, 10), not (10,)
         row = np.array([features], dtype=float)
         x, y = self._regressor.predict(row)[0]   # answer is (1, 2): take row 0
         return float(x), float(y)

@@ -11,20 +11,19 @@ data/ is ignored by git, so every branch is measured on the same data.
 """
 from PySide6.QtGui import QGuiApplication
 
-from eyetracking.core.calibration import training_set
+from eyetracking.core.features import N_FEATURES
 from eyetracking.core.gaze_model import GazeModel, leave_one_dot_out, mean_error_px
 from eyetracking.services.storage import load_all_calibrations
 
 
 def main() -> None:
-    # every sample is already scaled by its own session's GazeProfile
-    samples, weights, _ = training_set(load_all_calibrations())
+    samples, weights = load_all_calibrations(N_FEATURES)
     if not samples:
-        print("No usable calibration yet: run calibrate first")
+        print("No calibration with the current features yet: run the calibration window first")
         return
     newest = samples[:weights.count(1.0)]     # newest first, and only the newest has weight 1.0
     print(f"{len(samples)} samples from all calibrations; "
-          f"newest: {len(newest)} samples, {len(newest[0].features)} model inputs each")
+          f"newest: {len(newest)} samples, {N_FEATURES} features each")
 
     # the dots were placed using Qt's screen size, so measure with the same size
     app = QGuiApplication([])
