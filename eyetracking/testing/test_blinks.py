@@ -49,8 +49,9 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 import eyetracking.core.calibration as cal
 import eyetracking.ui.calibration_window as cw
-cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 100, 250        # speed the sweep/head steps up
-cal.SWEEP_AXIS_MS = cal.SWEEP_SETTLE_MS + cal.SWEEP_CROSS_MS * cal.SWEEP_CROSSINGS
+if hasattr(cal, "SWEEP_CROSS_MS"):                        # branches with the moving sweep
+    cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 100, 250    # speed it up
+    cal.SWEEP_AXIS_MS = cal.SWEEP_SETTLE_MS + cal.SWEEP_CROSS_MS * cal.SWEEP_CROSSINGS
 cal.HEAD_SETTLE_MS, cal.HEAD_STEPS = 100, (("head", 500),)
 cw.SETTLE_MS, cw.COLLECT_MS, cw.DOT_SAMPLES, cw.MAX_COLLECT_MS, cw.TICK_MS = 50, 300, 10, 2000, 10
 
