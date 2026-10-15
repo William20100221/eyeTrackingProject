@@ -28,9 +28,7 @@ from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer, Signal, S
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from eyetracking.core.analysis import is_blinking
 from eyetracking.core.calibration import GazeProfile, training_set
-from eyetracking.core.features import gaze_features
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.reading import mark_unread, unread_word_count
@@ -263,21 +261,25 @@ class App(QObject):
         if self.mouse:
             face, features = True, fake_point_from_mouse()
         else:
-            # read() not read_features(): the ball needs "face found" even while blinking
-            r = self.tracker.read()
-            face = r is not None and r.face_found
-            features = gaze_features(r) if face and not is_blinking(r) else None
+            # None during a blink and the frames just after it (eyes reopening);
+            # face_found stays True then, so the ball doesn't flash "face lost"
+            features = self.tracker.read_features()
+            face = self.tracker.face_found
         self.ball.set_tracking_state(face)
 
         point = self.predict(features)
-        if point is None:
-            return
-        # raw gaze jitters; without smoothing the dwell ring never fills
-        # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
-        if self.smoothed is None:
-            self.smoothed = point
-        else:
-            self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+        if point is not None:
+            # raw gaze jitters; without smoothing the dwell ring never fills
+            # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
+            if self.smoothed is None:
+                self.smoothed = point
+            else:
+                self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+        elif not face or self.smoothed is None:
+            return                                # face lost: nothing to show
+        # a blink lands here with point None: HOLD the last smoothed point and
+        # keep feeding it, so the cursor and the reading time carry on and the
+        # smoothing resumes from where it was (no jump when the eyes reopen)
         gaze = to_screen(self.smoothed)
         self.dwell.feed(gaze)
         if self.reading is not None:
