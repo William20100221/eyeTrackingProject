@@ -46,27 +46,53 @@ def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
     return [(x, y) for y in positions for x in positions]
 
 
+BLINK_LOOKBACK = 3   # samples held back per dot: dropped if a skipped frame follows,
+                     # because the lids were probably already closing for a blink
+
+
 class CalibrationSession:
     def __init__(self, targets: Sequence[tuple[float, float]]) -> None:
         self._targets = list(targets)
         self._index = 0
         self._samples: list[CalibrationSample] = []
+        self._pending: list[CalibrationSample] = []   # the last BLINK_LOOKBACK samples, not yet kept
+        self._kept = 0                                 # samples kept for the current dot
 
     def current_target(self) -> tuple[float, float] | None:
         if self.is_complete():
             return None
         return self._targets[self._index]
 
-    def add_sample(self, features: Sequence[float]) -> None:
-        target = self.current_target()
+    def add_sample(self, features: Sequence[float] | None,
+                   at: tuple[float, float] | None = None) -> None:
+        """Record one frame for the current dot. None = a skipped frame (blink,
+        eyes reopening, no face): the samples held back just before it are
+        dropped too, so the frames where the lids were closing never get saved.
+        `at` = record at this position instead (a moving dot, e.g. the sweep)."""
+        target = at or self.current_target()
         if target is None:
+            return
+        if features is None:
+            self._pending.clear()
             return
         # tuple of plain floats: works with a list or a numpy array, keeps the
         # frozen dataclass comparable, and saves to JSON easily later
         values = tuple(float(v) for v in features)
-        self._samples.append(CalibrationSample(values, target[0], target[1]))
+        self._pending.append(CalibrationSample(values, target[0], target[1]))
+        if len(self._pending) > BLINK_LOOKBACK:        # old enough: no blink came after it
+            self._samples.append(self._pending.pop(0))
+            self._kept += 1
+
+    def current_count(self) -> int:
+        """Good samples KEPT for the current dot so far: only frames already
+        confirmed blink-free (BLINK_LOOKBACK good frames came after them)."""
+        return self._kept
 
     def next_target(self) -> None:
+        # drop, don't keep, the held-back frames: a blink starting just after
+        # the dot changes would otherwise never be noticed for them
+        self._pending.clear()
+        self._kept = 0
         self._index += 1
 
     def is_complete(self) -> bool:
