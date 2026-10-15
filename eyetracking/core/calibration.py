@@ -5,13 +5,17 @@ Screen positions are fractions 0..1 (x across, y down).
 
 A calibration has three steps (ui/calibration_window.py draws them):
 
-  1. SWEEP  a dot glides edge to edge, left<->right then up<->down, head
-            still. Measures how far the eyes move to cover the screen:
-            the user's EYE RANGE.
+  1. SWEEP  still dots along a horizontal then a vertical line through the
+            screen centre (the path a moving dot used to sweep), one at a
+            time, head still. Measures how far the eyes move to cover the
+            screen: the user's EYE RANGE. Still dots instead of a moving
+            one: the eye rests on each, so no frame is taken mid-movement.
   2. HEAD   eyes stay on a centre dot while the user turns, nods, tilts
             and leans. The gaze doesn't move, so any change in the eye
             numbers is caused by the HEAD alone.
-  3. DOTS   the 25-dot grid: the training data for the gaze model.
+  3. DOTS   the 25-dot grid in random order: the training data for the
+            gaze model. Random, so the eye can't anticipate the next dot
+            and start moving early (a fixed row-by-row order invites that).
 
 GazeProfile turns steps 1 + 2 into a correction applied to every frame:
 
@@ -28,7 +32,6 @@ error 61 px with head numbers, 17 px without).
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -46,27 +49,53 @@ def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
     return [(x, y) for y in positions for x in positions]
 
 
+BLINK_LOOKBACK = 3   # samples held back per dot: dropped if a skipped frame follows,
+                     # because the lids were probably already closing for a blink
+
+
 class CalibrationSession:
     def __init__(self, targets: Sequence[tuple[float, float]]) -> None:
         self._targets = list(targets)
         self._index = 0
         self._samples: list[CalibrationSample] = []
+        self._pending: list[CalibrationSample] = []   # the last BLINK_LOOKBACK samples, not yet kept
+        self._kept = 0                                 # samples kept for the current dot
 
     def current_target(self) -> tuple[float, float] | None:
         if self.is_complete():
             return None
         return self._targets[self._index]
 
-    def add_sample(self, features: Sequence[float]) -> None:
-        target = self.current_target()
+    def add_sample(self, features: Sequence[float] | None,
+                   at: tuple[float, float] | None = None) -> None:
+        """Record one frame for the current dot. None = a skipped frame (blink,
+        eyes reopening, no face): the samples held back just before it are
+        dropped too, so the frames where the lids were closing never get saved.
+        `at` = record at this position instead (a moving dot, e.g. the sweep)."""
+        target = at or self.current_target()
         if target is None:
+            return
+        if features is None:
+            self._pending.clear()
             return
         # tuple of plain floats: works with a list or a numpy array, keeps the
         # frozen dataclass comparable, and saves to JSON easily later
         values = tuple(float(v) for v in features)
-        self._samples.append(CalibrationSample(values, target[0], target[1]))
+        self._pending.append(CalibrationSample(values, target[0], target[1]))
+        if len(self._pending) > BLINK_LOOKBACK:        # old enough: no blink came after it
+            self._samples.append(self._pending.pop(0))
+            self._kept += 1
+
+    def current_count(self) -> int:
+        """Good samples KEPT for the current dot so far: only frames already
+        confirmed blink-free (BLINK_LOOKBACK good frames came after them)."""
+        return self._kept
 
     def next_target(self) -> None:
+        # drop, don't keep, the held-back frames: a blink starting just after
+        # the dot changes would otherwise never be noticed for them
+        self._pending.clear()
+        self._kept = 0
         self._index += 1
 
     def is_complete(self) -> bool:
@@ -82,32 +111,18 @@ class CalibrationSession:
 
 
 # =====================================================================
-# Step 1: the sweep. A dot glides edge to edge; the eyes follow it.
+# Step 1: the sweep line. Still dots along the old sweep path.
 # =====================================================================
 
-SWEEP_MARGIN = 0.05      # same margin as the dot grid: the sweep covers what the dots cover
-SWEEP_SETTLE_MS = 1000   # dot waits at the start of each axis so the eyes can find it
-SWEEP_CROSS_MS = 2500    # one edge-to-edge crossing
-SWEEP_CROSSINGS = 4      # 4 crossings = there and back twice, per axis
-SWEEP_AXIS_MS = SWEEP_SETTLE_MS + SWEEP_CROSS_MS * SWEEP_CROSSINGS
-
-
-def sweep_target(elapsed_ms: float) -> tuple[float, float, bool] | None:
-    """Where the sweep dot is after `elapsed_ms`: (x, y, record?), or None when
-    the sweep is over. Horizontal first (y = 0.5), then vertical (x = 0.5).
-    The dot slows down near the edges (cosine easing), so the eyes really
-    reach the far ends instead of turning back early."""
-    axis, t = divmod(elapsed_ms, SWEEP_AXIS_MS)
-    if axis >= 2:
-        return None
-    if t < SWEEP_SETTLE_MS:
-        along, record = 0.0, False                       # waiting at the start
-    else:
-        crossing, u = divmod(t - SWEEP_SETTLE_MS, SWEEP_CROSS_MS)
-        eased = (1 - math.cos(math.pi * u / SWEEP_CROSS_MS)) / 2   # 0 -> 1, slow at both ends
-        along, record = (eased if crossing % 2 == 0 else 1 - eased), True
-    pos = SWEEP_MARGIN + (1 - 2 * SWEEP_MARGIN) * along
-    return (pos, 0.5, record) if axis == 0 else (0.5, pos, record)
+def sweep_points(n: int = 7, margin: float = 0.05) -> list[tuple[float, float]]:
+    """n dots left -> right across the middle (y = 0.5), then n dots top ->
+    bottom down the middle (x = 0.5): the path the moving sweep dot took.
+    Same margin as the grid, so the measured range covers what the dots cover.
+    In path order, not random: neighbouring dots keep each eye jump short.
+    The centre (0.5, 0.5) is on both lines, so it's shown twice."""
+    # ponytail: 7 per line (~35 s); fewer if calibration feels long, more if the range is noisy
+    positions = [round(margin + (1 - 2 * margin) * i / (n - 1), 4) for i in range(n)]
+    return [(p, 0.5) for p in positions] + [(0.5, p) for p in positions]
 
 
 # =====================================================================
@@ -238,11 +253,8 @@ if __name__ == "__main__":
         return tuple(np.concatenate([eye + rng.normal(0, 0.003, 4), head]))
 
     still = np.array([0, 0, 0, 0, 0, -50.0])
-    sweep, t = [], 0
-    while (s := sweep_target(t)) is not None:
-        if s[2]:
-            sweep.append(CalibrationSample(frame(s[0], s[1], still), s[0], s[1]))
-        t += 33
+    sweep = [CalibrationSample(frame(x, y, still), x, y)            # ~20 frames per line dot
+             for x, y in sweep_points() for _ in range(20)]
     head = [CalibrationSample(frame(0.5, 0.5, still + rng.normal(0, [10, 8, 5, 3, 3, 5])), 0.5, 0.5)
             for _ in range(400)]
     dots = [CalibrationSample(frame(x, y, still), x, y) for x, y in point_grid()]

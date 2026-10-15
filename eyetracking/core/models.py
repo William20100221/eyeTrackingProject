@@ -43,6 +43,6 @@ class CalibrationRecording:
     """Everything one calibration recorded, as RAW features (gaze_features()).
     Raw on purpose: the eye-range scaling is worked out from sweep + head when
     the file is loaded, so improving that maths never needs a recalibration."""
-    sweep: tuple[CalibrationSample, ...]   # eyes following a dot edge to edge, head still
+    sweep: tuple[CalibrationSample, ...]   # eyes on still dots across + down the middle, head still
     head: tuple[CalibrationSample, ...]    # eyes on the centre dot, head moving
     dots: tuple[CalibrationSample, ...]    # the 25-dot grid: the model's training data

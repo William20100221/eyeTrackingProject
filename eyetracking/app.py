@@ -7,7 +7,7 @@ The whole app, wired together.
 
 The floating ball (right edge) is the home screen: click it for the chat
 panel and type a command:
-    calibrate   eye sweep + head step + 25 dots (~1 min), saves, retrains the gaze model
+    calibrate   line dots + head step + 25 random dots (~2 min), saves, retrains the gaze model
     check       full-screen gaze dot, to see today's accuracy
     read        read a text; type "done" (or stare at Done) when finished
 After reading, the AI summarises what you skipped and quizzes you on it.
@@ -28,9 +28,7 @@ from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer, Signal, S
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from eyetracking.core.analysis import is_blinking
 from eyetracking.core.calibration import GazeProfile, training_set
-from eyetracking.core.features import gaze_features
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.reading import mark_unread, unread_word_count
@@ -47,7 +45,7 @@ SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier 
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
 
 HELP = ("Type a command:\n"
-        "• calibrate: follow a dot, move your head, then 25 dots (~1 min)\n"
+        "• calibrate: dots on a line, move your head, then 25 dots (~2 min)\n"
         "• check: full-screen dot to test the accuracy\n"
         "• read: read a text, then type done (or stare at Done)\n"
         "After reading I'll summarise what you skipped and quiz you on it.")
@@ -263,21 +261,25 @@ class App(QObject):
         if self.mouse:
             face, features = True, fake_point_from_mouse()
         else:
-            # read() not read_features(): the ball needs "face found" even while blinking
-            r = self.tracker.read()
-            face = r is not None and r.face_found
-            features = gaze_features(r) if face and not is_blinking(r) else None
+            # None during a blink and the frames just after it (eyes reopening);
+            # face_found stays True then, so the ball doesn't flash "face lost"
+            features = self.tracker.read_features()
+            face = self.tracker.face_found
         self.ball.set_tracking_state(face)
 
         point = self.predict(features)
-        if point is None:
-            return
-        # raw gaze jitters; without smoothing the dwell ring never fills
-        # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
-        if self.smoothed is None:
-            self.smoothed = point
-        else:
-            self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+        if point is not None:
+            # raw gaze jitters; without smoothing the dwell ring never fills
+            # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
+            if self.smoothed is None:
+                self.smoothed = point
+            else:
+                self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+        elif not face or self.smoothed is None:
+            return                                # face lost: nothing to show
+        # a blink lands here with point None: HOLD the last smoothed point and
+        # keep feeding it, so the cursor and the reading time carry on and the
+        # smoothing resumes from where it was (no jump when the eyes reopen)
         gaze = to_screen(self.smoothed)
         self.dwell.feed(gaze)
         if self.reading is not None:

@@ -1,6 +1,7 @@
 # --- Project-specific ---
 /docs
 /data
+/old_calibration_data
 graphify-out/
 
 # --- Python bytecode ---
