@@ -1,7 +1,9 @@
 """
 Self-check for blink handling (no webcam):  python -m eyetracking.testing.test_blinks
 
-1. EyeTracker skips the blink AND the frames just after it
+1. EyeTracker skips a blink coming (lids closing), the blink, and 250 ms
+   of reopening; a rise that never becomes a blink (looking down) is let
+   through again after 200 ms
 2. CalibrationSession drops the frames just BEFORE a blink
 3. A whole calibration with frequent blinks: every dot still gets enough
    good frames, and no closing-lid frame is saved
@@ -14,22 +16,27 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
 
 from eyetracking.core.models import FrameResult, HeadPose
-from eyetracking.services.tracker import BLINK_RECOVERY_FRAMES, EyeTracker
+from eyetracking.services.tracker import EyeTracker
 
-# ---- 1. tracker -------------------------------------------------------------
+# ---- 1. tracker: frames 33 ms apart (30 fps) ---------------------------------
 lm = np.random.default_rng(0).uniform(0.2, 0.8, (478, 3))
-def frame(blink: float) -> FrameResult:
-    return FrameResult(0, True, HeadPose(0, 0, 0), blink, blink, lm)
-seq = [0.1, 0.1, 0.9, 0.9] + [0.1] * (BLINK_RECOVERY_FRAMES + 2)
-t = EyeTracker.__new__(EyeTracker)                       # no camera: feed frames by hand
-t.face_found, t._recovering = False, 0
-frames = iter(seq)
-t.read = lambda: frame(next(frames))
-got = [t.read_features() is not None for _ in seq]
-want = [True, True, False, False] + [False] * BLINK_RECOVERY_FRAMES + [True, True]
-assert got == want, got
-assert t.face_found                                      # a blink is still a face
-print("1. tracker: blink + recovery frames skipped:", got)
+def run(scores: list[float]) -> str:
+    """Feed blink scores one frame at a time; '.' = frame used, '-' = skipped."""
+    t = EyeTracker.__new__(EyeTracker)                   # no camera: feed frames by hand
+    t.face_found, t._open_level, t._onset_ms, t._blink_ms = False, None, None, None
+    frames = iter(FrameResult(33 * i, True, HeadPose(0, 0, 0), s, s, lm) for i, s in enumerate(scores))
+    t.read = lambda: next(frames)
+    out = "".join("." if t.read_features() is not None else "-" for _ in scores)
+    assert t.face_found                                  # a blink is still a face
+    return out
+
+# open, lids closing (0.3, 0.45), blink (0.9 x2), reopening (0.1 for 250 ms), open
+blink = run([0.1] * 4 + [0.3, 0.45, 0.9, 0.9] + [0.1] * 10)
+assert blink == "...." + "----" + "-------" + "...", blink    # 7 x 33 ms < 250 ms reopening
+# looking down: score rises to 0.3 and STAYS there (no blink comes)
+down = run([0.1] * 4 + [0.3] * 12)
+assert down == "...." + "-------" + ".....", down             # held < 200 ms, then let through
+print("1. tracker: blink", blink, "| looking down", down)
 
 # ---- 2. session ---------------------------------------------------------------
 from eyetracking.core.calibration import BLINK_LOOKBACK, CalibrationSession
