@@ -397,6 +397,7 @@ class FloatingBall(QWidget):
         self._moved = False
         self._edge = "right"
         self._halo = TRACK_IDLE          # see set_tracking_state() / HOOK 1
+        self.menu_actions: list = []     # (text, slot) pairs the app adds to the right-click menu
 
         self._slide = QPropertyAnimation(self, b"pos", self)
         self._slide.setDuration(180)
@@ -522,6 +523,8 @@ class FloatingBall(QWidget):
                             else "Open assistant", menu)
         show_hide.triggered.connect(self.toggle_panel)
         menu.addAction(show_hide)
+        for text, slot in self.menu_actions:
+            menu.addAction(text, slot)
         menu.addSeparator()
         quit_act = QAction("Quit", menu)
         quit_act.triggered.connect(QApplication.quit)

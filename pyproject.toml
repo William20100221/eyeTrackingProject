@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
     "anthropic>=1.13.0",
+    "materialyoucolor>=3.0.4",
     "mediapipe>=1.0.1",
     "opencv-contrib-python>=5.0.0.93",
     "pygrabber>=0.2",

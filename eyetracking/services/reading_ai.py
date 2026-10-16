@@ -71,7 +71,7 @@ GRADE_SCHEMA = {
 
 
 def summarize(full_text: str, read_text: str, mode: str = "unread",
-              provider: str = "claude") -> str:
+              provider: str = "claude", words: int | None = None) -> str:
     marked = mark_unread(full_text, read_text)
     if mode == "unread":
         if unread_word_count(marked) == 0:
@@ -84,7 +84,8 @@ def summarize(full_text: str, read_text: str, mode: str = "unread",
                 "it connects to what the student read. If nothing is unread, say so.")
     else:
         raise ValueError(f"mode must be 'unread' or 'outline', not {mode!r}")
-    return _ask(provider, f"<text>\n{marked}\n</text>\n\n{task} {LENGTH}")
+    length = f"Use about {words} words." if words else LENGTH   # words: Settings > Summary length
+    return _ask(provider, f"<text>\n{marked}\n</text>\n\n{task} {length}")
 
 
 def question_count(words: int) -> int:

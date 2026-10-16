@@ -17,8 +17,8 @@ from eyetracking.services.landmarker import FaceLandmarker
 
 
 class EyeTracker:
-    def __init__(self) -> None:
-        self._camera = Camera()              # asks which camera, in the console
+    def __init__(self, camera_index: int | None = None) -> None:
+        self._camera = Camera(camera_index)  # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
         except Exception:
