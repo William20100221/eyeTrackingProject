@@ -6,18 +6,21 @@ Live gaze demo: a dot on a full-screen window where the model thinks you look.
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
 The faint rings are the calibration positions (5x5 grid). Look at one and see where
-the dot lands: a quick visual accuracy check. Esc quits.
+the dot lands: a quick visual accuracy check. Every sample is listed as
+"#index  x  y" on screen and saved to data/gaze_check_<time>.csv when you press Esc.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
 model: it calls `get_point()` every tick and draws whatever comes back.
 """
 from __future__ import annotations
 
+import csv
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
-from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -26,10 +29,12 @@ from eyetracking.core.features import N_FEATURES
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
+from path import DATA_DIR
 
 TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
 DOT_RADIUS = 18      # px
 RING_RADIUS = 12     # px, the faint calibration positions
+SHOWN_SAMPLES = 12   # how many of the latest "#index x y" lines are drawn
 
 LIVE = QColor(80, 220, 120)      # green: a prediction from this frame
 STALE = QColor(90, 90, 90)       # grey: face lost / blink, showing the last one
@@ -37,6 +42,8 @@ OFF_SCREEN = QColor(235, 149, 46)  # orange ring: the guess is past the edge
 
 
 class GazeWindow(QWidget):
+    logged = Signal(str)    # the csv file's path, just before the window closes
+
     def __init__(self,
                  get_point: Callable[[], tuple[float, float] | None],
                  targets: Sequence[tuple[float, float]] | None = None,
@@ -46,6 +53,7 @@ class GazeWindow(QWidget):
         self._targets = list(targets or point_grid())
         self._point: tuple[float, float] | None = None   # last prediction, 0..1
         self._stale = True                                # no prediction this tick
+        self.log: list[tuple[int, float, float, bool]] = []   # (index, x, y, stale), one per tick with a point
 
         # frames per second, worked out once a second: the number to compare
         # when testing speed changes (e.g. a threaded camera)
@@ -64,6 +72,8 @@ class GazeWindow(QWidget):
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape:
             self._timer.stop()
+            if self.log:
+                self.logged.emit(str(self.save_log()))
             self.close()
         else:
             super().keyPressEvent(event)
@@ -74,6 +84,8 @@ class GazeWindow(QWidget):
         self._stale = point is None
         if point is not None:
             self._point = point     # while the face is lost, keep the last one
+        if self._point is not None:
+            self.log.append((len(self.log), *self._point, self._stale))
 
         self._frames += 1
         if self._fps_clock.elapsed() >= 1000:
@@ -82,6 +94,20 @@ class GazeWindow(QWidget):
             self._fps_clock.restart()
 
         self.update()   # ask Qt to repaint (it calls paintEvent)
+
+    def save_log(self, folder: Path = DATA_DIR) -> Path:
+        """Every sample as index,x,y,stale: to plot or compare after a test."""
+        path = folder / f"gaze_check_{datetime.now():%Y-%m-%d_%H%M%S}.csv"
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["index", "x", "y", "stale"])
+            w.writerows((i, f"{x:.4f}", f"{y:.4f}", int(stale)) for i, x, y, stale in self.log)
+        return path
+
+    def sample_lines(self) -> list[str]:
+        """The latest samples, newest last: "#0042  x 0.430  y 0.610" (index first)."""
+        return [f"#{i:04d}  x {x:.3f}  y {y:.3f}" + ("  (stale)" if stale else "")
+                for i, x, y, stale in self.log[-SHOWN_SAMPLES:]]
 
     def dot_position(self) -> QPointF | None:
         """Where the dot is drawn, in window pixels. A guess past the edge is
@@ -121,6 +147,8 @@ class GazeWindow(QWidget):
         p.setFont(font)
         p.setPen(QColor(120, 120, 120))
         p.drawText(20, 34, self.status_text())
+        for n, line in enumerate(self.sample_lines()):
+            p.drawText(20, 64 + 22 * n, line)
 
     def status_text(self) -> str:
         if self._point is None:
