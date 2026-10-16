@@ -321,6 +321,7 @@ class App(QObject):
             self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
         gaze = to_screen(self.smoothed)
         self.dwell.feed(gaze)
+        self.ball.look_at(gaze)                  # the water-eye ball looks where you look
         if self.reading is not None:
             self.reading.feed(gaze, dt)
 
