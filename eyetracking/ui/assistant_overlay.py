@@ -42,6 +42,8 @@ Run:  python assistant_overlay.py        (draws the UI; ports sit idle)
 """
 from __future__ import annotations
 
+import math
+import random
 import sys
 
 from PySide6.QtCore import (
@@ -49,12 +51,14 @@ from PySide6.QtCore import (
     QRectF, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import (
-    QAction, QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient,
+    QAction, QColor, QCursor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
     QMenu, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
 )
+
+from eyetracking.ui.water_ball import WaterBallRenderer
 
 # --------------------------------------------------------------------------- theme
 ACCENT   = "#3D6CF6"
@@ -407,8 +411,55 @@ class FloatingBall(QWidget):
         self._ticker.timeout.connect(self._tick)
         self._ticker.start(40)
 
+        # water-eye look (ui/water_ball.py). None = no OpenGL here: old look instead
+        try:
+            self._water = WaterBallRenderer()
+        except RuntimeError as e:
+            print(f"Floating ball: plain look ({e})")
+            self._water = None
+        self._clock = QElapsedTimer()
+        self._clock.start()
+        self._last_ms = 0
+        self._open = self._open_vel = 0.0         # 0 = drop, 1 = eye (springs, overshoots a little)
+        self._hover = self._hover_target = 0.0    # liquid ripples while the mouse is over it
+        self._gaze = [0.0, 0.0]                   # where the pupil looks, -1..1, y up
+        self._look_at: QPoint | None = None       # gaze point fed by the app (global px)
+        self._look_ms = -10_000                   # when it was last fed
+        self._blink = -1.0                        # -1 = not blinking, else 0..1 through a blink
+        self._next_blink = 4.0                    # seconds until the next idle blink
+
+    # where the eye looks: the app's gaze point if fed lately, else the mouse
+    def look_at(self, global_pos: QPoint) -> None:
+        self._look_at, self._look_ms = global_pos, self._clock.elapsed()
+
     def _tick(self) -> None:
         self._pulse = (self._pulse + 0.02) % 1.0
+        now = self._clock.elapsed()
+        dt = min((now - self._last_ms) / 1000, 0.05)
+        self._last_ms = now
+
+        # spring towards open (panel showing) or closed: slight overshoot = liquid feel
+        target = 1.0 if self.panel.isVisible() else 0.0
+        self._open_vel += (170 * (target - self._open) - 18 * self._open_vel) * dt
+        self._open += self._open_vel * dt
+        self._hover += (self._hover_target - self._hover) * min(1.0, dt * 6)
+
+        point = self._look_at if now - self._look_ms < 500 else QCursor.pos()
+        c = self.frameGeometry().center()
+        x, y = (point.x() - c.x()) / 400, -(point.y() - c.y()) / 400   # 400 px away = looking fully that way
+        length = max(1.0, (x * x + y * y) ** 0.5)
+        for i, v in enumerate((x / length, y / length)):
+            self._gaze[i] += (v - self._gaze[i]) * min(1.0, dt * 8)
+
+        # an idle blink every 4-8 s while open
+        if target and self._open > 0.95:
+            self._next_blink -= dt
+            if self._next_blink <= 0 and self._blink < 0:
+                self._blink = 0.0
+        if self._blink >= 0:
+            self._blink += dt / 0.22
+            if self._blink >= 1:
+                self._blink, self._next_blink = -1.0, 4 + random.random() * 4
         self.update()
 
     # ======================= EYE TRACKING HOOK 1 =========================
@@ -438,6 +489,18 @@ class FloatingBall(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         circle = QRectF(self.PAD, self.PAD, self.BALL, self.BALL)
 
+        if self._water is not None:
+            # the shader's drop fills ~80% of its image; size it so the drop = the ball
+            side = self.BALL / 0.8
+            lid = 1 - math.sin(math.pi * min(self._blink, 1)) if self._blink >= 0 else 1.0
+            px = int(side * self.devicePixelRatioF())
+            image = self._water.render(px, self._clock.elapsed() / 1000, max(0.0, self._open) * lid,
+                                       self._hover, 1.0, tuple(self._gaze))
+            image.setDevicePixelRatio(self.devicePixelRatioF())
+            p.drawImage(QPointF(circle.center().x() - side / 2, circle.center().y() - side / 2), image)
+            self._draw_halo(p, circle)
+            return
+
         # hand-painted shadow (graphics effects are unreliable on translucent windows)
         glow = QRadialGradient(circle.center(), self.BALL / 2 + self.PAD)
         glow.setColorAt(0.70, QColor(15, 23, 42, 55))
@@ -466,6 +529,9 @@ class FloatingBall(QWidget):
             p.drawEllipse(inner)
             draw_icon(p, "eye", inner.adjusted(10, 10, -10, -10), QColor("white"), 2.2)
 
+        self._draw_halo(p, circle)
+
+    def _draw_halo(self, p: QPainter, circle: QRectF) -> None:
         # Breathing halo. Its colour is the tracker status set by HOOK 1.
         alpha = int(70 * (1 - abs(self._pulse * 2 - 1)))
         grow = 3 + self._pulse * 5
@@ -497,9 +563,11 @@ class FloatingBall(QWidget):
                 self.toggle_panel()
 
     def enterEvent(self, _e):
+        self._hover_target = 1.0
         self.slide(peek=False)
 
     def leaveEvent(self, _e):
+        self._hover_target = 0.0
         if not self.panel.isVisible():
             self.slide(peek=True)
 
