@@ -16,6 +16,8 @@ window re-themes live.
 """
 import ctypes
 import sys
+from datetime import datetime
+from pathlib import Path
 from string import Template
 
 from materialyoucolor.dynamiccolor.material_dynamic_colors import MaterialDynamicColors
@@ -26,10 +28,12 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
+from eyetracking.services.storage import (calibration_text, chat_text, file_date, list_calibrations, list_chats,
+                                          new_chat_path, save_chat)
 
 DEFAULTS = {
     "seed": "#3D6CF6",
@@ -176,6 +180,14 @@ QMenu::item:selected { background: $hover; }
 #sideTitle { font-size: 12px; font-weight: 600; color: $onSurfaceVariant; padding: 8px 12px 4px 12px; }
 QPushButton[kind="nav"] { text-align: left; padding: 0 12px; border-radius: 8px; font-weight: 400; font-size: 14px; }
 QPushButton[kind="nav"]:hover { background: $hover; }
+#sideLabel { font-size: 14px; padding: 6px 12px 2px 12px; }
+QListWidget#sideList { background: transparent; border: none; outline: none; font-size: 13px; }
+QListWidget#sideList::item { padding: 6px 12px 6px 36px; border-radius: 8px; color: $onSurfaceVariant; }
+QListWidget#sideList::item:hover { background: $hover; }
+QListWidget#sideList::item:selected { background: $secondaryContainer; color: $onSecondaryContainer; }
+QPlainTextEdit#textView { background: $surfaceContainerLowest; border: 1px solid $outlineVariant; border-radius: 8px;
+    padding: 8px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px;
+    selection-background-color: $primary; selection-color: $onPrimary; }
 #hero { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 32px; font-weight: 600; }
 #heroSub { font-size: 14px; color: $onSurfaceVariant; }
 QLabel#theirs { font-size: 15px; }
@@ -465,8 +477,17 @@ class ChatPage(QWidget):
             b = button(f"{glyph}   {text}", "nav")
             b.clicked.connect(lambda _=False, c=cmd: self.command.emit(c))
             sv.addWidget(b)
-        sv.addStretch(1)
+        # saved calibrations by date, and past chats + quizzes: double-click (or Enter) to read one
+        sv.addWidget(label(f"{I_LINES}   Gaze data", "sideLabel"))
+        self.calib_list = self._side_list(calibration_text)
+        sv.addWidget(self.calib_list, 1)
+        sv.addSpacing(8)
+        sv.addWidget(label("History", "sideTitle"))
+        self.chat_list = self._side_list(chat_text)
+        sv.addWidget(self.chat_list, 1)
         h.addWidget(side)
+        self.history: list[dict] = []            # this run's chat + quiz, saved as it goes
+        self.history_path = new_chat_path()
 
         col = QWidget()
         col.setMaximumWidth(760)
@@ -520,6 +541,47 @@ class ChatPage(QWidget):
         h.addWidget(col, 20)
         h.addStretch(1)
 
+    # ----- sidebar lists
+
+    def _side_list(self, to_text) -> QListWidget:
+        lst = QListWidget(objectName="sideList")
+        lst.setToolTip("Double-click to open")
+        lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and self.show_text(
+            it.text(), to_text(Path(it.data(Qt.UserRole)))))
+        return lst
+
+    def refresh(self):
+        """Re-read data/ (new calibrations, this run's chat). Runs whenever the page shows."""
+        for lst, paths in ((self.calib_list, list_calibrations()), (self.chat_list, list_chats())):
+            lst.clear()
+            for path in paths:
+                item = QListWidgetItem(f"{file_date(path):%d %b %Y   %H:%M}")
+                item.setData(Qt.UserRole, str(path))
+                lst.addItem(item)
+            if not paths:
+                lst.addItem(QListWidgetItem("Nothing yet"))   # no path: double-click does nothing
+
+    def showEvent(self, e):
+        self.refresh()
+        super().showEvent(e)
+
+    def show_text(self, title: str, text: str):
+        """Read-only text in a themed dialog (it takes the window's style sheet)."""
+        dlg = QDialog(self, Qt.Dialog | Qt.WindowCloseButtonHint)
+        dlg.setObjectName("root")
+        dlg.setAttribute(Qt.WA_StyledBackground)
+        dlg.setWindowTitle(title)
+        dlg.resize(760, 560)
+        v = QVBoxLayout(dlg)
+        view = QPlainTextEdit(text, objectName="textView", readOnly=True)
+        v.addWidget(view)
+        dlg.exec()
+
+    def _log(self, text: str, mine: bool):
+        self.history.append({"who": "you" if mine else "assistant", "text": text,
+                             "at": datetime.now().isoformat(timespec="seconds")})
+        save_chat(self.history_path, self.history)   # ponytail: rewrites the whole file each message; fine for one run
+
     def set_answering(self, on: bool):
         """Swap Go Reading for the answer box while the quiz waits for an answer."""
         self.answer_box.setVisible(on)
@@ -533,6 +595,7 @@ class ChatPage(QWidget):
             self.answer.clear()
 
     def _send(self, text: str):
+        self._log(text, mine=True)
         self.add_message(text, mine=True)
         self.message_sent.emit(text)
 
@@ -565,6 +628,7 @@ class ChatPage(QWidget):
 
     def reply(self, text: str):
         """Stream the assistant's text in, two characters a tick."""
+        self._log(text, mine=False)
         text_label = self.add_message("", mine=False)
         state = {"i": 0}
         timer = QTimer(self)
