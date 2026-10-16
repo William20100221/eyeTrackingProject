@@ -42,12 +42,27 @@ from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from eyetracking.core.quality import check_recording
 
 
+def grid_positions(n: int = 5, margin: float = 0.05) -> list[float]:
+    """The n positions used across AND down, as screen fractions."""
+    return [round(margin + (1 - 2 * margin) * i / (n - 1), 4) for i in range(n)]
+
+
 def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
     """n x n grid of (x, y) screen fractions, row by row.
     9 dots is too few to fit a curve AND test it: use 5x5 (25) at least.
     `margin` keeps the dots off the very edge of the screen."""
-    positions = [round(margin + (1 - 2 * margin) * i / (n - 1), 4) for i in range(n)]
+    positions = grid_positions(n, margin)
     return [(x, y) for y in positions for x in positions]
+
+
+def describe_target(x: float, y: float, n: int = 5) -> str:
+    """A dot position in words: "dot (2, 1) of the 5x5 grid" (column, row,
+    counted from the top left), or "the point 43% across, 61% down" when it
+    isn't on the grid."""
+    positions = grid_positions(n)
+    if round(x, 4) in positions and round(y, 4) in positions:
+        return f"dot ({positions.index(round(x, 4)) + 1}, {positions.index(round(y, 4)) + 1}) of the {n}x{n} grid"
+    return f"the point {x:.0%} across, {y:.0%} down"
 
 
 BLINK_LOOKBACK = 3   # samples held back per dot: dropped if a skipped frame follows,
