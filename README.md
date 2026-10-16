@@ -14,6 +14,7 @@ This project is built with Mediapipe, OpenCV, scikit-learn and PySide6 (Qt) whic
 pip install mediapipe
 pip install opencv-contrib-python
 pip install PySide6
+pip install PySide6 materialyoucolor
 pip install scikit-learn
 pip install pygrabber
 pip install anthropic
