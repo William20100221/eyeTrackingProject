@@ -23,10 +23,10 @@ BLINK_RECOVERY_FRAMES = 3
 
 
 class EyeTracker:
-    def __init__(self) -> None:
+    def __init__(self, camera_index: int | None = None) -> None:
         self.face_found = False              # set by read_features(); a blink still counts as a face
         self._recovering = 0                 # frames left to skip after a blink
-        self._camera = Camera()              # asks which camera, in the console
+        self._camera = Camera(camera_index)  # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
         except Exception:

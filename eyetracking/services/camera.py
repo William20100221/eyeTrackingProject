@@ -6,6 +6,11 @@ import cv2 as cv
 from pygrabber.dshow_graph import FilterGraph
 
 
+def camera_names() -> list[str]:
+    """Webcams Windows knows about, in OpenCV's index order (list position = index)."""
+    return FilterGraph().get_input_devices()
+
+
 class Camera:
     def __init__(self, index: int | None = None):
         # no index given: list the cameras and ask in the console (as before)
