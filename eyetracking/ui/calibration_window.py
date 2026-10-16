@@ -13,7 +13,8 @@ or with FAKE features from your mouse position, so no camera is needed:
 
     python -m eyetracking.ui.calibration_window --mouse
 
-Space starts, Esc quits. Screen positions are stored as fractions 0..1
+Space starts, Space again pauses / carries on (as often as you like),
+Esc leaves at any time. Screen positions are stored as fractions 0..1
 (x across, y down), so they work on any screen size.
 """
 from __future__ import annotations
@@ -56,6 +57,7 @@ class CalibrationWindow(QWidget):
         self._get_features = get_features
         self._session = CalibrationSession(targets or point_grid())
         self._phase = "intro"          # intro -> settle -> collect -> ... -> done
+        self.paused = False
         self._clock = QElapsedTimer()  # time spent in the current phase
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -74,13 +76,28 @@ class CalibrationWindow(QWidget):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Space:
-            self.start()
+            if self._phase == "intro":
+                self.start()
+            elif self._phase != "done":
+                self.toggle_pause()
         elif event.key() == Qt.Key.Key_Escape:
             self._timer.stop()
             self.cancelled.emit()
             self.close()
         else:
             super().keyPressEvent(event)
+
+    def toggle_pause(self) -> None:
+        self.paused = not self.paused
+        if self.paused:
+            self._timer.stop()
+        else:
+            # the eyes wandered off while paused: travel back to this dot before recording again
+            # (frames already recorded for it are kept)
+            self._phase = "settle"
+            self._clock.restart()
+            self._timer.start(TICK_MS)
+        self.update()
 
     # ---- timing: runs every TICK_MS --------------------------------
     def _tick(self) -> None:
@@ -123,7 +140,7 @@ class CalibrationWindow(QWidget):
 
         if self._phase in ("intro", "done"):
             text = ("Look at each dot until it moves on.\n"
-                    "Keep your head still.\n\nPress Space to start, Esc to quit."
+                    "Keep your head still.\n\nPress Space to start, Space again to pause,\nEsc to leave at any time."
                     if self._phase == "intro" else "Calibration done.")
             font = p.font()
             font.setPointSize(18)
@@ -134,6 +151,17 @@ class CalibrationWindow(QWidget):
 
         x, y = self._session.current_target()
         centre = QPointF(x * self.width(), y * self.height())
+
+        if self.paused:
+            font = p.font()
+            font.setPointSize(18)
+            p.setFont(font)
+            p.setPen(QColor("white"))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                       "Paused.\n\nSpace to carry on, Esc to leave.")
+            p.setPen(QPen(QColor(90, 90, 90), 3))     # the dot you'll go back to
+            p.drawEllipse(centre, RING_END, RING_END)
+            return
 
         if self._phase == "settle":
             # ring shrinks onto the dot: pulls the eye to its exact centre
@@ -157,7 +185,7 @@ class CalibrationWindow(QWidget):
         font.setPointSize(12)
         p.setFont(font)
         p.setPen(QColor(120, 120, 120))
-        p.drawText(20, 34, f"Dot {n} / {total}")
+        p.drawText(20, 34, f"Dot {n} / {total}     Space: pause     Esc: leave")
 
 
 # =====================================================================
