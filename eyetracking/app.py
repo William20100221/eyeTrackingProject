@@ -5,18 +5,18 @@ The whole app, wired together.
     python main.py --mouse               (no camera: your mouse plays the eyes)
     python main.py --provider gemini     (AI provider, see services/reading_ai.py)
 
-The floating ball (right edge) is the home screen: click it for the chat
-panel and type a command:
-    calibrate   line dots + head step + 25 random dots (~2 min), saves, retrains the gaze model
-    check       full-screen gaze dot, to see today's accuracy
-    read        read a text; type "done" (or stare at Done) when finished
+The main window (ui/control_window.py) has three tabs:
+    Chat         replies, quiz; "Go Reading" closes the window, back to the ball
+    Settings     camera, AI model, theme
+    Calibration  line dots + head step + 25 random dots, saves, retrains the gaze model
+The window and the floating ball swap: click the ball to get the window back.
 After reading, the AI summarises what you skipped and quizzes you on it.
 Right-click the ball to quit.
 
 What talks to what:
     camera -> tracker -> gaze model -> smoothed screen point
         -> ball halo (face found?), gaze cursor + dwell-click, reading window
-    reading window -> (full text, read paragraphs) -> reading AI -> chat panel
+    reading window -> (full text, read paragraphs) -> reading AI -> chat tab
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions
 from eyetracking.services.storage import load_all_calibrations, save_calibration
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
-from eyetracking.ui.assistant_overlay import AssistantPanel, DwellController, FloatingBall, GazeCursor
+from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, GazeCursor
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
 from eyetracking.ui.control_window import MODEL_IDS, TEXT_FONTS, SettingsWindow, pick_camera
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
@@ -48,13 +48,6 @@ from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
 SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier but laggier
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
-
-HELP = ("Type a command:\n"
-        "• calibrate: dots on a line, move your head, then 25 dots (~2 min)\n"
-        "• check: full-screen dot to test the accuracy\n"
-        "• read: read a text, then type done (or stare at Done)\n"
-        "• settings: camera, AI model, floating ball\n"
-        "After reading I'll summarise what you skipped and quiz you on it.")
 
 PARA = "font-size:22px; color:#1F2328; padding:18px; border-radius:12px; background:{};"
 UNREAD_BG, READ_BG = "white", "#DDF3E4"
@@ -193,19 +186,23 @@ class App(QObject):
         super().__init__()
         self.mouse, self.provider = mouse, provider
 
-        self.panel = AssistantPanel()
-        self.ball = FloatingBall(self.panel)
+        # the main window: Chat + Settings + Calibration tabs (ui/control_window.py)
+        self.control = SettingsWindow()
+        self.panel = self.control.chat
+        self.ball = FloatingBall()
         self.ball.dock_right()
         self.ball.show()
         self.cursor = GazeCursor()
         self.dwell = DwellController(self.cursor)
-        self.panel.message_sent.connect(self.on_message)
         self.background = Background()
 
-        # the main window: Settings + Calibration tabs (ui/control_window.py)
-        self.control = SettingsWindow()
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
+        self.control.shown.connect(lambda shown: self.ball.setVisible(not shown))   # window XOR ball
+        self.panel.message_sent.connect(self.answer)
+        self.panel.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
+        self.panel.go_reading.connect(self.control.hide)
+        self.ball.clicked.connect(lambda: self.control.show_page(self.panel))
         self.ball.menu_actions = [("Settings", self.open_settings)]
         settings = self.control.read_store()
 
@@ -232,8 +229,8 @@ class App(QObject):
         self.timer.timeout.connect(self.tick)
         self.timer.start(TICK_MS)
 
-        self.ball.toggle_panel()
-        self.panel.reply(f"{self._model_status()}\n\n{HELP}")
+        self.panel.status.setText(self._model_status())
+        self.control.show_page(self.panel)
 
     # ---- settings + camera -------------------------------------------
     def _camera_index(self) -> int:
@@ -254,7 +251,7 @@ class App(QObject):
         """Startup, and every time Save changes is pressed."""
         self.show_ball = values["show_ball"]
         self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
-        self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
+        self.ball.setVisible(not self.control.isVisible())   # setWindowFlag hides it
         # ponytail: the model choice applies to the claude provider only (--provider gemini/openai keep theirs)
         reading_ai.MODELS["claude"] = MODEL_IDS.get(values["model"], reading_ai.MODELS["claude"])
         self.summary_words = values["summary_words"]
@@ -269,9 +266,7 @@ class App(QObject):
                 self.panel.reply(f"That camera didn't start ({e}). Mouse mode until you pick another.")
 
     def open_settings(self) -> None:
-        self.control.showNormal()
-        self.control.raise_()
-        self.control.activateWindow()
+        self.control.show_page(self.control.settings_page)
 
     # ---- gaze ------------------------------------------------------
     def _load_model(self) -> LineModel | None:
@@ -288,7 +283,7 @@ class App(QObject):
         if self.mouse:
             return "Mouse mode: the mouse plays your eyes."
         if self.model is None:
-            return "No calibration yet: type calibrate first."
+            return "No calibration yet: open the Calibration tab first."
         return f"Gaze model trained on {self.samples_used} samples, the newest calibration counting most."
 
     def predict(self, features) -> tuple[float, float] | None:
@@ -341,8 +336,7 @@ class App(QObject):
         """Pause our camera reads (one reader at a time) and hide the
         always-on-top windows so they don't cover the dots."""
         self.timer.stop()
-        for w in (self.panel, self.ball, self.cursor):
-            w.hide()
+        self.cursor.hide()                        # the ball hides itself: the window is up
         self.fullscreen = window                  # keep a reference, or Python deletes it
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         window.destroyed.connect(self._fullscreen_closed)
@@ -350,25 +344,10 @@ class App(QObject):
 
     def _fullscreen_closed(self) -> None:
         self.fullscreen = None
-        self.ball.setVisible(self.show_ball)
-        if not self.panel.isVisible():
-            self.ball.toggle_panel()
         self.clock.restart()
         self.timer.start(TICK_MS)
 
-    # ---- commands ----------------------------------------------------
-    def on_message(self, text: str) -> None:
-        command = text.strip().lower()
-        commands = {"calibrate": self.calibrate, "check": self.check, "read": self.read,
-                    "done": self.done_reading, "settings": self.open_settings,
-                    "help": lambda: self.panel.reply(HELP)}
-        if command in commands:
-            commands[command]()
-        elif self.quiz:
-            self.answer(text)
-        else:
-            self.panel.reply(HELP)
-
+    # ---- commands (tabs + chat sidebar buttons) ------------------------
     def calibrate(self) -> None:
         get = fake_features_from_mouse if self.mouse else self.tracker.read_features
         window = CalibrationWindow(get_features=get)
@@ -400,7 +379,7 @@ class App(QObject):
 
     def check(self) -> None:
         if not self.mouse and self.model is None:
-            self.panel.reply("Calibrate first: type calibrate.")
+            self.panel.reply("Calibrate first: open the Calibration tab.")
             return
 
         def get():
@@ -412,20 +391,14 @@ class App(QObject):
 
     def read(self) -> None:
         if self.model is None and not self.mouse:
-            self.panel.reply("Calibrate first: type calibrate.")
+            self.panel.reply("Calibrate first: open the Calibration tab.")
             return
+        self.control.hide()                       # the ball comes back while you read
         if self.reading is None:
             self.reading = ReadingWindow(SAMPLE_FULL)
             self.reading.finished.connect(self._read_finished)
             self.reading.destroyed.connect(self._reading_closed)
         self.reading.showFullScreen()
-        self.panel.reply("Read the text. Use Open .txt for your own. Type done when finished.")
-
-    def done_reading(self) -> None:
-        if self.reading is None:
-            self.panel.reply("Nothing open: type read first.")
-        else:
-            self.reading.finish()
 
     def _reading_closed(self) -> None:
         self.reading = None
@@ -434,6 +407,7 @@ class App(QObject):
     def _read_finished(self, full_text: str, read_text: str) -> None:
         self.full_text = full_text
         unread = unread_word_count(mark_unread(full_text, read_text))
+        self.control.show_page(self.panel)        # the summary and quiz show in the chat
         self.panel.reply(f"You skipped {unread} of {len(full_text.split())} words. "
                          f"Asking {self.provider}...")
         self.background.run(
@@ -451,11 +425,13 @@ class App(QObject):
 
     def _ask_next(self) -> None:
         if self.quiz:
-            self.panel.reply(f"Question: {self.quiz[0]['question']}\n(type your answer, or skip)")
+            self.panel.reply(f"Question: {self.quiz[0]['question']}")
         else:
             self.panel.reply("No more questions.")
+        self.panel.set_answering(bool(self.quiz))
 
     def answer(self, text: str) -> None:
+        self.panel.set_answering(False)           # back on while the next question is asked
         question = self.quiz.pop(0)
         if text.strip().lower() == "skip":
             self.panel.reply(f"Model answer: {question['model_answer']}")

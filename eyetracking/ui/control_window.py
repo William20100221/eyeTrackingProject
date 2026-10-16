@@ -1,8 +1,12 @@
 """Study Assistant main window: direction 3 ("Toolbar") in PySide6.
 
-Two tabs in the title bar: Settings, and Calibration. Calibration (and check)
-pages fill the screen with no title bar or buttons, then the window goes back
-to how it was. pick_camera() is the small camera popup used at first start.
+Three tabs in the title bar: Chat, Settings, Calibration. Calibration (and
+check) pages fill the screen with no title bar or buttons, then the window goes
+back to the Chat tab. pick_camera() is the small camera popup used at first start.
+
+ChatPage looks like ChatGPT, but with a "Go Reading" button instead of an input
+bar: it closes the window and the floating ball comes back (one or the other,
+never both: the app swaps them on SettingsWindow.shown).
 
 Every colour comes from one seed colour through the Material 3 Fidelity
 scheme, in light and dark. Pick a colour in the side sheet and the whole
@@ -54,6 +58,7 @@ I_CHECK, I_DISMISS, I_RESET, I_CHEVRON = "", "", "", ""
 I_THEME, I_PALETTE, I_BALL, I_LAYERS = "", "", "", ""
 I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
+I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
 
 # ---------------------------------------------------------------- colour
@@ -164,6 +169,24 @@ QSpinBox:focus { border-bottom: 2px solid $primary; }
 QMenu { background: $surfaceContainer; border: 1px solid $outlineVariant; padding: 4px; }
 QMenu::item { padding: 8px 32px 8px 12px; border-radius: 4px; }
 QMenu::item:selected { background: $hover; }
+
+/* chat page */
+#side { background: $surfaceContainerLow; border-right: 1px solid $outlineVariant; }
+#sideTitle { font-size: 12px; font-weight: 600; color: $onSurfaceVariant; padding: 8px 12px 4px 12px; }
+QPushButton[kind="nav"] { text-align: left; padding: 0 12px; border-radius: 8px; font-weight: 400; font-size: 14px; }
+QPushButton[kind="nav"]:hover { background: $hover; }
+#hero { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 32px; font-weight: 600; }
+#heroSub { font-size: 14px; color: $onSurfaceVariant; }
+QLabel#theirs { font-size: 15px; }
+#mine { background: $surfaceContainerHigh; border-radius: 18px; }
+#mine QLabel { font-size: 15px; background: transparent; }
+QPushButton[kind="go"] { background: $primary; color: $onPrimary; min-height: 64px; max-height: 64px;
+    border-radius: 32px; font-size: 17px; }
+QPushButton[kind="go"]:hover { background: $primaryHover; }
+QPushButton[kind="go"]:pressed { background: $primaryPress; }
+#answerBox { background: $surfaceContainerHigh; border-radius: 28px; }
+QLineEdit#answer { border: none; background: transparent; font-size: 15px; min-height: 40px;
+    selection-background-color: $primary; selection-color: $onPrimary; }
 
 /* side sheet */
 #sheet { background: $surfaceContainerLow; border-left: 1px solid $outlineVariant; border-top-left-radius: 12px; }
@@ -415,11 +438,154 @@ class Grip(QWidget):
             self.window().windowHandle().startSystemResize(self.edges)
 
 
+# ---------------------------------------------------------------- chat page
+
+class ChatPage(QWidget):
+    """ChatGPT-style page. The app talks to it like the old chat panel:
+    reply(text) to speak, message_sent(str) for quiz answers."""
+
+    message_sent = Signal(str)     # a quiz answer (or "skip")
+    command = Signal(str)          # a sidebar button: "read" | "check"
+    go_reading = Signal()          # the big button: close the window, back to the ball
+
+    def __init__(self):
+        super().__init__()
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        side = QFrame(objectName="side")
+        side.setFixedWidth(260)
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(12, 12, 12, 12)
+        sv.setSpacing(2)
+        sv.addWidget(label("Practice", "sideTitle"))
+        for glyph, text, cmd in [(I_READ, "Sample text", "read"), (I_EYE, "Gaze check", "check")]:
+            b = button(f"{glyph}   {text}", "nav")
+            b.clicked.connect(lambda _=False, c=cmd: self.command.emit(c))
+            sv.addWidget(b)
+        sv.addStretch(1)
+        h.addWidget(side)
+
+        col = QWidget()
+        col.setMaximumWidth(760)
+        self.v = v = QVBoxLayout(col)
+        v.setContentsMargins(24, 24, 24, 32)
+        v.setSpacing(16)
+        v.addStretch(1)                                  # 0: centres the hero while empty
+
+        self.scroll = QScrollArea()                      # 1: messages, once there are some
+        self.scroll.setWidgetResizable(True)
+        self.scroll.viewport().setAutoFillBackground(False)
+        host = QWidget(objectName="content")
+        self.msgs = QVBoxLayout(host)
+        self.msgs.setContentsMargins(0, 0, 8, 0)
+        self.msgs.setSpacing(20)
+        self.msgs.addStretch(1)
+        self.scroll.setWidget(host)
+        self.scroll.hide()
+        v.addWidget(self.scroll)
+
+        self.hero = QWidget()                            # 2: "What should we read?"
+        hv = QVBoxLayout(self.hero)
+        hv.setContentsMargins(0, 0, 0, 8)
+        title = label("What should we read?", "hero")
+        title.setAlignment(Qt.AlignCenter)
+        self.status = label("", "heroSub")              # the app puts the gaze model status here
+        self.status.setAlignment(Qt.AlignCenter)
+        self.status.setWordWrap(True)
+        hv.addWidget(title)
+        hv.addWidget(self.status)
+        v.addWidget(self.hero)
+
+        self.answer_box = QFrame(objectName="answerBox")   # 3: only while a quiz question waits
+        ah = QHBoxLayout(self.answer_box)
+        ah.setContentsMargins(20, 8, 8, 8)
+        self.answer = QLineEdit(objectName="answer", placeholderText="Type your answer, then Enter")
+        self.answer.returnPressed.connect(self._send_answer)
+        skip = button(f"{I_SKIP}  Skip", "text")
+        skip.clicked.connect(lambda: self._send("skip"))
+        ah.addWidget(self.answer, 1)
+        ah.addWidget(skip)
+        self.answer_box.hide()
+        v.addWidget(self.answer_box)
+
+        self.go = button(f"{I_READ}   Go Reading", "go")   # 4: instead of an input bar
+        self.go.clicked.connect(self.go_reading)
+        v.addWidget(self.go)
+        v.addStretch(1)                                  # 5
+
+        h.addStretch(1)
+        h.addWidget(col, 20)
+        h.addStretch(1)
+
+    def set_answering(self, on: bool):
+        """Swap Go Reading for the answer box while the quiz waits for an answer."""
+        self.answer_box.setVisible(on)
+        self.go.setVisible(not on)
+        if on:
+            self.answer.setFocus()
+
+    def _send_answer(self):
+        if self.answer.text().strip():
+            self._send(self.answer.text().strip())
+            self.answer.clear()
+
+    def _send(self, text: str):
+        self.add_message(text, mine=True)
+        self.message_sent.emit(text)
+
+    def add_message(self, text: str, mine: bool) -> QLabel:
+        if not self.hero.isHidden():   # first message: hero out, messages fill (not isVisible: the window may be hidden)
+            self.hero.hide()
+            self.scroll.show()
+            self.v.setStretch(0, 0)
+            self.v.setStretch(1, 1)
+            self.v.setStretch(5, 0)
+        text_label = QLabel(text, objectName="theirs")
+        text_label.setWordWrap(True)
+        text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        if mine:                                         # you: a bubble on the right; the assistant: plain text
+            bubble = QFrame(objectName="mine")
+            QVBoxLayout(bubble).addWidget(text_label)
+            bubble.setMaximumWidth(520)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            row.addWidget(bubble)
+            self.msgs.insertLayout(self.msgs.count() - 1, row)
+        else:
+            self.msgs.insertWidget(self.msgs.count() - 1, text_label)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+        return text_label
+
+    def _scroll_to_bottom(self):
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def reply(self, text: str):
+        """Stream the assistant's text in, two characters a tick."""
+        text_label = self.add_message("", mine=False)
+        state = {"i": 0}
+        timer = QTimer(self)
+
+        def tick():
+            state["i"] += 2
+            text_label.setText(text[:state["i"]])
+            self._scroll_to_bottom()
+            if state["i"] >= len(text):
+                timer.stop()
+                timer.deleteLater()
+
+        timer.timeout.connect(tick)
+        timer.start(18)
+
+
 # ---------------------------------------------------------------- window
 
 class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
     calibrate_requested = Signal()    # Calibration tab clicked
+    shown = Signal(bool)              # window shown / hidden: the app swaps the floating ball
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
@@ -437,7 +603,8 @@ class SettingsWindow(QWidget):
         root.setSpacing(0)
         self.titlebar = self._title_bar()
         root.addWidget(self.titlebar)
-        # pages: 0 = settings; a calibration / check page is added while it runs
+        # pages: 0 = chat, 1 = settings; a calibration / check page is added while it runs
+        self.chat = ChatPage()
         self.settings_page = QWidget()
         sp = QVBoxLayout(self.settings_page)
         sp.setContentsMargins(0, 0, 0, 0)
@@ -449,6 +616,7 @@ class SettingsWindow(QWidget):
         body.addWidget(self._sheet())
         sp.addLayout(body, 1)
         self.pages = QStackedWidget()
+        self.pages.addWidget(self.chat)
         self.pages.addWidget(self.settings_page)
         root.addWidget(self.pages, 1)
         self._before_page = None          # (was visible, was maximized) while a full-screen page runs
@@ -477,23 +645,32 @@ class SettingsWindow(QWidget):
         h.addWidget(label("Study Assistant", "appname"))
         h.addStretch(1)
 
+        chat = QPushButton(I_CHAT, objectName="settingsBtn")
+        chat.setCheckable(True)
+        chat.setChecked(True)
+        chat.setToolTip("Chat")
+        chat.setAccessibleName("Chat")
+        chat.setCursor(Qt.PointingHandCursor)
+        chat.setFocusPolicy(Qt.TabFocus)
         settings = QPushButton(I_SETTINGS, objectName="settingsBtn")
         settings.setCheckable(True)
-        settings.setChecked(True)
         settings.setToolTip("Settings")
         settings.setAccessibleName("Settings")
         settings.setCursor(Qt.PointingHandCursor)
         settings.setFocusPolicy(Qt.TabFocus)
         self.nav = QButtonGroup(self)   # exclusive, so clicking the selected gear can't un-select it
-        self.nav.addButton(settings, 0)
+        self.nav.addButton(chat, 0)
+        self.nav.addButton(settings, 1)
         calib = QPushButton(I_EYE, objectName="settingsBtn")   # same look as the gear
         calib.setCheckable(True)
         calib.setToolTip("Calibration")
         calib.setAccessibleName("Calibration")
         calib.setCursor(Qt.PointingHandCursor)
         calib.setFocusPolicy(Qt.TabFocus)
-        self.nav.addButton(calib, 1)
-        self.nav.idClicked.connect(lambda i: i == 1 and self.calibrate_requested.emit())
+        self.nav.addButton(calib, 2)
+        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 2 else self.pages.setCurrentIndex(i))
+        h.addWidget(chat)
+        h.addSpacing(4)
         h.addWidget(settings)
         h.addSpacing(4)
         h.addWidget(calib)
@@ -753,7 +930,7 @@ class SettingsWindow(QWidget):
         was_visible, was_max = self._before_page or (False, False)
         self._before_page = None
         self.titlebar.show()
-        self.pages.setCurrentWidget(self.settings_page)
+        self.pages.setCurrentWidget(self.chat)    # results (e.g. calibration) land in the chat
         self.nav.button(0).setChecked(True)
         if not was_visible:
             self.hide()
@@ -761,6 +938,15 @@ class SettingsWindow(QWidget):
             self.showMaximized()
         else:
             self.showNormal()
+
+    def show_page(self, page: QWidget):
+        """Bring the window up on `page` (self.chat or self.settings_page)."""
+        self.pages.setCurrentWidget(page)
+        self.nav.button(self.pages.currentIndex()).setChecked(True)
+        if not self.isVisible() or self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def set_mode(self, mode: str):
         self.mode = mode
@@ -830,6 +1016,11 @@ class SettingsWindow(QWidget):
     def showEvent(self, e):
         self._dwm(33, 2)    # Windows 11: round the corners of the frameless window
         super().showEvent(e)
+        self.shown.emit(True)
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.shown.emit(False)
 
     def _dwm(self, attribute: int, value: int):
         """Set a DWM window attribute (33 = corner preference, 34 = border colour). No-op off Windows 11."""
