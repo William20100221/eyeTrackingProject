@@ -25,6 +25,7 @@ import sys
 import threading
 
 from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
@@ -33,12 +34,15 @@ from eyetracking.core.line_model import LineModel
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.core.reading import mark_unread, unread_word_count
+from eyetracking.services import reading_ai
+from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
 from eyetracking.services.storage import load_all_calibrations, save_calibration
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import AssistantPanel, DwellController, FloatingBall, GazeCursor
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
+from eyetracking.ui.control_window import MODEL_IDS, TEXT_FONTS, SettingsWindow, pick_camera
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
@@ -49,6 +53,7 @@ HELP = ("Type a command:\n"
         "• calibrate: dots on a line, move your head, then 25 dots (~2 min)\n"
         "• check: full-screen dot to test the accuracy\n"
         "• read: read a text, then type done (or stare at Done)\n"
+        "• settings: camera, AI model, floating ball\n"
         "After reading I'll summarise what you skipped and quiz you on it.")
 
 PARA = "font-size:22px; color:#1F2328; padding:18px; border-radius:12px; background:{};"
@@ -197,16 +202,25 @@ class App(QObject):
         self.panel.message_sent.connect(self.on_message)
         self.background = Background()
 
+        # the main window: Settings + Calibration tabs (ui/control_window.py)
+        self.control = SettingsWindow()
+        self.control.saved.connect(self.apply_settings)
+        self.control.calibrate_requested.connect(self.calibrate)
+        self.ball.menu_actions = [("Settings", self.open_settings)]
+        settings = self.control.read_store()
+
         self.tracker = None
+        self.camera = settings["camera"]
         if not mouse:
             try:
-                self.tracker = EyeTracker()        # asks which camera, in the console
-            except Exception as e:                 # no camera, wrong number typed, MediaPipe failed
+                self.tracker = EyeTracker(self._camera_index())
+            except Exception as e:                 # no camera, popup closed, MediaPipe failed
                 print(f"Camera didn't start ({e}): running in mouse mode instead.")
                 self.mouse = True
         self.model = self._load_model()
         self.smoothed: tuple[float, float] | None = None
-        self.fullscreen: QWidget | None = None   # calibration / check window, while open
+        self.fullscreen: QWidget | None = None   # calibration / check page, while open
+        self.apply_settings({**settings, "camera": self.camera})   # the popup may have just chosen one
         self.reading: ReadingWindow | None = None
         self.full_text = ""
         self.quiz: list[dict] = []                # questions still to ask
@@ -220,6 +234,44 @@ class App(QObject):
 
         self.ball.toggle_panel()
         self.panel.reply(f"{self._model_status()}\n\n{HELP}")
+
+    # ---- settings + camera -------------------------------------------
+    def _camera_index(self) -> int:
+        """The saved camera's index; asks with the popup if none is saved or it's gone."""
+        names = camera_names()
+        if not names:
+            raise RuntimeError("no camera found")
+        if self.camera not in names:
+            chosen = pick_camera(names, self.camera)
+            if chosen is None:
+                raise RuntimeError("no camera chosen")
+            self.camera = chosen
+            self.control.store.setValue("camera", chosen)      # remembered for next time
+            self.control.set_camera(chosen)
+        return names.index(self.camera)
+
+    def apply_settings(self, values: dict) -> None:
+        """Startup, and every time Save changes is pressed."""
+        self.show_ball = values["show_ball"]
+        self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
+        self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
+        # ponytail: the model choice applies to the claude provider only (--provider gemini/openai keep theirs)
+        reading_ai.MODELS["claude"] = MODEL_IDS.get(values["model"], reading_ai.MODELS["claude"])
+        self.summary_words = values["summary_words"]
+        if self.tracker is not None and values["camera"] != self.camera:   # switch cameras live
+            self.tracker.close()
+            self.camera = values["camera"]
+            try:
+                self.tracker = EyeTracker(self._camera_index())
+                self.panel.reply(f"Now using the camera: {self.camera}.")
+            except Exception as e:
+                self.tracker, self.mouse = None, True
+                self.panel.reply(f"That camera didn't start ({e}). Mouse mode until you pick another.")
+
+    def open_settings(self) -> None:
+        self.control.showNormal()
+        self.control.raise_()
+        self.control.activateWindow()
 
     # ---- gaze ------------------------------------------------------
     def _load_model(self) -> LineModel | None:
@@ -294,11 +346,11 @@ class App(QObject):
         self.fullscreen = window                  # keep a reference, or Python deletes it
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         window.destroyed.connect(self._fullscreen_closed)
-        window.showFullScreen()
+        self.control.show_fullscreen_page(window)   # the main window, full screen, no buttons
 
     def _fullscreen_closed(self) -> None:
         self.fullscreen = None
-        self.ball.show()
+        self.ball.setVisible(self.show_ball)
         if not self.panel.isVisible():
             self.ball.toggle_panel()
         self.clock.restart()
@@ -308,7 +360,8 @@ class App(QObject):
     def on_message(self, text: str) -> None:
         command = text.strip().lower()
         commands = {"calibrate": self.calibrate, "check": self.check, "read": self.read,
-                    "done": self.done_reading, "help": lambda: self.panel.reply(HELP)}
+                    "done": self.done_reading, "settings": self.open_settings,
+                    "help": lambda: self.panel.reply(HELP)}
         if command in commands:
             commands[command]()
         elif self.quiz:
@@ -384,7 +437,7 @@ class App(QObject):
         self.panel.reply(f"You skipped {unread} of {len(full_text.split())} words. "
                          f"Asking {self.provider}...")
         self.background.run(
-            lambda: (summarize(full_text, read_text, "unread", self.provider),
+            lambda: (summarize(full_text, read_text, "unread", self.provider, self.summary_words),
                      make_questions(full_text, read_text, "unread", self.provider)),
             self._ai_ready)
 
@@ -439,6 +492,9 @@ def main() -> int:
 
     qt_app = QApplication(sys.argv)
     qt_app.setQuitOnLastWindowClosed(False)   # the ball is the app: quit from its right-click menu
+    font = QFont()
+    font.setFamilies(TEXT_FONTS)              # the main window's fonts (icon font last, for its glyphs)
+    qt_app.setFont(font)
     app = App(mouse=args.mouse, provider=args.provider)
     try:
         return qt_app.exec()

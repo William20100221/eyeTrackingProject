@@ -42,12 +42,12 @@ OPEN_LEVEL_RATE = 0.05    # how fast the open-eye level follows slow changes (e.
 
 
 class EyeTracker:
-    def __init__(self) -> None:
+    def __init__(self, camera_index: int | None = None) -> None:
         self.face_found = False              # set by read_features(); a blink still counts as a face
         self._open_level: float | None = None   # the user's normal blink score with eyes open
         self._onset_ms: int | None = None    # when the lids started closing (blink coming)
         self._blink_ms: int | None = None    # last frame that was a full blink
-        self._camera = Camera()              # asks which camera, in the console
+        self._camera = Camera(camera_index)  # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
         except Exception:
