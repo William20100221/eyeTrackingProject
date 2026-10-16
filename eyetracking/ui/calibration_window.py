@@ -17,7 +17,8 @@ or with FAKE features from your mouse position, so no camera is needed:
 
     python -m eyetracking.ui.calibration_window --mouse
 
-Space starts, Esc quits. Screen positions are stored as fractions 0..1
+Space starts, Space again pauses / carries on (as often as you like),
+Esc leaves at any time. Screen positions are stored as fractions 0..1
 (x across, y down), so they work on any screen size.
 """
 from __future__ import annotations
@@ -69,6 +70,7 @@ class CalibrationWindow(QWidget):
         self._prompt = ""                           # step 2 instruction
         # intro -> sweep -> head -> settle -> collect -> ... -> done
         self._phase = "intro"
+        self.paused = False
         self._clock = QElapsedTimer()  # time spent in the current phase
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -87,13 +89,33 @@ class CalibrationWindow(QWidget):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Space:
-            self.start()
+            if self._phase == "intro":
+                self.start()
+            elif self._phase != "done":
+                self.toggle_pause()
         elif event.key() == Qt.Key.Key_Escape:
             self._timer.stop()
             self.cancelled.emit()
             self.close()
         else:
             super().keyPressEvent(event)
+
+    def toggle_pause(self) -> None:
+        self.paused = not self.paused
+        if self.paused:
+            self._timer.stop()
+        else:
+            # the eyes wandered off while paused. Steps 1-2 follow a timed path,
+            # so that step starts over; a grid dot goes back to settle (its frames are kept)
+            if self._phase == "sweep":
+                self._sweep = CalibrationSession([(0.5, 0.5)])
+            elif self._phase == "head":
+                self._head = CalibrationSession([(0.5, 0.5)])
+            else:
+                self._phase = "settle"
+            self._clock.restart()
+            self._timer.start(TICK_MS)
+        self.update()
 
     # ---- timing: runs every TICK_MS --------------------------------
     def _tick(self) -> None:
@@ -168,13 +190,25 @@ class CalibrationWindow(QWidget):
                     "1. Follow the moving dot with your eyes, head still\n"
                     "2. Keep looking at the centre dot while you move your head\n"
                     "3. Look at each dot until it moves on, head still\n\n"
-                    "Press Space to start, Esc to quit."
+                    "Press Space to start, Space again to pause,\nEsc to leave at any time."
                     if self._phase == "intro" else "Calibration done.")
             font = p.font()
             font.setPointSize(18)
             p.setFont(font)
             p.setPen(QColor("white"))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
+            return
+
+        if self.paused:
+            x, y = self._target if self._phase in ("sweep", "head") else self._session.current_target()
+            font = p.font()
+            font.setPointSize(18)
+            p.setFont(font)
+            p.setPen(QColor("white"))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                       "Paused.\n\nSpace to carry on, Esc to leave.")
+            p.setPen(QPen(QColor(90, 90, 90), 3))     # the dot you'll go back to
+            p.drawEllipse(QPointF(x * self.width(), y * self.height()), RING_END, RING_END)
             return
 
         if self._phase in ("sweep", "head"):          # steps 1-2: one dot + an instruction
@@ -227,7 +261,7 @@ class CalibrationWindow(QWidget):
         font.setPointSize(12)
         p.setFont(font)
         p.setPen(QColor(120, 120, 120))
-        p.drawText(20, 34, f"Dot {n} / {total}")
+        p.drawText(20, 34, f"Dot {n} / {total}     Space: pause     Esc: leave")
 
 
 # =====================================================================

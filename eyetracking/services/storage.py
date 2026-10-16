@@ -23,8 +23,18 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+from eyetracking.core.calibration import describe_target
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from path import DATA_DIR
+
+STAMP = "%Y-%m-%d_%H%M%S"            # the date-time part of every file name
+HISTORY_DIR = DATA_DIR / "history"   # chat + quiz history, one file per app run
+STEP_NAMES = {'sweep': 'Step 1, following the moving dot', 'head': 'Step 2, head moving, eyes on the centre dot', 'dots': 'Step 3, the dot grid'}
+
+
+def file_date(path: Path) -> datetime:
+    """calibration_2026-09-29_140312.json -> 29 Sep 2026 14:03:12"""
+    return datetime.strptime(path.stem.split("_", 1)[1], STAMP)
 
 FORMAT = "gaze-calibration-v2"
 PARTS = ("sweep", "head", "dots")
@@ -35,7 +45,7 @@ def save_calibration(rec: CalibrationRecording, path: Path | None = None) -> Pat
     Returns the path it wrote to."""
     now = datetime.now()
     if path is None:
-        path = DATA_DIR / f"calibration_{now:%Y-%m-%d_%H%M%S}.json"
+        path = DATA_DIR / f"calibration_{now:{STAMP}}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {"format": FORMAT, "saved_at": now.isoformat(timespec="seconds")}
@@ -67,3 +77,55 @@ def load_all_calibrations() -> list[CalibrationRecording]:
         except (OSError, ValueError, KeyError, TypeError) as e:   # old format, damaged, hand-edited
             print(f"Skipping {path.name}: {e}")
     return recordings
+
+
+def list_calibrations() -> list[Path]:
+    """Every saved calibration file, newest first."""
+    return sorted(DATA_DIR.glob("calibration_*.json"), reverse=True)
+
+
+def calibration_text(path: Path) -> str:
+    """One calibration in words, a line per sample, step by step:
+    "#12 came from dot (2, 1) of the 5x5 grid: 0.412, 0.533, ..." """
+    try:
+        rec = load_calibration(path)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return f"{path.name}\n\nCan't show this file: it was saved by a different calibration version ({e})."
+    lines = [f"Calibration of {file_date(path):%d %b %Y, %H:%M}"]
+    n = 0
+    for part in PARTS:
+        samples = getattr(rec, part)
+        lines += ["", f"{STEP_NAMES[part]}: {len(samples)} samples"]
+        for s in samples:
+            n += 1
+            numbers = ", ".join(f"{v:.3f}" for v in s.features)
+            lines.append(f"#{n} came from {describe_target(s.target_x, s.target_y)}: {numbers}")
+    return "\n".join(lines)
+
+
+# ---- chat + quiz history ------------------------------------------------
+def new_chat_path() -> Path:
+    return HISTORY_DIR / f"chat_{datetime.now():{STAMP}}.json"
+
+
+def save_chat(path: Path, messages: list[dict]) -> None:
+    """messages: [{"who": "you" | "assistant", "text": ..., "at": iso time}, ...]"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"messages": messages}, f, indent=2, ensure_ascii=False)
+
+
+def list_chats() -> list[Path]:
+    """Every saved conversation, newest first."""
+    return sorted(HISTORY_DIR.glob("chat_*.json"), reverse=True)
+
+
+def chat_text(path: Path) -> str:
+    """A saved conversation as plain text, a paragraph per message."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            messages = json.load(f)["messages"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return f"Can't read {path.name} ({e})."
+    return "\n\n".join(f"{'You' if m['who'] == 'you' else 'Assistant'} ({m['at'][11:16]}):\n{m['text']}"
+                       for m in messages)
