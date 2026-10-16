@@ -6,10 +6,10 @@ The whole app, wired together.
     python main.py --provider gemini     (AI provider, see services/reading_ai.py)
 
 The main window (ui/control_window.py) has three tabs:
-    Chat         replies, quiz; "Go Reading" closes the window, back to the ball
+    Chat         replies, quiz; "Go Reading" closes the window
     Settings     camera, AI model, theme
     Calibration  line dots + head step + 25 random dots, saves, retrains the gaze model
-The window and the floating ball swap: click the ball to get the window back.
+The floating ball stays on the whole time: click it to open the window again.
 After reading, the AI summarises what you skipped and quizzes you on it.
 Right-click the ball to quit.
 
@@ -21,8 +21,10 @@ What talks to what:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont
@@ -47,6 +49,8 @@ from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
 SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier but laggier
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
+
+KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
 
 PARA = "font-size:22px; color:#1F2328; padding:18px; border-radius:12px; background:{};"
 UNREAD_BG, READ_BG = "white", "#DDF3E4"
@@ -197,7 +201,6 @@ class App(QObject):
 
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
-        self.control.shown.connect(lambda shown: self.ball.setVisible(not shown))   # window XOR ball
         self.panel.message_sent.connect(self.answer)
         self.panel.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
         self.panel.go_reading.connect(self.control.hide)
@@ -250,7 +253,9 @@ class App(QObject):
         """Startup, and every time Save changes is pressed."""
         self.show_ball = values["show_ball"]
         self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
-        self.ball.setVisible(not self.control.isVisible())   # setWindowFlag hides it
+        self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
+        if values["api_key"]:      # the field is for the provider this run uses
+            os.environ[KEY_ENV[self.provider]] = values["api_key"]
         # ponytail: the model choice applies to the claude provider only (--provider gemini/openai keep theirs)
         reading_ai.MODELS["claude"] = MODEL_IDS.get(values["model"], reading_ai.MODELS["claude"])
         self.summary_words = values["summary_words"]
@@ -338,7 +343,8 @@ class App(QObject):
         """Pause our camera reads (one reader at a time) and hide the
         always-on-top windows so they don't cover the dots."""
         self.timer.stop()
-        self.cursor.hide()                        # the ball hides itself: the window is up
+        self.cursor.hide()
+        self.ball.hide()                          # the dots must not be covered
         self.fullscreen = window                  # keep a reference, or Python deletes it
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         window.destroyed.connect(self._fullscreen_closed)
@@ -346,6 +352,7 @@ class App(QObject):
 
     def _fullscreen_closed(self) -> None:
         self.fullscreen = None
+        self.ball.setVisible(self.show_ball)
         self.clock.restart()
         self.timer.start(TICK_MS)
 
@@ -384,13 +391,14 @@ class App(QObject):
             if point is not None:
                 self.smoothed = point     # keep it: the overlay carries on from here after quitting check
             return point
-        self._open_fullscreen(GazeWindow(get_point=get))
+        window = GazeWindow(get_point=get)
+        window.logged.connect(lambda path: self.panel.reply(f"Gaze samples saved: {Path(path).name}"))
+        self._open_fullscreen(window)
 
     def read(self) -> None:
         if self.model is None and not self.mouse:
             self.panel.reply("Calibrate first: open the Calibration tab.")
             return
-        self.control.hide()                       # the ball comes back while you read
         if self.reading is None:
             self.reading = ReadingWindow(SAMPLE_FULL)
             self.reading.finished.connect(self._read_finished)
