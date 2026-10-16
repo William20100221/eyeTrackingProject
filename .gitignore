@@ -2,6 +2,7 @@
 /docs
 /data
 graphify-out/
+old_calibration_data/
 
 # --- Python bytecode ---
 __pycache__/
