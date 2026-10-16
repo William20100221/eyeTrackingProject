@@ -5,8 +5,7 @@ check) pages fill the screen with no title bar or buttons, then the window goes
 back to the Chat tab. pick_camera() is the small camera popup used at first start.
 
 ChatPage looks like ChatGPT, but with a "Go Reading" button instead of an input
-bar: it closes the window and the floating ball comes back (one or the other,
-never both: the app swaps them on SettingsWindow.shown).
+bar: it closes the window; the floating ball stays on the whole time.
 
 Every colour comes from one seed colour through the Material 3 Fidelity
 scheme, in light and dark. Pick a colour in the side sheet and the whole
@@ -41,6 +40,7 @@ DEFAULTS = {
     "model": "Claude Haiku 4.5",
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
+    "api_key": "",              # key for the --provider in use; kept in this PC's QSettings (plain text)
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 # name shown -> API model id ("Haiku 5.5" / "Sonnet 5.5" don't exist: the API would refuse them)
@@ -58,6 +58,7 @@ I_CHECK, I_DISMISS, I_RESET, I_CHEVRON = "", "", "", ""
 I_THEME, I_PALETTE, I_BALL, I_LAYERS = "", "", "", ""
 I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
+I_KEY = "\uE8D7"   # Permissions (key)
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
 
@@ -446,7 +447,7 @@ class ChatPage(QWidget):
 
     message_sent = Signal(str)     # a quiz answer (or "skip")
     command = Signal(str)          # a sidebar button: "read" | "check"
-    go_reading = Signal()          # the big button: close the window, back to the ball
+    go_reading = Signal()          # the big button: close the window (the ball is still there)
 
     def __init__(self):
         super().__init__()
@@ -585,7 +586,6 @@ class ChatPage(QWidget):
 class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
     calibrate_requested = Signal()    # Calibration tab clicked
-    shown = Signal(bool)              # window shown / hidden: the app swaps the floating ball
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
@@ -705,7 +705,7 @@ class SettingsWindow(QWidget):
         h.addWidget(self.find)
         h.addStretch(1)
         reset = button(f"{I_RESET}  Reset to defaults", "outlined")
-        reset.clicked.connect(lambda: self.load(DEFAULTS))
+        reset.clicked.connect(lambda: self.load({**DEFAULTS, "api_key": self.key.text()}))   # keeps your key
         self.save_btn = button("Save changes", "filled")
         self.save_btn.clicked.connect(self.save)
         h.addWidget(reset)
@@ -765,7 +765,10 @@ class SettingsWindow(QWidget):
         wl.setSpacing(8)
         wl.addWidget(self.words)
         wl.addWidget(label("words", "unit"))
+        self.key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)
+        self.key.setAccessibleName("API key")
         self.group("Summaries and quizzes", [
+            self.row(I_KEY, "API key", "For the AI provider this app started with. Stored on this computer", self.key),
             self.row(I_SPARKLE, "AI model", "Writes summaries and marks quiz answers", self.model_btn),
             self.row(I_LINES, "Summary length", "About this many words", words),
         ])
@@ -882,6 +885,7 @@ class SettingsWindow(QWidget):
             sw.set_checked_now(values[k])
         self.set_model(values["model"])
         self.set_camera(values["camera"])
+        self.key.setText(values["api_key"])
         self.words.setValue(values["summary_words"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
@@ -891,7 +895,7 @@ class SettingsWindow(QWidget):
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
         values.update(seed=self.seed, theme=self.mode, model=self.model, summary_words=self.words.value(),
-                      camera=self.camera)
+                      camera=self.camera, api_key=self.key.text().strip())
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)
@@ -1016,11 +1020,6 @@ class SettingsWindow(QWidget):
     def showEvent(self, e):
         self._dwm(33, 2)    # Windows 11: round the corners of the frameless window
         super().showEvent(e)
-        self.shown.emit(True)
-
-    def hideEvent(self, e):
-        super().hideEvent(e)
-        self.shown.emit(False)
 
     def _dwm(self, attribute: int, value: int):
         """Set a DWM window attribute (33 = corner preference, 34 = border colour). No-op off Windows 11."""
