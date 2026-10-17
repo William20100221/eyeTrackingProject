@@ -18,10 +18,8 @@ import threading
 import time
 from ctypes import wintypes
 
-import comtypes
-
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
-from eyetracking.services.screen_text import lines_on_screen, window_title, window_under_mouse
+from eyetracking.services.screen_text import lines_on_screen, make_dpi_aware, window_title, window_under_mouse
 
 CAPTURE_S = 1.0     # how often the window's text is re-read
 
@@ -33,6 +31,7 @@ def mouse() -> tuple[int, int]:
 
 
 def main() -> int:
+    make_dpi_aware()
     seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 20.0
     print("Point the mouse at the text you will read...")
     time.sleep(3)
@@ -42,7 +41,6 @@ def main() -> int:
     tracker, lock, stop = ReadingTracker(), threading.Lock(), threading.Event()
 
     def capture() -> None:               # UIA/OCR take ~1 s: off the sampling loop
-        comtypes.CoInitialize()
         while not stop.is_set():
             try:
                 lines = lines_on_screen(hwnd)
