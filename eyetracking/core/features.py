@@ -1,3 +1,5 @@
+from typing import Sequence
+
 from eyetracking.core.models import FrameResult
 
 # MediaPipe indices. "right" = the person's right eye (left side of the image).
@@ -39,3 +41,16 @@ def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
     feats += [hp.yaw / 30, hp.pitch / 30, hp.roll / 30,   # head turned = eyes compensate
               x[NOSE_TIP], y[NOSE_TIP], face_w * 5]       # head moved / leaned in
     return tuple(float(f) for f in feats)
+
+
+def describe_features(f: Sequence[float]) -> str:
+    """One frame's features in words, for the gaze-data viewer."""
+    rx, lx, ry, ly, yaw, pitch, roll, nx, ny, fw = f
+    return (f"eyes: iris {rx:.0%} across, {ry:.0%} down in the right eye, {lx:.0%} / {ly:.0%} in the left; "
+            f"head: turned {yaw * 30:+.0f}°, nodded {pitch * 30:+.0f}°, tilted {roll * 30:+.0f}°; "
+            f"nose {nx:.0%} across, {ny:.0%} down the picture; face {fw / 5:.2f} of the picture wide (bigger = closer)")
+
+
+def head_degrees(f: Sequence[float]) -> tuple[float, float]:
+    """(yaw, pitch) in degrees: how far the head was turned and nodded."""
+    return f[4] * 30, f[5] * 30
