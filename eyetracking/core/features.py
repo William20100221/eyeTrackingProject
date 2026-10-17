@@ -79,7 +79,7 @@ def describe_features(f: Sequence[float]) -> str:
     rx, lx, ry, ly, yaw, pitch, roll, x, y, z, dr, dl = f
     return (f"eyes: iris {rx:.0%} across, {ry:.0%} down in the right eye, {lx:.0%} / {ly:.0%} in the left; "
             f"head: turned {round(yaw):+d}°, nodded {round(pitch):+d}°, tilted {round(roll):+d}°, "
-            f"{abs(z):.0f} cm from the camera ({round(x):+d} cm across, {round(y):+d} cm up)" + f"; iris {dr:+.2f} / {dl:+.2f} cm below the eye corners")
+            f"{abs(z):.0f} cm from the camera ({round(x):+d} cm across, {round(y):+d} cm up)" + f"; iris {dr:+.2f} / {dl:+.2f} cm from the eye corners (down is +)")
 
 
 def head_degrees(f: Sequence[float]) -> tuple[float, float]:
