@@ -15,7 +15,9 @@ window re-themes live.
     python settings_window.py
 """
 import ctypes
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from string import Template
 
@@ -26,12 +28,13 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
-from eyetracking.services.secret_store import PREFIX, protect, unprotect
+from eyetracking.services.reading_ai import KNOWN_MODELS, PROVIDER_NAMES, default_model, list_models, provider_for_key
+from eyetracking.services.secret_store import protect, unprotect
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
                                           trash_file,
@@ -47,7 +50,6 @@ DEFAULTS = {
     "hide_fullscreen": False,
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
-    "api_key": "",              # Claude / Gemini / OpenAI key (its prefix says which); stored encrypted (DPAPI)
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 
@@ -860,9 +862,16 @@ class ChatPage(QWidget):
         self.answer_box.hide()
         v.addWidget(self.answer_box)
 
-        self.go = button(f"{I_READ}   Go Reading", "go")   # 4: instead of an input bar
+        self.go = button(f"{I_READ}   Go Reading", "go")   # instead of an input bar
         self.go.clicked.connect(self.go_reading)
-        v.addWidget(self.go)
+        self.model_btn = button("", "assist")            # which key and model answer, like Ollama's model picker
+        self.model_btn.setToolTip("The AI that writes summaries and marks quizzes")
+        self.model_btn.setMenu(QMenu(self.model_btn))
+        bottom = QHBoxLayout()                           # 4: the AI picker, then Go Reading
+        bottom.setSpacing(12)
+        bottom.addWidget(self.model_btn)
+        bottom.addWidget(self.go, 1)
+        v.addLayout(bottom)
         v.addStretch(1)                                  # 5
 
         self.archive = QScrollArea()                     # a past reading, read-only, in place of the live chat
@@ -970,6 +979,7 @@ class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
     calibrate_requested = Signal()    # Calibration tab clicked
     shown = Signal(bool)              # the window appeared / went away (the ball's eye follows it)
+    ai_changed = Signal()             # a key added / removed / renamed, or another key or model chosen
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
@@ -979,6 +989,7 @@ class SettingsWindow(QWidget):
         self.resize(1100, 700)
         self.setMinimumSize(920, 560)
         self.store = QSettings("StudyAssistant", "StudyAssistant")
+        self.extra_entries: list[dict] = []   # a key from the environment, Ollama: set by the app, not saved
         self.seed = self.store.value("seed", DEFAULTS["seed"])
         self.c = make_scheme(self.seed, False)
 
@@ -1016,6 +1027,9 @@ class SettingsWindow(QWidget):
         self._grip = G
 
         self.load(self.read_store())
+        self._migrate_single_key()
+        self.refresh_keys()
+        self.chat.model_btn.menu().aboutToShow.connect(self._fill_ai_menu)
         # the window reopens where it was left (page, and the Testing entry); an AI answer still opens the chat
         self.pages.currentChanged.connect(lambda i: i < 3 and self.store.setValue("last_page", i))
         self.testing.side_nav.idClicked.connect(lambda i: self.store.setValue("testing_page", i))
@@ -1081,7 +1095,7 @@ class SettingsWindow(QWidget):
         h.addWidget(self.find)
         h.addStretch(1)
         reset = button(f"{I_RESET}  Reset to defaults", "outlined")
-        reset.clicked.connect(lambda: self.load({**DEFAULTS, "api_key": self.key.text()}))   # keeps your key
+        reset.clicked.connect(lambda: self.load(DEFAULTS))   # keys stay: they are managed in their own list
         self.save_btn = button("Save changes", "filled")
         self.save_btn.clicked.connect(self.save)
         h.addWidget(reset)
@@ -1136,14 +1150,37 @@ class SettingsWindow(QWidget):
         wl.setSpacing(8)
         wl.addWidget(self.words)
         wl.addWidget(label("words", "unit"))
-        self.key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)
-        self.key.setAccessibleName("API key")
+        self.key = QLineEdit(objectName="find", placeholderText="Paste a new key", echoMode=QLineEdit.Password)
+        self.key.setAccessibleName("New AI key")
+        self.key.returnPressed.connect(lambda: self.add_key(self.key.text()))
         self.key_eye = self.key.addAction(QIcon(), QLineEdit.TrailingPosition)   # show / hide the key
         self.key_eye.setToolTip("Show the key")
         self.key_eye.triggered.connect(self._toggle_key)
-        self.group("Summaries and quizzes", [
-            self.row(I_KEY, "AI key", "Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart. "
-                     "Empty = Ollama on this PC. Stored encrypted for your Windows login", self.key),
+        add = button("Add", "outlined")
+        add.clicked.connect(lambda: self.add_key(self.key.text()))
+        self.keys_list = QListWidget(objectName="linesList")   # one entry per key; the key itself is never shown
+        self.keys_list.setWordWrap(True)
+        self.keys_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.keys_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.keys_list.customContextMenuRequested.connect(self._key_menu)
+        self.keys_list.itemActivated.connect(lambda it: it.data(Qt.UserRole) and self.use_entry(it.data(Qt.UserRole)))
+        keys_box = QWidget()
+        kv = QVBoxLayout(keys_box)
+        kv.setContentsMargins(52, 8, 16, 10)
+        kv.setSpacing(2)
+        kv.addWidget(label("Keys", "rowtitle"))
+        keys_hint = label("Each key gets a name (Key 1, Key 2…) so the key itself is never shown. Double-click one to "
+                          "use it; right-click to pick its model, ask for its models again, rename or remove it.", "rowsub")
+        keys_hint.setWordWrap(True)
+        kv.addWidget(keys_hint)
+        kv.addWidget(self.keys_list)
+        self.keys_note = label("", "rowsub")             # what the last add / refresh found
+        self.keys_note.setWordWrap(True)
+        kv.addWidget(self.keys_note)
+        self.group("AI", [
+            self.row(I_KEY, "Add a key", "Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart. "
+                     "Stored encrypted for your Windows login", self.key, add),
+            keys_box,
             self.row(I_LINES, "Summary length", "About this many words", words),
         ])
         self.camera_btn = button("", "assist")
@@ -1256,27 +1293,205 @@ class SettingsWindow(QWidget):
     # ----- behaviour
 
     def read_store(self) -> dict:
-        values = {k: self.store.value(k, d, type=type(d)) for k, d in DEFAULTS.items()}
-        stored = values["api_key"]
-        values["api_key"] = unprotect(stored)
-        if stored and not stored.startswith(PREFIX):
-            self.store_key(values["api_key"])     # an old plain-text key: encrypt it now (issue #13)
-        return values
+        return {k: self.store.value(k, d, type=type(d)) for k, d in DEFAULTS.items()}
 
     def _toggle_key(self):
         shown = self.key.echoMode() == QLineEdit.Normal
         self.key.setEchoMode(QLineEdit.Password if shown else QLineEdit.Normal)
         self.key_eye.setToolTip("Show the key" if shown else "Hide the key")
 
-    def store_key(self, key: str):
-        """The AI key goes into QSettings encrypted for this Windows user, never as plain text."""
-        self.store.setValue("api_key", protect(key))
+    # ----- AI keys: Key 1, Key 2...; the key itself is only ever stored encrypted (DPAPI)
+
+    def stored_keys(self) -> list[dict]:
+        """The saved keys: {id, number, name, provider, secret (encrypted), last4, model, models, added}."""
+        try:
+            keys = json.loads(self.store.value("ai_keys", "[]"))
+        except ValueError:
+            keys = []
+        return keys if isinstance(keys, list) else []
+
+    def _save_keys(self, keys: list[dict]):
+        self.store.setValue("ai_keys", json.dumps(keys))
+
+    def ai_entries(self) -> list[dict]:
+        """Every AI the app can use: the saved keys, then a key from the environment and Ollama, when present."""
+        return self.stored_keys() + self.extra_entries
+
+    def set_extra_entries(self, extras: list[dict]):
+        """The app's environment key / Ollama entries (not saved); their chosen model is remembered."""
+        chosen = json.loads(self.store.value("ai_extra_models", "{}"))
+        for e in extras:
+            if chosen.get(e["id"]) in [m[0] for m in e["models"]]:
+                e["model"] = chosen[e["id"]]
+        self.extra_entries = extras
+        self.refresh_keys()
+
+    def active_entry(self) -> dict | None:
+        entries = self.ai_entries()
+        want = self.store.value("ai_active", "")
+        return next((e for e in entries if e["id"] == want), entries[0] if entries else None)
+
+    def entry_secret(self, entry: dict) -> str:
+        return unprotect(entry["secret"]) if entry.get("secret") else entry.get("plain", "")
+
+    def _new_entry(self, key: str, provider: str, models: list, keys: list[dict]) -> dict:
+        number = max([k.get("number", 0) for k in keys] + [0]) + 1   # a removed key's number is not reused
+        return {"id": f"key{number}", "number": number, "name": f"Key {number}", "provider": provider,
+                "secret": protect(key), "last4": key[-4:], "models": [list(m) for m in models],
+                "model": default_model(provider, models), "added": datetime.now().isoformat(timespec="seconds")}
+
+    def _migrate_single_key(self):
+        """Before several keys, one key was saved as "api_key": it becomes Key 1."""
+        old = self.store.value("api_key", "")
+        if not old:
+            return
+        key = unprotect(old)
+        provider = provider_for_key(key)
+        keys = self.stored_keys()
+        if provider and not any(self.entry_secret(k) == key for k in keys):
+            self._save_keys(keys + [self._new_entry(key, provider, KNOWN_MODELS[provider], keys)])
+        self.store.remove("api_key")
+
+    def add_key(self, text: str) -> dict | None:
+        """A pasted key becomes the next "Key N" and is used at once. The prefix says the brand;
+        the provider is asked which models the key can use (that also shows the key works)."""
+        key = text.strip()
+        provider = provider_for_key(key)
+        if provider is None:
+            self.keys_note.setText("That doesn't look like a Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…) key.")
+            return None
+        keys = self.stored_keys()
+        same = next((k for k in keys if self.entry_secret(k) == key), None)
+        if same is not None:
+            self.keys_note.setText(f"That key is already saved, as {same['name']}.")
+            self.key.clear()
+            return same
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            models, error = list_models(provider, key)
+        finally:
+            QApplication.restoreOverrideCursor()
+        entry = self._new_entry(key, provider, models, keys)
+        self._save_keys(keys + [entry])
+        self.key.clear()
+        self.keys_note.setText(f"{entry['name']} added: {PROVIDER_NAMES[provider]}, {len(models)} model{'s' * (len(models) != 1)}."
+                               + (f" Couldn't ask {PROVIDER_NAMES[provider]} for this key's models ({error}), so "
+                                  "these are the usual ones." if error else ""))
+        self.use_entry(entry["id"])
+        return entry
+
+    def use_entry(self, entry_id: str, model: str | None = None):
+        """Answer with this key (and this model, if given) from now on."""
+        if model is not None:
+            keys = self.stored_keys()
+            if any(k["id"] == entry_id for k in keys):
+                self._save_keys([{**k, "model": model} if k["id"] == entry_id else k for k in keys])
+            else:
+                chosen = json.loads(self.store.value("ai_extra_models", "{}"))
+                self.store.setValue("ai_extra_models", json.dumps({**chosen, entry_id: model}))
+                for e in self.extra_entries:
+                    if e["id"] == entry_id:
+                        e["model"] = model
+        self.store.setValue("ai_active", entry_id)
+        self.refresh_keys()
+        self.ai_changed.emit()
+
+    def refresh_models(self, entry_id: str):
+        """Ask the provider again which models this key can use."""
+        entry = next(e for e in self.ai_entries() if e["id"] == entry_id)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            models, error = list_models(entry["provider"], self.entry_secret(entry))
+        finally:
+            QApplication.restoreOverrideCursor()
+        models = [list(m) for m in models]
+        keys = self.stored_keys()
+        if any(k["id"] == entry_id for k in keys):
+            self._save_keys([{**k, "models": models} if k["id"] == entry_id else k for k in keys])
+        else:
+            entry["models"] = models
+        self.keys_note.setText(f"{entry['name']}: {len(models)} models"
+                               + (f" (the usual ones: couldn't ask the provider, {error})." if error else "."))
+        self.refresh_keys()
+
+    def rename_key(self, entry_id: str):
+        keys = self.stored_keys()
+        entry = next(k for k in keys if k["id"] == entry_id)
+        name, ok = QInputDialog.getText(self, "Rename key", "Name:", text=entry["name"])
+        if ok and name.strip():
+            self._save_keys([{**k, "name": name.strip()} if k["id"] == entry_id else k for k in keys])
+            self.refresh_keys()
+            self.ai_changed.emit()
+
+    def remove_key(self, entry_id: str):
+        keys = self.stored_keys()
+        entry = next(k for k in keys if k["id"] == entry_id)
+        if QMessageBox.question(self, "Remove key", f"Remove {entry['name']} ({PROVIDER_NAMES[entry['provider']]}, "
+                                f"ending …{entry['last4']})? The app forgets it; the key itself keeps working "
+                                "on the provider's side.") != QMessageBox.Yes:
+            return
+        self._save_keys([k for k in keys if k["id"] != entry_id])
+        if self.store.value("ai_active", "") == entry_id:
+            self.store.setValue("ai_active", "")
+        self.refresh_keys()
+        self.ai_changed.emit()
+
+    def _key_menu(self, pos):
+        item = self.keys_list.itemAt(pos)
+        if item is None or not item.data(Qt.UserRole):
+            return
+        entry = next(e for e in self.ai_entries() if e["id"] == item.data(Qt.UserRole))
+        menu = QMenu(self.keys_list)
+        menu.addAction("Use this key", lambda: self.use_entry(entry["id"]))
+        self._model_menu(menu.addMenu("Model"), entry)
+        menu.addAction("Ask for its models again", lambda: self.refresh_models(entry["id"]))
+        if entry.get("secret"):                          # saved keys only: the environment key and Ollama aren't ours to edit
+            menu.addAction("Rename…", lambda: self.rename_key(entry["id"]))
+            menu.addAction(f"{I_DELETE}  Remove", lambda: self.remove_key(entry["id"]))
+        menu.exec(self.keys_list.mapToGlobal(pos))
+
+    def _model_menu(self, menu: QMenu, entry: dict):
+        active = self.active_entry()
+        for model_id, name in entry["models"] or [[entry["model"], entry["model"]]]:
+            act = menu.addAction(name, lambda _=False, m=model_id: self.use_entry(entry["id"], m))
+            act.setCheckable(True)
+            act.setChecked(active is not None and active["id"] == entry["id"] and model_id == entry["model"])
+
+    def _fill_ai_menu(self):
+        """The chat's picker: every key, each with its models; choosing one uses that key with that model."""
+        menu = self.chat.model_btn.menu()
+        menu.clear()
+        for entry in self.ai_entries():
+            self._model_menu(menu.addMenu(f"{entry['name']}  ·  {PROVIDER_NAMES[entry['provider']]}"), entry)
+        if not self.ai_entries():
+            menu.addAction("No AI yet").setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Manage keys…", lambda: self.show_page(self.settings_page))
+
+    def refresh_keys(self):
+        """The Settings list and the chat's picker, from the saved keys."""
+        active = self.active_entry()
+        self.keys_list.clear()
+        for e in self.ai_entries():
+            on = active is not None and e["id"] == active["id"]
+            where = (f"key ending …{e['last4']}" if e.get("last4") else "no key needed")
+            when = (f"added {datetime.fromisoformat(e['added']):%d %b %Y}" if e.get("added")
+                    else "from the environment" if e["id"] == "env" else "runs on this PC")
+            item = QListWidgetItem(f"{'●' if on else '○'}  {e['name']} — {PROVIDER_NAMES[e['provider']]}"
+                                   f"{'   (in use)' if on else ''}\n      {where} · model {model_label(e)} · "
+                                   f"{len(e['models'])} model{'s' * (len(e['models']) != 1)} · {when}")
+            item.setData(Qt.UserRole, e["id"])
+            self.keys_list.addItem(item)
+        if not self.keys_list.count():
+            self.keys_list.addItem(QListWidgetItem("No key yet: paste one above, or install Ollama (ollama.com)."))
+        self.keys_list.setFixedHeight(self.keys_list.count() * 56 + 6)
+        self.chat.model_btn.setText(f"{I_SPARKLE}  {active['name']} · {model_label(active)}  {I_CHEVRON}" if active
+                                    else f"{I_SPARKLE}  No AI yet  {I_CHEVRON}")
 
     def load(self, values: dict):
         for k, sw in self.switches.items():
             sw.set_checked_now(values[k])
         self.set_camera(values["camera"])
-        self.key.setText(values["api_key"])
         self.words.setValue(values["summary_words"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
@@ -1286,12 +1501,9 @@ class SettingsWindow(QWidget):
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
         values.update(seed=self.seed, theme=self.mode, summary_words=self.words.value(),
-                      camera=self.camera, api_key=self.key.text().strip())
+                      camera=self.camera)
         for k, v in values.items():
-            if k == "api_key":
-                self.store_key(v)
-            else:
-                self.store.setValue(k, v)
+            self.store.setValue(k, v)
         self.saved.emit(values)
         self.save_btn.setText("Saved")
         QTimer.singleShot(1500, lambda: self.save_btn.setText("Save changes"))
@@ -1429,6 +1641,11 @@ class SettingsWindow(QWidget):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), attribute, ctypes.byref(v), 4)
 
 
+def model_label(entry: dict) -> str:
+    """The display name of the model this key uses."""
+    return next((name for model_id, name in entry["models"] if model_id == entry["model"]), entry["model"])
+
+
 def is_dark(mode: str) -> bool:
     return mode == "dark" or (mode == "system" and QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
 
@@ -1479,7 +1696,7 @@ def pick_ai() -> str | None:
     v.setSpacing(12)
     v.addWidget(label("Which AI should write your summaries?", "sheetTitle"))
     hint = label("Paste a key from Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart "
-                 "and remembers it (Settings > AI key). No key? Install Ollama from ollama.com and start the app "
+                 "and remembers it (Settings > AI > Keys; add more there). No key? Install Ollama from ollama.com and start the app "
                  "again: it is free and runs on this PC.", "sheetText")
     hint.setWordWrap(True)
     v.addWidget(hint)

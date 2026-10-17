@@ -1,9 +1,9 @@
 """
 Self-check for issue #13 (Windows):  python -m eyetracking.testing.test_secret_store
 
-The AI key never lands in the settings as plain text: it round-trips through
-DPAPI, an old plain-text key is encrypted the first time it is read, and the key
-field's eye button shows and hides it.
+AI keys never land in the settings as plain text: they round-trip through DPAPI,
+an old single key (plain or encrypted) becomes Key 1 the first time the window
+opens, and the new-key field's eye button shows and hides what is typed.
 """
 import os
 import tempfile
@@ -24,15 +24,12 @@ import eyetracking.ui.control_window as cw
 ini = Path(tempfile.mkdtemp()) / "settings.ini"
 cw.QSettings = lambda *_: QSettings(str(ini), QSettings.IniFormat)
 qt = QApplication([])
-QSettings(str(ini), QSettings.IniFormat).setValue("api_key", key)        # as an older version saved it
+QSettings(str(ini), QSettings.IniFormat).setValue("api_key", key)        # one key, as an older version saved it
 w = cw.SettingsWindow()
-assert w.read_store()["api_key"] == key and w.key.text() == key           # still works...
 w.store.sync()
-assert key not in ini.read_text() and PREFIX in ini.read_text()           # ...and is now encrypted on disk
-w.key.setText("AIza-another-key")
-w.save()
-w.store.sync()
-assert "AIza-another-key" not in ini.read_text() and w.read_store()["api_key"] == "AIza-another-key"
+keys = w.stored_keys()
+assert [k["name"] for k in keys] == ["Key 1"] and w.entry_secret(keys[0]) == key   # it became Key 1...
+assert key not in ini.read_text() and "api_key" not in ini.read_text()            # ...encrypted, the old entry gone
 assert w.key.echoMode() == QLineEdit.Password
 w.key_eye.trigger()
 assert w.key.echoMode() == QLineEdit.Normal
