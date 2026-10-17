@@ -14,7 +14,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import anthropic
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 import eyetracking.services.reading_ai as ai
@@ -52,7 +52,7 @@ qt = QApplication([])
 w = cw.SettingsWindow()
 changed = []
 w.ai_changed.connect(lambda: changed.append(True))
-assert w.stored_keys() == [] and w.active_entry() is None
+assert w.stored_keys() == [] and w.active_entry() is None and w.keys_note.isHidden()   # no note: no empty space
 assert w.add_key("hello") is None and "doesn't look like" in w.keys_note.text()
 
 k1 = w.add_key("sk-ant-first-1111")
@@ -74,7 +74,11 @@ assert w.active_entry()["id"] == k1["id"] and w.active_entry()["model"] == "clau
 assert cw.model_label(w.active_entry()) == "Claude Sonnet 5.5"
 assert "Key 1 · Claude Sonnet 5.5" in w.chat.model_btn.text()
 rows = [w.keys_list.item(i).text() for i in range(w.keys_list.count())]
-assert rows[0].startswith("●  Key 1 — Claude (Anthropic)   (in use)") and "key ending …1111" in rows[0], rows[0]
+heads = [r for r in rows if not r.startswith(" ")]
+assert heads == ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)", "Local (Ollama)"], heads   # by brand
+assert rows[1].startswith("    ●  Key 1   (in use)") and "key ending …1111" in rows[1], rows[1]
+assert rows[2].startswith("    ○  Key 3") and rows[4] == "    No key yet" and rows[6].startswith("    ○  Key 2"), rows
+assert not w.keys_list.item(0).flags() & Qt.ItemIsSelectable                    # a heading can't be picked
 assert all("first-1111" not in r for r in rows)                                  # only the last 4 are shown
 w.rename_key(k1["id"])
 assert w.stored_keys()[0]["name"] == "Work key"
@@ -84,10 +88,11 @@ k4 = w.add_key("sk-ant-fourth-4444")
 assert k4["name"] == "Key 4"                                                     # a removed key's number isn't reused
 
 w._fill_ai_menu()                                                                # the chat's picker
-titles = [a.text() for a in w.chat.model_btn.menu().actions()]
-assert titles[:3] == ["Key 2  ·  Gemini (Google)", "Key 3  ·  Claude (Anthropic)", "Key 4  ·  Claude (Anthropic)"], titles
-assert titles[-1] == "Manage keys…"
-sub = w.chat.model_btn.menu().actions()[2].menu()
+actions = w.chat.model_btn.menu().actions()
+titles = [a.text() for a in actions if a.text()]
+assert titles == ["Key 3  ·  Claude (Anthropic)", "Key 4  ·  Claude (Anthropic)", "Key 2  ·  Gemini (Google)",
+                  "Manage keys…"], titles                                      # grouped by brand
+sub = next(a for a in actions if a.text().startswith("Key 4")).menu()
 sub.actions()[0].trigger()                                                       # Key 4 -> Claude Sonnet 5.5
 assert w.active_entry()["id"] == k4["id"] and w.active_entry()["model"] == "claude-sonnet-5-5"
 
