@@ -9,15 +9,22 @@ Ask an AI model about a text the user has partly read.
         scope "whole":  questions about the whole text
     grade_answer(full_text, question, user_answer) -> {"score": 0-10, "explanation": ...}
 
-Every function takes provider="claude" | "gemini" | "openai".
-Install only the ones you use, and set that provider's API key:
-    claude   uv add anthropic      ANTHROPIC_API_KEY
-    gemini   uv add google-genai   GEMINI_API_KEY
-    openai   uv add openai         OPENAI_API_KEY
+Every function takes provider="claude" | "gemini" | "openai" | "ollama".
+Install only the one you use, and set that provider's API key:
+    claude   uv add anthropic      ANTHROPIC_API_KEY   (keys start with sk-ant-)
+    gemini   uv add google-genai   GEMINI_API_KEY      (AIza...)
+    openai   uv add openai         OPENAI_API_KEY      (sk-...)
+    ollama   nothing to install: a free local AI from ollama.com, no key
+The app works the provider out from the key (provider_for_key), looks for a key
+in the environment or a .env file first (key_from_environment), and uses Ollama
+when it runs on this PC and there is no key (ollama_model).
 """
 from __future__ import annotations
 
 import json
+import os
+import urllib.request
+from pathlib import Path
 
 from eyetracking.core.reading import mark_unread, unread_word_count
 
@@ -26,7 +33,39 @@ MODELS = {
     "claude": "claude-haiku-4-5",
     "gemini": "gemini-3.5-flash-lite",
     "openai": "gpt-6-luna",
+    "ollama": "",                  # filled in at start with the first model Ollama has installed
 }
+OLLAMA_URL = "http://localhost:11434"   # Ollama's default address
+KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
+KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("sk-", "openai"))   # the longer one first
+
+
+def provider_for_key(key: str) -> str | None:
+    """Which provider a pasted key belongs to, from its prefix; None if it looks like none."""
+    return next((p for prefix, p in KEY_PREFIXES if key.startswith(prefix)), None)
+
+
+def key_from_environment() -> tuple[str, str] | None:
+    """(provider, key) from the environment or a .env file next to main.py, if any."""
+    env = dict(os.environ)
+    dotenv = Path(__file__).resolve().parents[2] / ".env"
+    if dotenv.exists():
+        for line in dotenv.read_text(encoding="utf-8").splitlines():
+            k, _, v = line.partition("=")
+            if k.strip() and not k.lstrip().startswith("#"):
+                env.setdefault(k.strip(), v.strip().strip("'\""))
+    env.setdefault("GEMINI_API_KEY", env.get("GOOGLE_API_KEY", ""))
+    return next(((p, env[name]) for p, name in KEY_ENV.items() if env.get(name)), None)
+
+
+def ollama_model() -> str | None:
+    """The first model installed in a running Ollama, or None (not running, nothing installed)."""
+    try:
+        with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=1) as r:
+            models = json.load(r).get("models", [])
+    except (OSError, ValueError):
+        return None
+    return models[0]["name"] if models else None
 
 SYSTEM = (
     "You help a student who is reading a text on screen. An eye tracker recorded what "
@@ -134,6 +173,16 @@ def _ask(provider: str, prompt: str, schema: dict | None = None) -> str:
     if provider not in MODELS:
         raise ValueError(f"provider must be one of {list(MODELS)}, not {provider!r}")
     model = MODELS[provider]
+
+    if provider == "ollama":
+        body = {"model": model or ollama_model(), "stream": False,
+                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}
+        if schema:
+            body["format"] = schema               # Ollama's structured output takes a JSON schema
+        req = urllib.request.Request(OLLAMA_URL + "/api/chat", json.dumps(body).encode(),
+                                     {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=300) as r:   # a local model can be slow
+            return json.load(r)["message"]["content"]
 
     if provider == "claude":
         import anthropic
