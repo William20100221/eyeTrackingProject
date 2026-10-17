@@ -88,7 +88,7 @@ app = types.SimpleNamespace(
     mouse=False, smoothed=None, reading=None,
     clock=types.SimpleNamespace(restart=lambda: 33),
     tracker=types.SimpleNamespace(read_features=lambda: next(feats), face_found=True),
-    ball=types.SimpleNamespace(set_tracking_state=lambda f: None),
+    ball=types.SimpleNamespace(set_tracking_state=lambda f: None, look_at=lambda p: None), reader=None,
     dwell=types.SimpleNamespace(feed=lambda p: fed.append((p.x(), p.y()))),
     predict=lambda f: f)
 for _ in range(4):
