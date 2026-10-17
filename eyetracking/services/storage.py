@@ -85,8 +85,30 @@ def load_all_calibrations() -> list[CalibrationRecording]:
 
 
 def list_calibrations() -> list[Path]:
-    """Every saved calibration file, newest first."""
+    """Every calibration file in data/ (the ones that can train the model), newest first."""
     return sorted(DATA_DIR.glob("calibration_*.json"), reverse=True)
+
+
+# ---- disabled: works, but the user turned it off --------------------------
+# Kept in data/disabled/. Training only reads data/calibration_*.json, so a file
+# there is left out without any check in the training code; enabling moves it back.
+DISABLED_DIR = DATA_DIR / "disabled"
+
+
+def list_disabled() -> list[Path]:
+    """Calibrations the user disabled, newest first."""
+    return sorted(DISABLED_DIR.glob("calibration_*.json"), reverse=True)
+
+
+def set_calibration_enabled(path: Path, enabled: bool) -> Path:
+    """Move a calibration between data/ (trains the model) and data/disabled/ (kept, doesn't).
+    Returns its new path."""
+    folder = DATA_DIR if enabled else DISABLED_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / path.name
+    if target != path:
+        shutil.move(str(path), str(target))
+    return target
 
 
 def calibration_usable(path: Path) -> bool:
