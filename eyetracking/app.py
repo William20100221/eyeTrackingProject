@@ -8,16 +8,11 @@ The whole app, wired together.
 The main window (ui/control_window.py) has three tabs:
     Chat         replies, quiz; "Go Reading" closes the window and locks the ball
     Settings     camera, AI model, theme
-<<<<<<< HEAD
     Calibration  line dots + head step + 25 random dots, saves, retrains the gaze model
-The floating ball stays on the whole time: click it to open the window again.
-=======
-    Calibration  25 dots, saves the data, retrains the gaze model
 The floating ball stays on the whole time. Unlocked: click it to open the window.
 Locked (after Go Reading): a click opens its eyes and it records what you read in
 whatever window you look at; a click closes them and the AI summarises what you
 missed, in the chat. Right-click still gives the menu.
->>>>>>> 5435f1c (Go Reading: locked ball, eyes open = read the screen with the gaze, eyes closed = summary)
 After reading, the AI summarises what you skipped and quizzes you on it.
 Right-click the ball to quit.
 
