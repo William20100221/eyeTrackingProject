@@ -30,7 +30,7 @@ from eyetracking.core.reading import mark_unread, unread_word_count
 
 # Fast & cheap model per provider (checked 2026-10-08). Change one line to switch.
 MODELS = {
-    "claude": "claude-haiku-4-5",
+    "claude": "claude-haiku-5-5",  # the default for a new Claude key; each key can pick its own
     "gemini": "gemini-3.5-flash-lite",
     "openai": "gpt-6-luna",
     "ollama": "",                  # filled in at start with the first model Ollama has installed
@@ -38,6 +38,46 @@ MODELS = {
 OLLAMA_URL = "http://localhost:11434"   # Ollama's default address
 KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
 KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("sk-", "openai"))   # the longer one first
+
+
+PROVIDER_NAMES = {"claude": "Claude (Anthropic)", "gemini": "Gemini (Google)", "openai": "ChatGPT (OpenAI)",
+                  "ollama": "Ollama (on this PC)"}
+# Used when the provider can't be asked which models a key can use (offline, or its package isn't installed).
+KNOWN_MODELS = {
+    "claude": [("claude-haiku-5-5", "Claude Haiku 5.5"), ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+               ("claude-opus-5-5", "Claude Opus 5.5"), ("claude-fable-5-1", "Claude Fable 5.1")],
+    "gemini": [("gemini-3.5-flash-lite", "gemini-3.5-flash-lite")],
+    "openai": [("gpt-6-luna", "gpt-6-luna")],
+    "ollama": [],
+}
+
+
+def list_models(provider: str, key: str = "") -> tuple[list[tuple[str, str]], str]:
+    """Ask the provider which models this key can use: ([(model id, display name)], "").
+    If it can't be asked, ([the usual models], why). A key says nothing about models by
+    itself (any key can call any model its account may use), so this is how a key's
+    models are found. Claude: the Models API through the anthropic package; Ollama: its
+    local /api/tags."""
+    try:
+        if provider == "claude":
+            import anthropic
+            client = anthropic.Anthropic(api_key=key, timeout=10.0, max_retries=0)
+            return [(m.id, m.display_name) for m in client.models.list()], ""
+        if provider == "ollama":
+            with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=2) as r:
+                return [(m["name"], m["name"]) for m in json.load(r).get("models", [])], ""
+        # ponytail: Gemini / OpenAI use the built-in list; ask them live once their package is installed and tested
+        return KNOWN_MODELS[provider], "the live model list is only built for Claude and Ollama"
+    except ImportError:
+        return KNOWN_MODELS[provider], f"the {provider} package isn't installed"
+    except Exception as e:                      # offline, key refused, Ollama not running...
+        return KNOWN_MODELS[provider], f"{type(e).__name__}: {e}"
+
+
+def default_model(provider: str, models: list) -> str:
+    """The model a new key starts on: the app's default if the key can use it, else the first one listed."""
+    ids = [m[0] for m in models]
+    return MODELS[provider] if MODELS[provider] in ids or not ids else ids[0]
 
 
 def provider_for_key(key: str) -> str | None:
