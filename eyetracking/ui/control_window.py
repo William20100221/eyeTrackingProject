@@ -860,6 +860,7 @@ class ChatPage(QWidget):
 class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
     calibrate_requested = Signal()    # Calibration tab clicked
+    shown = Signal(bool)              # the window appeared / went away (the ball's eye follows it)
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
@@ -1297,6 +1298,11 @@ class SettingsWindow(QWidget):
     def showEvent(self, e):
         self._dwm(33, 2)    # Windows 11: round the corners of the frameless window
         super().showEvent(e)
+        self.shown.emit(True)
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.shown.emit(False)
 
     def _dwm(self, attribute: int, value: int):
         """Set a DWM window attribute (33 = corner preference, 34 = border colour). No-op off Windows 11."""
