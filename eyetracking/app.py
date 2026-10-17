@@ -6,10 +6,18 @@ The whole app, wired together.
     python main.py --provider gemini     (AI provider, see services/reading_ai.py)
 
 The main window (ui/control_window.py) has three tabs:
-    Chat         replies, quiz; "Go Reading" closes the window
+    Chat         replies, quiz; "Go Reading" closes the window and locks the ball
     Settings     camera, AI model, theme
+<<<<<<< HEAD
     Calibration  line dots + head step + 25 random dots, saves, retrains the gaze model
 The floating ball stays on the whole time: click it to open the window again.
+=======
+    Calibration  25 dots, saves the data, retrains the gaze model
+The floating ball stays on the whole time. Unlocked: click it to open the window.
+Locked (after Go Reading): a click opens its eyes and it records what you read in
+whatever window you look at; a click closes them and the AI summarises what you
+missed, in the chat. Right-click still gives the menu.
+>>>>>>> 5435f1c (Go Reading: locked ball, eyes open = read the screen with the gaze, eyes closed = summary)
 After reading, the AI summarises what you skipped and quizzes you on it.
 Right-click the ball to quit.
 
@@ -17,28 +25,31 @@ What talks to what:
     camera -> tracker -> gaze model -> smoothed screen point
         -> ball halo (face found?), gaze cursor + dwell-click, reading window
     reading window -> (full text, read paragraphs) -> reading AI -> chat tab
+    any window -> screen text (UIA / OCR) + gaze -> ReadingTracker -> (full, read) -> reading AI
 """
 from __future__ import annotations
 
 import argparse
+import html
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
-
 from eyetracking.core.calibration import GazeProfile, training_set
 from eyetracking.core.line_model import LineModel
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
-from eyetracking.core.reading import mark_unread, unread_word_count
+from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
+from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
 from eyetracking.services.storage import load_all_calibrations, save_calibration
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
@@ -50,6 +61,7 @@ from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
 SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier but laggier
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
+CAPTURE_MS = 1000        # how often the text of the window being read is re-read (scrolling, a new page)
 
 KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
 
@@ -161,6 +173,30 @@ class ReadingWindow(QWidget):
             super().keyPressEvent(event)
 
 
+class ReadingDebug(QLabel):
+    """Rough test window, top-left of the screen: the word and line the gaze is
+    on, and the running count, while the ball's eyes are open."""
+
+    def __init__(self) -> None:
+        super().__init__("", None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setStyleSheet("background:#1F2328; color:white; font-size:16px; padding:8px 12px;")
+        self.setFixedWidth(640)
+        self.setWordWrap(True)
+        self.move(QApplication.primaryScreen().availableGeometry().topLeft() + QPoint(8, 8))
+        self._shown = None
+
+    def show_word(self, hit: tuple[str, str] | None, read: int, total: int, title: str) -> None:
+        if (hit, read, total) == self._shown:        # 30 calls a second: repaint only on a change
+            return
+        self._shown = (hit, read, total)
+        word, line = hit or ("-", "")
+        self.setText(f"<b>{html.escape(word)}</b> &nbsp; {read} / {total} words read &nbsp; "
+                     f"<span style='color:#9AA4B2'>{html.escape(title)}</span><br>"
+                     f"<span style='color:#C9D1D9'>{html.escape(line)}</span>")
+
+
 class Background(QObject):
     """Runs slow work (AI calls take seconds) on another thread, then hands the
     result back on the GUI thread: only the GUI thread may touch widgets."""
@@ -204,9 +240,18 @@ class App(QObject):
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
         self.panel.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
-        self.panel.go_reading.connect(self.control.hide)
-        self.ball.clicked.connect(lambda: self.control.show_page(self.panel))
+        self.panel.go_reading.connect(self.go_reading)
+        self.ball.clicked.connect(self.ball_clicked)
+        self.ball.open_requested.connect(lambda: self._show_window(self.panel))
         self.ball.menu_actions = [("Settings", self.open_settings)]
+        # reading from the screen: see go_reading()
+        self.reader: ReadingTracker | None = None   # set while the ball's eyes are open
+        self.reader_hwnd, self.reader_title = 0, ""
+        self.debug = ReadingDebug()                  # rough test window: the word under the gaze
+        self.capture_timer = QTimer(self)
+        self.capture_timer.setInterval(CAPTURE_MS)
+        self.capture_timer.timeout.connect(self._capture)
+        self._capturing = False
         settings = self.control.read_store()
 
         self.tracker = None
@@ -271,7 +316,7 @@ class App(QObject):
                 self.panel.reply(f"That camera didn't start ({e}). Mouse mode until you pick another.")
 
     def open_settings(self) -> None:
-        self.control.show_page(self.control.settings_page)
+        self._show_window(self.control.settings_page)
 
     # ---- gaze ------------------------------------------------------
     def _load_model(self) -> LineModel | None:
@@ -333,8 +378,93 @@ class App(QObject):
         gaze = to_screen(self.smoothed)
         self.dwell.feed(gaze)
         self.ball.look_at(gaze)                  # the water-eye ball looks where you look
+        if self.reader is not None:
+            self._feed_reader()
         if self.reading is not None:
             self.reading.feed(gaze, dt)
+
+    # ---- reading from the screen (Go Reading) ----------------------------
+    def go_reading(self) -> None:
+        """Hide the window and lock the ball: click = eyes open (recording), click = eyes closed (summary)."""
+        self.control.hide()
+        self.ball.set_locked(True)
+
+    def ball_clicked(self) -> None:
+        if not self.ball.locked:
+            self._show_window(self.panel)
+        elif self.reader is None:
+            self.start_reading()
+        else:
+            self.stop_reading()
+
+    def _show_window(self, page: QWidget) -> None:
+        """The window coming back ends a reading (with its summary) and unlocks the ball."""
+        if self.reader is not None:
+            self.stop_reading()
+        self.ball.set_locked(False)
+        self.control.show_page(page)
+
+    def start_reading(self) -> None:
+        self.reader, self.reader_hwnd, self.reader_title = ReadingTracker(), 0, ""
+        self.ball.eyes_open = True
+        self.debug.show_word(("-", "look at the text you want to read"), 0, 0, "")
+        self.debug.show()
+        self.capture_timer.start()
+
+    def stop_reading(self) -> None:
+        """Eyes closed: stop recording; the AI summarises what was missed on the page(s) read."""
+        self.capture_timer.stop()
+        self.ball.eyes_open = False
+        self.debug.hide()
+        reader, self.reader = self.reader, None
+        if reader is None:
+            return
+        full, read = reader.full_text(), reader.read_text()
+        self.ball.set_locked(False)
+        self.control.show_page(self.panel)        # the response goes to the chat
+        if not read.split():
+            self.panel.reply(f"I didn't see you read anything on {self.reader_title or 'that window'}.")
+            return
+        unread = unread_word_count(mark_unread(full, read))
+        self.panel.reply(f"{self.reader_title}: you read {len(read.split())} of {len(full.split())} words, "
+                         f"{unread} unread. Asking {self.provider} for what you missed...")
+        self.background.run(lambda: summarize(full, read, "unread", self.provider, self.summary_words),
+                            lambda result: self._ai_error(result) if isinstance(result, Exception)
+                            else self.panel.reply(result))
+
+    def _capture(self) -> None:
+        """Once a second while recording: re-read the window under the gaze, off the GUI thread."""
+        if self._capturing or self.smoothed is None:
+            return
+        hwnd = window_at(*self._gaze_px())
+        if hwnd in self._own_windows():           # looking at the ball or the test window: same page as before
+            hwnd = self.reader_hwnd
+        if not hwnd:                              # the desktop
+            return
+        if hwnd != self.reader_hwnd:
+            self.reader_hwnd, self.reader_title = hwnd, window_title(hwnd)
+        self._capturing = True
+        self.background.run(lambda: lines_on_screen(hwnd), self._lines_ready)
+
+    def _lines_ready(self, result) -> None:
+        self._capturing = False
+        if self.reader is not None and result and not isinstance(result, Exception):
+            self.reader.show(result)
+
+    def _feed_reader(self) -> None:
+        px, py = self._gaze_px()
+        self.reader.feed(px, py, time.monotonic())
+        read, total = self.reader.progress()
+        self.debug.show_word(self.reader.text_at(px, py), read, total, self.reader_title)
+
+    def _gaze_px(self) -> tuple[float, float]:
+        """The smoothed gaze in physical screen pixels (the frame of the text boxes), from Qt's scaled ones."""
+        gaze = to_screen(self.smoothed)
+        ratio = QApplication.primaryScreen().devicePixelRatio()
+        return gaze.x() * ratio, gaze.y() * ratio
+
+    def _own_windows(self) -> set[int]:
+        return {int(w.winId()) for w in (self.ball, self.cursor, self.debug, self.control)}
 
     # ---- full-screen windows that read the camera themselves -------
     def _open_fullscreen(self, window: QWidget) -> None:

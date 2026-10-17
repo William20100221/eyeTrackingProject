@@ -91,7 +91,8 @@ class FloatingBall(QWidget):
     BALL = 56
     PAD = 12  # room for the shadow
 
-    clicked = Signal()             # PORT (outbound): the ball was clicked, open the main window
+    clicked = Signal()             # PORT (outbound): left click (the app decides: open the window, or eyes open/closed)
+    open_requested = Signal()      # PORT (outbound): "Open assistant" in the right-click menu
 
     def __init__(self, avatar: str | None = None):
         super().__init__()
@@ -108,6 +109,8 @@ class FloatingBall(QWidget):
         self._edge = "right"
         self._halo = TRACK_IDLE          # see set_tracking_state() / HOOK 1
         self.menu_actions: list = []     # (text, slot) pairs the app adds to the right-click menu
+        self.locked = False              # Go Reading: no dragging, no sliding away; click and right-click only
+        self.eyes_open = False           # while locked: open = recording what you read, closed = paused
 
         self._slide = QPropertyAnimation(self, b"pos", self)
         self._slide.setDuration(180)
@@ -145,8 +148,8 @@ class FloatingBall(QWidget):
         dt = min((now - self._last_ms) / 1000, 0.05)
         self._last_ms = now
 
-        # spring open while hovered, closed otherwise: slight overshoot = liquid feel
-        target = self._hover_target
+        # spring open while hovered (or, locked, while recording), closed otherwise: slight overshoot = liquid feel
+        target = float(self.eyes_open) if self.locked else self._hover_target
         self._open_vel += (170 * (target - self._open) - 18 * self._open_vel) * dt
         self._open += self._open_vel * dt
         self._hover += (self._hover_target - self._hover) * min(1.0, dt * 6)
@@ -254,8 +257,13 @@ class FloatingBall(QWidget):
             self._press = e.globalPosition().toPoint() - self.pos()
             self._moved = False
 
+    def set_locked(self, on: bool) -> None:
+        """Go Reading locks the ball in place with its eyes closed; the window coming back unlocks it."""
+        self.locked, self.eyes_open = on, False
+        self.slide(peek=not on)
+
     def mouseMoveEvent(self, e):
-        if self._press is not None:
+        if self._press is not None and not self.locked:
             target = e.globalPosition().toPoint() - self._press
             if (target - self.pos()).manhattanLength() > 3:
                 self._moved = True
@@ -271,11 +279,13 @@ class FloatingBall(QWidget):
 
     def enterEvent(self, _e):
         self._hover_target = 1.0
-        self.slide(peek=False)
+        if not self.locked:
+            self.slide(peek=False)
 
     def leaveEvent(self, _e):
         self._hover_target = 0.0
-        self.slide(peek=True)
+        if not self.locked:
+            self.slide(peek=True)
 
     def contextMenuEvent(self, e):
         menu = QMenu(self)
@@ -292,7 +302,7 @@ class FloatingBall(QWidget):
         #   act = QAction("Calibrate", menu)
         #   act.triggered.connect(self.window().start_calibration)
         #   menu.addAction(act)
-        menu.addAction("Open assistant", self.clicked.emit)
+        menu.addAction("Open assistant", self.open_requested.emit)
         for text, slot in self.menu_actions:
             menu.addAction(text, slot)
         menu.addSeparator()
