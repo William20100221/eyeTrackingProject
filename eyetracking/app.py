@@ -7,9 +7,9 @@ The whole app, wired together.
 
 The main window (ui/control_window.py) has three tabs:
     Chat         replies, quiz; "Go Reading" closes the window and locks the ball
-    Practice     sample text, gaze check, saved gaze data (active / not usable)
-    Settings     camera, AI model, theme
+    Testing      sample text, gaze check, saved gaze data (active / not usable)
     Calibration  line dots + head step + 25 random dots, saves, retrains the gaze model
+    Settings     camera, AI key, theme
 The floating ball stays on the whole time. Unlocked: click it to open the window.
 Locked (after Go Reading): a click opens its eyes and it records what you read in
 whatever window you look at; a click closes them and the AI summarises what you
@@ -235,8 +235,8 @@ class App(QObject):
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
-        self.control.practice.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
-        self.control.practice.data_changed.connect(self._retrain)
+        self.control.testing.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
+        self.control.testing.data_changed.connect(self._retrain)
         self.panel.go_reading.connect(self.go_reading)
         self.ball.clicked.connect(self.ball_clicked)
         self.ball.open_requested.connect(lambda: self._show_window(self.panel))
@@ -485,6 +485,8 @@ class App(QObject):
         self.record_path = new_reading_path()
 
     def _save_record(self) -> None:
+        if not (self.record["summary"] or self.record["questions"]):
+            return                                # nothing worth a file yet
         save_reading(self.record_path, self.record)
         self.panel.refresh()                      # the History list shows it at once
 

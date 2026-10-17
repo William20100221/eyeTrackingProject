@@ -45,7 +45,9 @@ PARTS = ("sweep", "head", "dots")
 
 def save_calibration(rec: CalibrationRecording, path: Path | None = None) -> Path:
     """Write one calibration to `path` (default: a new timestamped file in data/).
-    Returns the path it wrote to."""
+    Returns the path it wrote to. Nothing is written without dot samples."""
+    if not rec.dots:
+        raise ValueError("no dot samples: nothing worth saving")
     now = datetime.now()
     if path is None:
         path = DATA_DIR / f"calibration_{now:{STAMP}}.json"
@@ -176,7 +178,10 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
             if n not in indexes:
                 kept[part].append(s)
             n += 1
-    save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), path)
+    if kept["dots"]:
+        save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), path)
+    else:
+        remove_calibration(path)        # no dots left: the file goes too
     return n - sum(len(v) for v in kept.values())
 
 
@@ -217,19 +222,23 @@ def reading_title(path: Path) -> str:
         return path.name
 
 
-def reading_text(path: Path) -> str:
-    """A saved reading as plain text: the summary, then each question with your answer and score."""
+def reading_messages(path: Path) -> list[tuple[str, bool]]:
+    """A saved reading as chat messages (text, mine): the summary and the questions are
+    the assistant's, your answers are yours."""
     try:
         with open(path, encoding="utf-8") as f:
             r = json.load(f)
-        lines = [f"{r['title']}   ({r['when'][:16].replace('T', ' ')})", "", "Summary:", r["summary"] or "(none yet)"]
-        for i, q in enumerate(r["questions"], 1):
-            lines += ["", f"Question {i}: {q['question']}",
-                      f"Your answer: {q.get('answer', '(not answered)')}"
-                      + (f"   Score {q['score']}/10. {q['explanation']}" if "score" in q else ""),
-                      f"Model answer: {q['model_answer']}"]
-        return "\n".join(lines)
-    except (OSError, ValueError, KeyError, TypeError) as e:
-        return f"Can't read {path.name} ({e})."
+    except (OSError, ValueError) as e:
+        return [(f"Can't read {path.name} ({e}).", False)]
+    out = [(r["summary"], False)] if r.get("summary") else []
+    for i, q in enumerate(r.get("questions", []), 1):
+        out.append((f"Question {i}: {q['question']}", False))
+        if "answer" in q:
+            out.append((q["answer"], True))
+        if "score" in q:
+            out.append((f"Score {q['score']}/10. {q['explanation']}\nModel answer: {q['model_answer']}", False))
+        elif "answer" in q:
+            out.append((f"Model answer: {q['model_answer']}", False))
+    return out
 
 
