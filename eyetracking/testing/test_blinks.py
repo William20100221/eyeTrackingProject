@@ -24,6 +24,8 @@ def run(scores: list[float]) -> str:
     """Feed blink scores one frame at a time; '.' = frame used, '-' = skipped."""
     t = EyeTracker.__new__(EyeTracker)                   # no camera: feed frames by hand
     t.face_found, t._open_level, t._onset_ms, t._blink_ms = False, None, None, None
+    t._closed_ms, t._long_blink = None, False
+    run.tracker = t
     frames = iter(FrameResult(33 * i, True, HeadPose(0, 0, 0), s, s, lm) for i, s in enumerate(scores))
     t.read = lambda: next(frames)
     out = "".join("." if t.read_features() is not None else "-" for _ in scores)
@@ -36,6 +38,10 @@ assert blink == "...." + "----" + "-------" + "...", blink    # 7 x 33 ms < 250 
 # looking down: score rises to 0.3 and STAYS there (no blink comes)
 down = run([0.1] * 4 + [0.3] * 12)
 assert down == "...." + "-------" + ".....", down             # held < 200 ms, then let through
+run([0.1] * 4 + [0.9] * 2 + [0.1] * 10)
+assert not run.tracker.blinked()                              # a natural blink (66 ms): no sample
+run([0.1] * 4 + [0.9] * 10 + [0.1] * 10)
+assert run.tracker.blinked() and not run.tracker.blinked()    # held shut 330 ms: one deliberate blink, reported once
 print("1. tracker: blink", blink, "| looking down", down)
 
 # ---- 2. session ---------------------------------------------------------------
