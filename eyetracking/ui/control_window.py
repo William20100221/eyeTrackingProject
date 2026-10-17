@@ -474,17 +474,24 @@ def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
         lst.addItem(QListWidgetItem(empty))   # no path: clicking does nothing
 
 
-def message_widget(text: str, mine: bool) -> QWidget:
-    """One chat message: yours as a bubble, the assistant's as plain text."""
+def message_widget(text: str, mine: bool) -> tuple[QWidget, QLabel]:
+    """One chat message: (the widget to add, its text label). Yours is a bubble pushed
+    to the right by a stretch (a row, so the wrapped text keeps its height); the
+    assistant's is plain text."""
     text_label = QLabel(text, objectName="theirs")
     text_label.setWordWrap(True)
     text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
     if not mine:
-        return text_label
+        return text_label, text_label
     bubble = QFrame(objectName="mine")
     QVBoxLayout(bubble).addWidget(text_label)
     bubble.setMaximumWidth(520)
-    return bubble
+    row = QWidget()
+    rh = QHBoxLayout(row)
+    rh.setContentsMargins(0, 0, 0, 0)
+    rh.addStretch(1)
+    rh.addWidget(bubble)
+    return row, text_label
 
 
 # ---------------------------------------------------------------- testing page
@@ -786,7 +793,7 @@ class ChatPage(QWidget):
         col.addWidget(label(reading_title(path), "sheetTitle"))
         col.addWidget(label(f"{file_date(path):%d %b %Y, %H:%M}", "sheetText"))
         for text, mine in reading_messages(path):
-            col.addWidget(message_widget(text, mine), 0, Qt.AlignRight if mine else Qt.Alignment())
+            col.addWidget(message_widget(text, mine)[0])
         col.addStretch(1)
         self.archive.setWidget(host)                     # replaces (and frees) the previous one
         self.view.setCurrentIndex(1)
@@ -819,10 +826,10 @@ class ChatPage(QWidget):
             self.v.setStretch(0, 0)
             self.v.setStretch(1, 1)
             self.v.setStretch(5, 0)
-        w = message_widget(text, mine)                   # you: a bubble on the right; the assistant: plain text
-        self.msgs.insertWidget(self.msgs.count() - 1, w, 0, Qt.AlignRight if mine else Qt.Alignment())
+        w, text_label = message_widget(text, mine)       # you: a bubble on the right; the assistant: plain text
+        self.msgs.insertWidget(self.msgs.count() - 1, w)
         QTimer.singleShot(0, self._scroll_to_bottom)
-        return w.findChild(QLabel) if mine else w
+        return text_label
 
     def _scroll_to_bottom(self):
         bar = self.scroll.verticalScrollBar()
