@@ -37,7 +37,9 @@ def file_date(path: Path) -> datetime:
 
 def save_calibration(samples: list[CalibrationSample], path: Path | None = None) -> Path:
     """Write samples to `path` (default: a new timestamped file in data/).
-    Returns the path it wrote to."""
+    Returns the path it wrote to. Nothing is written for an empty calibration."""
+    if not samples:
+        raise ValueError("no samples: nothing worth saving")
     now = datetime.now()
     if path is None:
         path = DATA_DIR / f"calibration_{now:{STAMP}}.json"
@@ -175,7 +177,10 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
     keep_original(path)
     samples = load_calibration(path)
     kept = [s for i, s in enumerate(samples) if i not in indexes]
-    save_calibration(kept, path)
+    if kept:
+        save_calibration(kept, path)
+    else:
+        remove_calibration(path)        # nothing left: the file goes too
     return len(samples) - len(kept)
 
 
@@ -216,20 +221,24 @@ def reading_title(path: Path) -> str:
         return path.name
 
 
-def reading_text(path: Path) -> str:
-    """A saved reading as plain text: the summary, then each question with your answer and score."""
+def reading_messages(path: Path) -> list[tuple[str, bool]]:
+    """A saved reading as chat messages (text, mine): the summary and the questions are
+    the assistant's, your answers are yours."""
     try:
         with open(path, encoding="utf-8") as f:
             r = json.load(f)
-        lines = [f"{r['title']}   ({r['when'][:16].replace('T', ' ')})", "", "Summary:", r["summary"] or "(none yet)"]
-        for i, q in enumerate(r["questions"], 1):
-            lines += ["", f"Question {i}: {q['question']}",
-                      f"Your answer: {q.get('answer', '(not answered)')}"
-                      + (f"   Score {q['score']}/10. {q['explanation']}" if "score" in q else ""),
-                      f"Model answer: {q['model_answer']}"]
-        return "\n".join(lines)
-    except (OSError, ValueError, KeyError, TypeError) as e:
-        return f"Can't read {path.name} ({e})."
+    except (OSError, ValueError) as e:
+        return [(f"Can't read {path.name} ({e}).", False)]
+    out = [(r["summary"], False)] if r.get("summary") else []
+    for i, q in enumerate(r.get("questions", []), 1):
+        out.append((f"Question {i}: {q['question']}", False))
+        if "answer" in q:
+            out.append((q["answer"], True))
+        if "score" in q:
+            out.append((f"Score {q['score']}/10. {q['explanation']}\nModel answer: {q['model_answer']}", False))
+        elif "answer" in q:
+            out.append((f"Model answer: {q['model_answer']}", False))
+    return out
 
 
 def latest_calibration() -> Path | None:

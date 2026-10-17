@@ -70,7 +70,13 @@ storage.save_reading(reading, {"title": "The water cycle moves heat", "when": "2
                                "questions": [{"question": "Why?", "model_answer": "Because.", "answer": "sun", "score": 7,
                                               "explanation": "Close."}, {"question": "How?", "model_answer": "Rain."}]})
 assert storage.list_readings() == [reading] and storage.reading_title(reading) == "The water cycle moves heat"
-assert storage.reading_text(reading) == ("The water cycle moves heat   (2026-10-17 10:00)\n\nSummary:\nHeat moves.\n\n"
-                                         "Question 1: Why?\nYour answer: sun   Score 7/10. Close.\nModel answer: Because.\n\n"
-                                         "Question 2: How?\nYour answer: (not answered)\nModel answer: Rain."), storage.reading_text(reading)
+assert storage.reading_messages(reading) == [("Heat moves.", False), ("Question 1: Why?", False), ("sun", True),
+                                             ("Score 7/10. Close.\nModel answer: Because.", False),
+                                             ("Question 2: How?", False)], storage.reading_messages(reading)
+try:                                                            # an empty calibration is never written
+    storage.save_calibration([])
+    raise AssertionError("an empty calibration was saved")
+except ValueError:
+    pass
+assert storage.list_calibrations() == [broken]
 print("pause, gaze data and history ok")
