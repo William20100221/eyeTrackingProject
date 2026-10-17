@@ -32,8 +32,8 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
-from eyetracking.services.storage import (calibration_text, calibration_usable, chat_text, file_date, list_calibrations, list_chats,
-                                          new_chat_path, save_chat)
+from eyetracking.services.storage import (calibration_text, calibration_usable, file_date, list_calibrations,
+                                          list_readings, reading_text, reading_title)
 
 DEFAULTS = {
     "seed": "#3D6CF6",
@@ -463,10 +463,13 @@ def side_list(parent: QWidget, to_text) -> QListWidget:
     return lst
 
 
-def fill_list(lst: QListWidget, paths: list[Path], empty: str):
+def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
+    """One item per dated file; name(path), if given, is shown after the date (full name in the tooltip)."""
     lst.clear()
     for path in paths:
-        item = QListWidgetItem(f"{file_date(path):%d %b %Y   %H:%M}")
+        when = f"{file_date(path):%d %b %Y   %H:%M}"
+        item = QListWidgetItem(f"{file_date(path):%d %b %H:%M}  {name(path)[:22]}" if name else when)
+        item.setToolTip(f"{when}\n{name(path)}" if name else when)
         item.setData(Qt.UserRole, str(path))
         lst.addItem(item)
     if not paths:
@@ -567,12 +570,11 @@ class ChatPage(QWidget):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
-        sv.addWidget(label("History", "sideTitle"))   # past chats + quizzes: double-click (or Enter) to read one
-        self.chat_list = side_list(self, chat_text)
+        sv.addWidget(label("History", "sideTitle"))   # past readings (summary + quiz): double-click to read one
+        self.chat_list = side_list(self, reading_text)
         sv.addWidget(self.chat_list, 1)
         h.addWidget(side)
-        self.history: list[dict] = []            # this run's chat + quiz, saved as it goes
-        self.history_path = new_chat_path()
+        self.said: list[str] = []                # every message shown this run, newest last
 
         col = QWidget()
         col.setMaximumWidth(760)
@@ -627,17 +629,12 @@ class ChatPage(QWidget):
         h.addStretch(1)
 
     def refresh(self):
-        """Re-read data/history (this run's chat is written as it goes). Runs whenever the page shows."""
-        fill_list(self.chat_list, list_chats(), "Nothing yet")
+        """Re-read data/history (a reading is written as the AI answers). Runs whenever the page shows."""
+        fill_list(self.chat_list, list_readings(), "Nothing yet", reading_title)
 
     def showEvent(self, e):
         self.refresh()
         super().showEvent(e)
-
-    def _log(self, text: str, mine: bool):
-        self.history.append({"who": "you" if mine else "assistant", "text": text,
-                             "at": datetime.now().isoformat(timespec="seconds")})
-        save_chat(self.history_path, self.history)   # ponytail: rewrites the whole file each message; fine for one run
 
     def set_answering(self, on: bool):
         """Swap Go Reading for the answer box while the quiz waits for an answer."""
@@ -652,7 +649,7 @@ class ChatPage(QWidget):
             self.answer.clear()
 
     def _send(self, text: str):
-        self._log(text, mine=True)
+        self.said.append(text)
         self.add_message(text, mine=True)
         self.message_sent.emit(text)
 
@@ -685,7 +682,7 @@ class ChatPage(QWidget):
 
     def reply(self, text: str):
         """Stream the assistant's text in, two characters a tick."""
-        self._log(text, mine=False)
+        self.said.append(text)
         text_label = self.add_message("", mine=False)
         state = {"i": 0}
         timer = QTimer(self)
