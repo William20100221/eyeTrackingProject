@@ -8,7 +8,7 @@ Live gaze demo: a dot on a full-screen window where the model thinks you look.
 The faint rings are the calibration positions (5x5 grid). Look at one and see where
 the dot lands: a quick visual accuracy check. Press Enter to record a sample
 (where the dot is right now). Samples are listed as "#index  x  y" on screen
-and saved to data/gaze_check_<time>.csv on Esc; nothing is saved without one.
+and saved to data/gaze_checks/gaze_check_<time>.csv on Esc; nothing is saved without one.
 Space pauses.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
@@ -16,9 +16,7 @@ model: it calls `get_point()` every tick and draws whatever comes back.
 """
 from __future__ import annotations
 
-import csv
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -28,9 +26,8 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid, training_set
 from eyetracking.core.line_model import LineModel, ScreenGeometry
-from eyetracking.services.storage import load_all_calibrations, load_calibration
+from eyetracking.services.storage import load_all_calibrations, load_calibration, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
-from path import DATA_DIR
 
 TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
 DOT_RADIUS = 18      # px
@@ -107,14 +104,9 @@ class GazeWindow(QWidget):
             self.log.append((len(self.log), *self._point))
             self.update()
 
-    def save_log(self, folder: Path = DATA_DIR) -> Path:
-        """Every sample as index,x,y: to plot or compare after a test."""
-        path = folder / f"gaze_check_{datetime.now():%Y-%m-%d_%H%M%S}.csv"
-        with open(path, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["index", "x", "y"])
-            w.writerows((i, f"{x:.4f}", f"{y:.4f}") for i, x, y in self.log)
-        return path
+    def save_log(self, folder: Path | None = None) -> Path:
+        """Every sample as index,x,y, to data/gaze_checks (or `folder`): to compare after a test."""
+        return save_gaze_check(self.log, folder)
 
     def sample_lines(self) -> list[str]:
         """The latest samples, newest last: "#0042  x 0.430  y 0.610" (index first)."""
