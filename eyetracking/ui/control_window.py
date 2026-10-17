@@ -555,6 +555,7 @@ class PracticePage(QWidget):
         dv.addWidget(hint)
         self.detail = QListWidget(objectName="sideList")
         self.detail.setSelectionMode(QListWidget.ExtendedSelection)
+        self.detail.setWordWrap(True)                    # a sample's words are long
         dv.addWidget(self.detail, 1)
         self.remove_btn = button(f"{I_DELETE}  Remove selected", "outlined")
         self.remove_btn.clicked.connect(self.remove_selected)
