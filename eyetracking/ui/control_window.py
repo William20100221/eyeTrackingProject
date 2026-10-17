@@ -41,16 +41,11 @@ DEFAULTS = {
     "show_ball": True,
     "ball_on_top": True,
     "hide_fullscreen": False,
-    "model": "Claude Haiku 4.5",
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
-    "api_key": "",              # key for the --provider in use; kept in this PC's QSettings (plain text)
+    "api_key": "",              # Claude / Gemini / OpenAI key (its prefix says which); QSettings, plain text
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
-# name shown -> API model id ("Haiku 5.5" / "Sonnet 5.5" don't exist: the API would refuse them)
-MODEL_IDS = {"Claude Haiku 4.5": "claude-haiku-4-5", "Claude Sonnet 5": "claude-sonnet-5",
-             "Claude Opus 5.5": "claude-opus-5-5"}
-MODELS = list(MODEL_IDS)
 
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
 ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 11 / Windows 10
@@ -937,11 +932,6 @@ class SettingsWindow(QWidget):
                      self.switches["hide_fullscreen"]),
         ])
 
-        self.model_btn = button("", "assist")
-        menu = QMenu(self.model_btn)
-        for m in MODELS:
-            menu.addAction(m, lambda m=m: self.set_model(m))
-        self.model_btn.setMenu(menu)
         self.words = QSpinBox(minimum=50, maximum=500, singleStep=25, alignment=Qt.AlignRight)
         self.words.setButtonSymbols(QSpinBox.NoButtons)
         self.words.setAccessibleName("Summary length in words")
@@ -954,8 +944,8 @@ class SettingsWindow(QWidget):
         self.key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)
         self.key.setAccessibleName("API key")
         self.group("Summaries and quizzes", [
-            self.row(I_KEY, "API key", "For the AI provider this app started with. Stored on this computer", self.key),
-            self.row(I_SPARKLE, "AI model", "Writes summaries and marks quiz answers", self.model_btn),
+            self.row(I_KEY, "AI key", "Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart. "
+                     "Empty = Ollama on this PC", self.key),
             self.row(I_LINES, "Summary length", "About this many words", words),
         ])
         self.camera_btn = button("", "assist")
@@ -1069,7 +1059,6 @@ class SettingsWindow(QWidget):
     def load(self, values: dict):
         for k, sw in self.switches.items():
             sw.set_checked_now(values[k])
-        self.set_model(values["model"])
         self.set_camera(values["camera"])
         self.key.setText(values["api_key"])
         self.words.setValue(values["summary_words"])
@@ -1080,17 +1069,13 @@ class SettingsWindow(QWidget):
 
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
-        values.update(seed=self.seed, theme=self.mode, model=self.model, summary_words=self.words.value(),
+        values.update(seed=self.seed, theme=self.mode, summary_words=self.words.value(),
                       camera=self.camera, api_key=self.key.text().strip())
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)
         self.save_btn.setText("Saved")
         QTimer.singleShot(1500, lambda: self.save_btn.setText("Save changes"))
-
-    def set_model(self, name: str):
-        self.model = name
-        self.model_btn.setText(f"{name}  {I_CHEVRON}")
 
     def set_camera(self, name: str):
         self.camera = name
@@ -1179,7 +1164,6 @@ class SettingsWindow(QWidget):
             pal.setColor(QPalette.PlaceholderText, QColor(c["onSurfaceVariant"]))
             edit.setPalette(pal)
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
-        self.model_btn.setIcon(glyph_icon(I_SPARKLE, c["primary"]))
         self._dwm(34, int(c["outlineVariant"][5:7] + c["outlineVariant"][3:5] + c["outlineVariant"][1:3], 16))
         self.update()
 
@@ -1247,6 +1231,40 @@ def pick_camera(names: list[str], current: str = "") -> str | None:
     if dlg.exec() != QDialog.Accepted or group.checkedId() < 0:
         return None
     return names[group.checkedId()]
+
+
+def pick_ai() -> str | None:
+    """First-run popup: paste an AI key. Returns it, or None (not now)."""
+    store = QSettings("StudyAssistant", "StudyAssistant")
+    seed, mode = store.value("seed", DEFAULTS["seed"]), store.value("theme", DEFAULTS["theme"])
+    dlg = QDialog(None, Qt.Dialog | Qt.WindowCloseButtonHint)
+    dlg.setObjectName("root")
+    dlg.setAttribute(Qt.WA_StyledBackground)
+    dlg.setWindowTitle("Choose an AI")
+    dlg.setStyleSheet(build_qss(make_scheme(seed, is_dark(mode))))
+    dlg.setFixedWidth(520)
+    v = QVBoxLayout(dlg)
+    v.setContentsMargins(24, 20, 24, 20)
+    v.setSpacing(12)
+    v.addWidget(label("Which AI should write your summaries?", "sheetTitle"))
+    hint = label("Paste a key from Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart "
+                 "and remembers it (Settings > AI key). No key? Install Ollama from ollama.com and start the app "
+                 "again: it is free and runs on this PC.", "sheetText")
+    hint.setWordWrap(True)
+    v.addWidget(hint)
+    key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)
+    key.setAccessibleName("AI key")
+    v.addWidget(key)
+    actions = QHBoxLayout()
+    actions.addStretch(1)
+    later = button("Not now", "text")
+    later.clicked.connect(dlg.reject)
+    ok = button("Use this key", "filled")
+    ok.clicked.connect(dlg.accept)
+    actions.addWidget(later)
+    actions.addWidget(ok)
+    v.addLayout(actions)
+    return key.text().strip() or None if dlg.exec() == QDialog.Accepted else None
 
 
 def main():
