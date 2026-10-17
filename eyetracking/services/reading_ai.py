@@ -41,7 +41,7 @@ KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("sk-", "openai"))   
 
 
 PROVIDER_NAMES = {"claude": "Claude (Anthropic)", "gemini": "Gemini (Google)", "openai": "ChatGPT (OpenAI)",
-                  "ollama": "Ollama (on this PC)"}
+                  "ollama": "Local (Ollama)"}
 # Used when the provider can't be asked which models a key can use (offline, or its package isn't installed).
 KNOWN_MODELS = {
     "claude": [("claude-haiku-5-5", "Claude Haiku 5.5"), ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
