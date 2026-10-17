@@ -41,8 +41,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from eyetracking.core.analysis import is_blinking
-from eyetracking.core.features import N_FEATURES, gaze_features
+from eyetracking.core.features import N_FEATURES
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.services import reading_ai
@@ -432,21 +431,25 @@ class App(QObject):
         if self.mouse:
             face, features = True, fake_point_from_mouse()
         else:
-            # read() not read_features(): the ball needs "face found" even while blinking
-            r = self.tracker.read()
-            face = r is not None and r.face_found
-            features = gaze_features(r) if face and not is_blinking(r) else None
+            # None during a blink and the frames just after it (eyes reopening);
+            # face_found stays True then, so the ball doesn't flash "face lost"
+            features = self.tracker.read_features()
+            face = self.tracker.face_found
         self.ball.set_tracking_state(face)
 
         point = self.predict(features)
-        if point is None:
-            return
-        # raw gaze jitters; without smoothing the dwell ring never fills
-        # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
-        if self.smoothed is None:
-            self.smoothed = point
-        else:
-            self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+        if point is not None:
+            # raw gaze jitters; without smoothing the dwell ring never fills
+            # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
+            if self.smoothed is None:
+                self.smoothed = point
+            else:
+                self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+        elif not face or self.smoothed is None:
+            return                                # face lost: nothing to show
+        # a blink lands here with point None: HOLD the last smoothed point and
+        # keep feeding it, so the cursor and the reading time carry on and the
+        # smoothing resumes from where it was (no jump when the eyes reopen) (issue #9)
         gaze = to_screen(self.smoothed)
         self.dwell.feed(gaze)
         self.ball.look_at(gaze)                  # the water-eye ball looks where you look
@@ -603,14 +606,15 @@ class App(QObject):
                              f"Gaze model retrained on {self.samples_used} samples.")
 
     def check(self) -> None:
-        if self.mouse:
-            get = fake_point_from_mouse
-        elif self.model is None:
+        if not self.mouse and self.model is None:
             self.panel.reply("Calibrate first: open the Calibration tab.")
             return
-        else:
-            def get():
-                return self.predict(self.tracker.read_features())
+
+        def get():
+            point = self.predict(fake_point_from_mouse() if self.mouse else self.tracker.read_features())
+            if point is not None:
+                self.smoothed = point     # keep it: the overlay carries on from here after quitting check (issue #10)
+            return point
         if not self._use_camera("check"):
             return
         window = GazeWindow(get_point=get)
