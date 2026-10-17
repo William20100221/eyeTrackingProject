@@ -579,7 +579,7 @@ class App(QObject):
             if point is not None:
                 self.smoothed = point     # keep it: the overlay carries on from here after quitting check
             return point
-        window = GazeWindow(get_point=get, get_blink=None if self.mouse else self.tracker.blinked)   # mouse mode: click
+        window = GazeWindow(get_point=get)
         window.logged.connect(lambda path: self.panel.reply(f"Gaze samples saved: {Path(path).name}"))
         self._open_fullscreen(window)
 

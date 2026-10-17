@@ -39,7 +39,6 @@ BLINK_ONSET_MAX_MS = 200  # closing takes ~150 ms: a rise that isn't a blink by 
 BLINK_RECOVERY_MS = 250   # reopening takes ~250 ms: the lids still cover part of the iris
 OPEN_LEVEL_RATE = 0.05    # how fast the open-eye level follows slow changes (e.g. looking down)
 # ponytail: rise/level thresholds are first guesses from the research, not measured on this camera
-LONG_BLINK_MS = 300       # eyes shut this long = on purpose (a natural blink is ~100-150 ms)
 
 
 class EyeTracker:
@@ -48,8 +47,6 @@ class EyeTracker:
         self._open_level: float | None = None   # the user's normal blink score with eyes open
         self._onset_ms: int | None = None    # when the lids started closing (blink coming)
         self._blink_ms: int | None = None    # last frame that was a full blink
-        self._closed_ms: int | None = None   # when the current blink started
-        self._long_blink = False             # a deliberate blink ended: see blinked()
         self._camera = Camera(camera_index)  # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
@@ -80,14 +77,7 @@ class EyeTracker:
         t = result.timestamp_ms
         score = max(result.blink_score_left, result.blink_score_right)   # either lid closing
 
-        blinking = is_blinking(result)
-        if blinking and self._closed_ms is None:
-            self._closed_ms = t                       # the lids closed on this frame
-        elif not blinking and self._closed_ms is not None:
-            if t - self._closed_ms >= LONG_BLINK_MS:  # held shut on purpose: see blinked()
-                self._long_blink = True
-            self._closed_ms = None
-        if blinking:                                  # 1. a full blink
+        if is_blinking(result):                       # 1. a full blink
             self._blink_ms, self._onset_ms = t, None
             return None
         if self._blink_ms is not None and t - self._blink_ms < BLINK_RECOVERY_MS:
@@ -105,12 +95,6 @@ class EyeTracker:
         # eyes open: let the open level follow slow changes (looking down raises it a little)
         self._open_level += OPEN_LEVEL_RATE * (score - self._open_level)
         return gaze_features(result)
-
-    def blinked(self) -> bool:
-        """True once after each deliberate blink (eyes shut LONG_BLINK_MS or more),
-        on the frame they reopen. The gaze check records a sample on it."""
-        flag, self._long_blink = self._long_blink, False
-        return flag
 
     def close(self) -> None:
         self._landmarker.close()

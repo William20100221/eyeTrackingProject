@@ -6,10 +6,10 @@ Live gaze demo: a dot on a full-screen window where the model thinks you look.
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
 The faint rings are the calibration positions (5x5 grid). Look at one and see where
-the dot lands: a quick visual accuracy check. Blink on purpose (eyes shut
-0.3 s; in --mouse mode click instead) to record a sample: the point you were
-looking at just before the lids closed. Samples are listed as "#index  x  y" on
-screen and saved to data/gaze_check_<time>.csv on Esc. Space pauses.
+the dot lands: a quick visual accuracy check. Press Enter to record a sample
+(where the dot is right now). Samples are listed as "#index  x  y" on screen
+and saved to data/gaze_check_<time>.csv on Esc; nothing is saved without one.
+Space pauses.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
 model: it calls `get_point()` every tick and draws whatever comes back.
@@ -47,18 +47,15 @@ class GazeWindow(QWidget):
 
     def __init__(self,
                  get_point: Callable[[], tuple[float, float] | None],
-                 get_blink: Callable[[], bool] | None = None,
                  targets: Sequence[tuple[float, float]] | None = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._get_point = get_point
-        self._get_blink = get_blink      # True once per deliberate blink (EyeTracker.blinked)
-        self._clicked = False            # a mouse click counts as one too
         self.paused = False
         self._targets = list(targets or point_grid())
         self._point: tuple[float, float] | None = None   # last prediction, 0..1
         self._stale = True                                # no prediction this tick
-        self.log: list[tuple[int, float, float]] = []   # (index, x, y), one per blink
+        self.log: list[tuple[int, float, float]] = []   # (index, x, y), one per Enter
 
         # frames per second, worked out once a second: the number to compare
         # when testing speed changes (e.g. a threaded camera)
@@ -79,6 +76,8 @@ class GazeWindow(QWidget):
             self.paused = not self.paused
             (self._timer.stop if self.paused else self._timer.start)()
             self.update()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.record()
         elif event.key() == Qt.Key.Key_Escape:
             self._timer.stop()
             if self.log:
@@ -93,10 +92,6 @@ class GazeWindow(QWidget):
         self._stale = point is None
         if point is not None:
             self._point = point     # while the face is lost, keep the last one
-        blink = self._clicked or (self._get_blink is not None and self._get_blink())
-        self._clicked = False
-        if blink and self._point is not None:   # the point held through the blink = where you looked before it
-            self.log.append((len(self.log), *self._point))
 
         self._frames += 1
         if self._fps_clock.elapsed() >= 1000:
@@ -106,8 +101,11 @@ class GazeWindow(QWidget):
 
         self.update()   # ask Qt to repaint (it calls paintEvent)
 
-    def mousePressEvent(self, _event) -> None:
-        self._clicked = True              # --mouse mode: a click plays the blink
+    def record(self) -> None:
+        """Enter: one sample of where the dot is now (index first, then x, y)."""
+        if self._point is not None:
+            self.log.append((len(self.log), *self._point))
+            self.update()
 
     def save_log(self, folder: Path = DATA_DIR) -> Path:
         """Every sample as index,x,y: to plot or compare after a test."""
@@ -179,7 +177,7 @@ class GazeWindow(QWidget):
             gaze = f"x {x:.2f}  y {y:.2f}"
             if self._stale:
                 gaze += "   (no face / blink: showing the last point)"
-        return (f"{gaze}     {self._fps:.0f} fps     {len(self.log)} samples (blink to record one)"
+        return (f"{gaze}     {self._fps:.0f} fps     {len(self.log)} samples (Enter records one)"
                 "     Space: pause     Esc: save and quit")
 
 
