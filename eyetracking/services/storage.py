@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from eyetracking.core.calibration import describe_target
+from eyetracking.core.features import N_FEATURES
 from eyetracking.core.models import CalibrationSample
 from path import DATA_DIR
 
@@ -76,6 +77,16 @@ def load_all_calibrations(n_features: int, older_weight: float = 0.5
 def list_calibrations() -> list[Path]:
     """Every saved calibration file, newest first."""
     return sorted(DATA_DIR.glob("calibration_*.json"), reverse=True)
+
+
+def calibration_usable(path: Path) -> bool:
+    """True if this version of the app can train on the file: right format and
+    feature count. Other versions' files and damaged ones are listed as not usable."""
+    try:
+        found = load_calibration(path)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return bool(found) and len(found[0].features) == N_FEATURES
 
 
 def calibration_text(path: Path) -> str:

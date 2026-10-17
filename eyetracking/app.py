@@ -7,6 +7,7 @@ The whole app, wired together.
 
 The main window (ui/control_window.py) has three tabs:
     Chat         replies, quiz; "Go Reading" closes the window and locks the ball
+    Practice     sample text, gaze check, saved gaze data (active / not usable)
     Settings     camera, AI model, theme
     Calibration  25 dots, saves the data, retrains the gaze model
 The floating ball stays on the whole time. Unlocked: click it to open the window.
@@ -234,7 +235,7 @@ class App(QObject):
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
-        self.panel.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
+        self.control.practice.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
         self.panel.go_reading.connect(self.go_reading)
         self.ball.clicked.connect(self.ball_clicked)
         self.ball.open_requested.connect(lambda: self._show_window(self.panel))
