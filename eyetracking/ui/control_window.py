@@ -16,7 +16,6 @@ window re-themes live.
 """
 import ctypes
 import sys
-from datetime import datetime
 from pathlib import Path
 from string import Template
 
@@ -28,12 +27,13 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
-from eyetracking.services.storage import (calibration_text, calibration_usable, file_date, list_calibrations,
-                                          list_readings, reading_text, reading_title)
+from eyetracking.services.storage import (calibration_lines, calibration_usable, file_date, list_calibrations,
+                                          list_readings, reading_text, reading_title, remove_calibration,
+                                          remove_samples)
 
 DEFAULTS = {
     "seed": "#3D6CF6",
@@ -64,6 +64,7 @@ I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
 I_PRACTICE = "\uE7BE"   # Education (graduation cap)
+I_BACK, I_DELETE = "\uE72B", "\uE74D"
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
 
@@ -454,12 +455,11 @@ class Grip(QWidget):
 
 # ---------------------------------------------------------------- dated file lists
 
-def side_list(parent: QWidget, to_text) -> QListWidget:
-    """A list of dated files; double-click (or Enter) shows to_text(path) in a dialog."""
+def side_list(on_open) -> QListWidget:
+    """A list of dated files; double-click (or Enter) calls on_open(path)."""
     lst = QListWidget(objectName="sideList")
     lst.setToolTip("Double-click to open")
-    lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and show_text(
-        parent, it.text(), to_text(Path(it.data(Qt.UserRole)))))
+    lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and on_open(Path(it.data(Qt.UserRole))))
     return lst
 
 
@@ -495,6 +495,7 @@ class PracticePage(QWidget):
     (calibrations by date) split into the files this version can train on and the rest."""
 
     command = Signal(str)          # a sidebar button: "read" | "check"
+    data_changed = Signal()        # samples or a file removed: the app retrains the gaze model
 
     def __init__(self):
         super().__init__()
@@ -515,21 +516,24 @@ class PracticePage(QWidget):
         sv.addStretch(1)
         h.addWidget(side)
 
-        main = QWidget()
-        mv = QVBoxLayout(main)
+        self.main = QStackedWidget()                     # 0: the two lists, 1: one calibration's detail
+        lists = QWidget()
+        mv = QVBoxLayout(lists)
         mv.setContentsMargins(24, 20, 24, 24)
         mv.setSpacing(8)
         mv.addWidget(label("Gaze data", "sheetTitle"))
-        hint = label("Saved calibrations by date. Double-click one to read it. Only the active ones train the gaze model.",
-                     "sheetText")
+        hint = label("Saved calibrations by date. Double-click one to read it in words; right-click to remove it. "
+                     "Only the active ones train the gaze model.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
         cols = QHBoxLayout()
         cols.setSpacing(24)
-        self.active_list = side_list(self, calibration_text)
-        self.inactive_list = side_list(self, calibration_text)
+        self.active_list = side_list(self.open_detail)
+        self.inactive_list = side_list(self.open_detail)
         for title, sub, lst in [("Active", "Samples this version can use", self.active_list),
                                 ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list)]:
+            lst.setContextMenuPolicy(Qt.CustomContextMenu)
+            lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
             col = QVBoxLayout()
             col.setSpacing(2)
             col.addWidget(label(title, "gh"))
@@ -537,7 +541,83 @@ class PracticePage(QWidget):
             col.addWidget(lst, 1)
             cols.addLayout(col, 1)
         mv.addLayout(cols, 1)
-        h.addWidget(main, 1)
+        self.main.addWidget(lists)
+
+        detail = QWidget()                               # one calibration, every sample in words
+        dv = QVBoxLayout(detail)
+        dv.setContentsMargins(24, 20, 24, 24)
+        dv.setSpacing(8)
+        head = QHBoxLayout()
+        back = button(f"{I_BACK}  Back", "text")
+        back.clicked.connect(lambda: self.main.setCurrentIndex(0))
+        self.detail_title = label("", "sheetTitle")
+        head.addWidget(back)
+        head.addWidget(self.detail_title, 1)
+        dv.addLayout(head)
+        hint = label("Select samples, or a dot's line for all of its samples, then Remove: the file is rewritten and "
+                     "the gaze model retrained. The untouched original stays in data/trash.", "sheetText")
+        hint.setWordWrap(True)
+        dv.addWidget(hint)
+        self.detail = QListWidget(objectName="sideList")
+        self.detail.setSelectionMode(QListWidget.ExtendedSelection)
+        dv.addWidget(self.detail, 1)
+        self.remove_btn = button(f"{I_DELETE}  Remove selected", "outlined")
+        self.remove_btn.clicked.connect(self.remove_selected)
+        dv.addWidget(self.remove_btn, 0, Qt.AlignLeft)
+        self.main.addWidget(detail)
+        self.detail_path: Path | None = None
+        h.addWidget(self.main, 1)
+
+    def open_detail(self, path: Path):
+        """One calibration in words, in place of the lists."""
+        self.detail_path = path
+        self.detail_title.setText(f"Calibration of {file_date(path):%d %b %Y, %H:%M}")
+        self.detail.clear()
+        removable = False
+        for text, index, dot in calibration_lines(path):
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, index)
+            item.setData(Qt.UserRole + 1, dot)
+            if dot is None:                              # a heading: nothing to remove
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            removable |= dot is not None
+            self.detail.addItem(item)
+        self.remove_btn.setVisible(removable)
+        self.main.setCurrentIndex(1)
+
+    def remove_selected(self):
+        chosen = set()
+        for item in self.detail.selectedItems():
+            index, dot = item.data(Qt.UserRole), item.data(Qt.UserRole + 1)
+            if index is not None:
+                chosen.add(index)
+            else:                                        # a dot's summary line: every sample of that dot
+                chosen |= {self.detail.item(i).data(Qt.UserRole) for i in range(self.detail.count())
+                           if self.detail.item(i).data(Qt.UserRole + 1) == dot
+                           and self.detail.item(i).data(Qt.UserRole) is not None}
+        if chosen:
+            remove_samples(self.detail_path, chosen)
+            self.open_detail(self.detail_path)
+            self.refresh()
+            self.data_changed.emit()
+
+    def _list_menu(self, lst: QListWidget, pos):
+        item = lst.itemAt(pos)
+        if item is None or not item.data(Qt.UserRole):
+            return
+        path = Path(item.data(Qt.UserRole))
+        menu = QMenu(lst)
+        menu.addAction(f"{I_DELETE}  Remove this calibration", lambda: self.remove_file(path))
+        menu.exec(lst.mapToGlobal(pos))
+
+    def remove_file(self, path: Path):
+        """Right-click > Remove: the file moves to data/trash (move it back to undo); the model retrains."""
+        if QMessageBox.question(self, "Remove calibration", f"Move {path.name} to data/trash?\n"
+                                "The gaze model is retrained without it.") != QMessageBox.Yes:
+            return
+        remove_calibration(path)
+        self.refresh()
+        self.data_changed.emit()
 
     def refresh(self):
         """Re-read data/ (new calibrations). Runs whenever the page shows."""
@@ -571,7 +651,7 @@ class ChatPage(QWidget):
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
         sv.addWidget(label("History", "sideTitle"))   # past readings (summary + quiz): double-click to read one
-        self.chat_list = side_list(self, reading_text)
+        self.chat_list = side_list(lambda p: show_text(self, reading_title(p), reading_text(p)))
         sv.addWidget(self.chat_list, 1)
         h.addWidget(side)
         self.said: list[str] = []                # every message shown this run, newest last

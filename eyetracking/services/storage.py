@@ -19,11 +19,14 @@ is not loaded: the code has no way to read anything else.
 from __future__ import annotations
 
 import json
+import shutil
+import statistics
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from eyetracking.core.calibration import describe_target
+from eyetracking.core.features import describe_features, head_degrees
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from path import DATA_DIR
 
@@ -94,23 +97,98 @@ def calibration_usable(path: Path) -> bool:
     return True
 
 
-def calibration_text(path: Path) -> str:
-    """One calibration in words, a line per sample, step by step:
-    "#12 came from dot (2, 1) of the 5x5 grid: 0.412, 0.533, ..." """
+def _parts(rec: CalibrationRecording) -> list[tuple[str, tuple]]:
+    return [(STEP_NAMES[part], getattr(rec, part)) for part in PARTS]
+
+
+def _spread(rows: list) -> float:
+    """The widest standard deviation over the columns of rows (0 for a single row)."""
+    return max((statistics.pstdev(col) for col in zip(*rows)), default=0.0) if len(rows) > 1 else 0.0
+
+
+def _range_words(samples) -> str:
+    """How much of the eyes' and the head's range a step used."""
+    if not samples:
+        return ""
+    f = [s.features for s in samples]
+    span = [max(v[i] for v in f) - min(v[i] for v in f) for i in range(4)]
+    yaw, pitch = zip(*(head_degrees(v) for v in f))
+    return (f"Eyes moved {span[0]:.0%} across and {span[2]:.0%} down (right eye), {span[1]:.0%} / {span[3]:.0%} (left); "
+            f"head turned over {max(yaw) - min(yaw):.0f}° and nodded over {max(pitch) - min(pitch):.0f}°.")
+
+
+def calibration_lines(path: Path) -> list[tuple[str, int | None, str | None]]:
+    """The viewer's lines as (text, sample index, dot key). A sample line carries its
+    index (as remove_samples counts them) and its dot; a dot's summary line carries
+    the dot only (= all of its samples); headings carry neither."""
     try:
-        rec = load_calibration(path)
+        parts = _parts(load_calibration(path))
     except (OSError, ValueError, KeyError, TypeError) as e:
-        return f"{path.name}\n\nCan't show this file: it was saved by a different calibration version ({e})."
-    lines = [f"Calibration of {file_date(path):%d %b %Y, %H:%M}"]
+        return [(f"Can't show this file: it was saved by a different calibration version ({e}).", None, None)]
+    lines = [(f"Calibration of {file_date(path):%d %b %Y, %H:%M}", None, None)]
     n = 0
-    for part in PARTS:
-        samples = getattr(rec, part)
-        lines += ["", f"{STEP_NAMES[part]}: {len(samples)} samples"]
+    for name, samples in parts:
+        lines += [("", None, None), (f"{name}: {len(samples)} samples. {_range_words(samples)}", None, None)]
+        by_dot: dict = {}
         for s in samples:
+            by_dot.setdefault((s.target_x, s.target_y), []).append((n, s))
             n += 1
-            numbers = ", ".join(f"{v:.3f}" for v in s.features)
-            lines.append(f"#{n} came from {describe_target(s.target_x, s.target_y)}: {numbers}")
-    return "\n".join(lines)
+        grouped = len(by_dot) <= 50       # a moving dot (the sweep) has a target per frame: no per-dot lines
+        for (tx, ty), group in by_dot.items():
+            key = f"{name} {tx} {ty}"
+            if grouped:
+                eyes = _spread([s.features[:4] for _, s in group])
+                head = _spread([head_degrees(s.features) for _, s in group])
+                lines.append((f"{describe_target(tx, ty)}: {len(group)} sample{'s' if len(group) != 1 else ''}, "
+                              f"eyes {'steady' if eyes < 0.02 else 'wandering'} (spread {eyes:.0%}), "
+                              f"head {'still' if head < 2 else 'moving'} (±{head:.0f}°)", None, key))
+            where = "" if grouped else f" ({describe_target(tx, ty)})"
+            lines += [(f"      #{i + 1}{where}: {describe_features(s.features)}", i, key) for i, s in group]
+    return lines
+
+
+def calibration_text(path: Path) -> str:
+    """One calibration in words (the viewer's lines joined)."""
+    return "\n".join(text for text, _, _ in calibration_lines(path))
+
+
+# ---- removing: the untouched original always stays in data/trash/ ------------
+TRASH_DIR = DATA_DIR / "trash"
+
+
+def keep_original(path: Path) -> None:
+    """Before a file's first edit, copy it to data/trash/ (undo = copy it back)."""
+    backup = TRASH_DIR / path.name
+    if not backup.exists():
+        TRASH_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup)
+
+
+def remove_samples(path: Path, indexes: set[int]) -> int:
+    """Drop the samples numbered `indexes` (as calibration_lines counts them) and
+    rewrite the file in its own format. Returns how many were dropped."""
+    keep_original(path)
+    rec = load_calibration(path)
+    n, kept = 0, {}
+    for part in PARTS:
+        kept[part] = []
+        for s in getattr(rec, part):
+            if n not in indexes:
+                kept[part].append(s)
+            n += 1
+    save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), path)
+    return n - sum(len(v) for v in kept.values())
+
+
+def remove_calibration(path: Path) -> Path:
+    """Move a calibration out of data/ into data/trash/, so it no longer trains the model."""
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    target = TRASH_DIR / path.name
+    if target.exists():
+        path.unlink()                   # the untouched original is already there
+    else:
+        shutil.move(str(path), str(target))
+    return target
 
 
 # ---- history: the AI's results, one file per reading ------------------------

@@ -11,6 +11,8 @@ GazeProfile (core/calibration.py) turns them into the model's 4 inputs: it
 uses the head numbers to remove the part of the eye numbers caused by head
 movement, then rescales them to the eye range measured in the sweep.
 """
+from typing import Sequence
+
 from eyetracking.core.models import FrameResult
 
 # MediaPipe indices. "right" = the person's right eye (left side of the image).
@@ -48,3 +50,16 @@ def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
     hp = r.head_pose
     head = [hp.yaw, hp.pitch, hp.roll, hp.x, hp.y, hp.z]
     return tuple(float(f) for f in eye + head)
+
+
+def describe_features(f: Sequence[float]) -> str:
+    """One frame's features in words, for the gaze-data viewer."""
+    rx, lx, ry, ly, yaw, pitch, roll, x, y, z = f
+    return (f"eyes: iris {rx:.0%} across, {ry:.0%} down in the right eye, {lx:.0%} / {ly:.0%} in the left; "
+            f"head: turned {yaw:+.0f}°, nodded {pitch:+.0f}°, tilted {roll:+.0f}°, "
+            f"{z:.0f} cm from the camera ({x:+.0f} cm across, {y:+.0f} cm up)")
+
+
+def head_degrees(f: Sequence[float]) -> tuple[float, float]:
+    """(yaw, pitch) in degrees: how far the head was turned and nodded."""
+    return f[4], f[5]
