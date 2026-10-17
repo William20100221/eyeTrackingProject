@@ -53,7 +53,7 @@ TEXT     = "#1F2328"
 HOVER    = "#ECEEF3"
 
 # Halo colours around the floating ball - see HOOK 1 (set_tracking_state).
-TRACK_IDLE  = QColor(61, 108, 246)   # blue  - tracker not running yet
+TRACK_IDLE  = QColor(150, 150, 150)  # grey  - camera off (nothing needs the gaze right now)
 TRACK_LIVE  = QColor(34, 177, 106)   # green - face found this frame
 TRACK_LOST  = QColor(235, 149, 46)   # amber - face lost, gaze is stale
 
