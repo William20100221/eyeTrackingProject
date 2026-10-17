@@ -46,8 +46,8 @@ from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
-from eyetracking.services.reading_ai import (KEY_ENV, MODELS, grade_answer, key_from_environment, make_questions,
-                                             ollama_model, provider_for_key, summarize)
+from eyetracking.services.reading_ai import (KEY_ENV, KNOWN_MODELS, MODELS, PROVIDER_NAMES, grade_answer,
+                                             key_from_environment, list_models, make_questions, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
 from eyetracking.services.storage import (load_all_calibrations, migrate_layout, new_reading_path, save_blink_scores,
                                           save_calibration, save_reading)
@@ -57,7 +57,7 @@ from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, Gaze
 from eyetracking.core.blink_scores import advice as blink_advice
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import TEXT_FONTS, SettingsWindow, pick_ai, pick_camera
+from eyetracking.ui.control_window import TEXT_FONTS, SettingsWindow, model_label, pick_ai, pick_camera
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
@@ -256,7 +256,9 @@ class App(QObject):
         self.capture_timer.timeout.connect(self._capture)
         self._capturing = False
         settings = self.control.read_store()
-        self.provider = self._choose_ai(provider, settings["api_key"])
+        self.ai_entry: dict | None = None
+        self._choose_ai(provider)
+        self.control.ai_changed.connect(self._ai_changed)
 
         self.tracker = None                       # opened by _use_camera(), only while needed (issue #11)
         self.camera_users: set[str] = set()       # what needs the gaze right now
@@ -301,8 +303,6 @@ class App(QObject):
         self.show_ball = values["show_ball"]
         self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
         self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
-        if values["api_key"] and (provider := self._use_key(values["api_key"])):
-            self.provider = self.forced_provider or provider   # a new key switches the AI at once
         self.summary_words = values["summary_words"]
         if values["camera"] != self.camera:
             self.camera = values["camera"]
@@ -357,37 +357,49 @@ class App(QObject):
             QApplication.restoreOverrideCursor()
             self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
 
-    def _choose_ai(self, forced: str | None, saved_key: str) -> str:
-        """Which AI answers. A key wins (saved in Settings, or in the environment / a
-        .env next to main.py); its prefix says the provider. No key: Ollama if it runs
-        on this PC, else ask once with a popup. --provider overrides the choice."""
+    def _choose_ai(self, forced: str | None) -> None:
+        """Which AI answers: the key chosen in Settings > AI (or the chat's picker). Besides the
+        saved keys, a key in the environment / a .env next to main.py and a running Ollama are
+        offered too. Nothing at all on first run: ask once with a popup. --provider overrides."""
+        extras = []
         found = key_from_environment()
-        key = saved_key or (found[1] if found else "")
-        if not key and not forced:
-            local = ollama_model()
-            if local:
-                reading_ai.MODELS["ollama"] = local
-                return "ollama"
-            key = pick_ai() or ""                 # first run: paste a key (remembered)
+        if found:
+            provider, key = found
+            extras.append({"id": "env", "name": "Environment key", "provider": provider, "plain": key,
+                           "last4": key[-4:], "models": [list(m) for m in KNOWN_MODELS[provider]],
+                           "model": MODELS[provider], "added": ""})
+        local, _ = list_models("ollama")
+        if local:
+            extras.append({"id": "ollama", "name": "Ollama", "provider": "ollama", "last4": "",
+                           "models": [list(m) for m in local], "model": local[0][0], "added": ""})
+        self.control.set_extra_entries(extras)
+        if not self.control.ai_entries() and not forced:
+            key = pick_ai()                       # first run: paste a key (it becomes Key 1)
             if key:
-                self.control.store_key(key)   # encrypted
-                self.control.key.setText(key)
-        provider = self._use_key(key) if key else None
-        return forced or provider or "claude"
+                self.control.add_key(key)
+        self._use_entry()
 
-    def _use_key(self, key: str) -> str | None:
-        """Put the key where its provider's SDK looks; returns that provider (None: not a known key)."""
-        provider = provider_for_key(key)
-        if provider:
-            os.environ[KEY_ENV[provider]] = key
-        return provider
+    def _use_entry(self) -> None:
+        """Answer with the chosen key and model: the key goes where its provider's package looks."""
+        entry = self.ai_entry = self.control.active_entry()
+        if entry is not None:
+            secret = self.control.entry_secret(entry)
+            if secret:
+                os.environ[KEY_ENV[entry["provider"]]] = secret
+            reading_ai.MODELS[entry["provider"]] = entry["model"]
+        self.provider = self.forced_provider or (entry["provider"] if entry else "claude")
+
+    def _ai_changed(self) -> None:
+        self._use_entry()
+        self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
 
     def _ai_status(self) -> str:
-        if self.provider == "ollama":
-            return f"AI: Ollama on this PC ({reading_ai.MODELS['ollama']})."
-        if os.environ.get(KEY_ENV.get(self.provider, "")):
-            return f"AI: {self.provider}."
-        return "No AI key yet: paste one in Settings, or install Ollama (ollama.com) for a free local AI."
+        e = self.ai_entry
+        if self.forced_provider and (e is None or e["provider"] != self.forced_provider):
+            return f"AI: {PROVIDER_NAMES[self.forced_provider]} (chosen with --provider)."
+        if e is None:
+            return "No AI yet: add a key in Settings > AI, or install Ollama (ollama.com) for a free local AI."
+        return f"AI: {e['name']} · {PROVIDER_NAMES[e['provider']]} · {model_label(e)}."
 
     def open_settings(self) -> None:
         self._show_window(self.control.settings_page)
