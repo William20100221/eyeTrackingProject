@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
 from eyetracking.services.camera import camera_names
 from eyetracking.services.secret_store import PREFIX, protect, unprotect
 from eyetracking.services.storage import (calibration_lines, calibration_usable, file_date, list_calibrations,
+                                          list_disabled, set_calibration_enabled,
                                           list_readings, reading_messages, reading_title, remove_calibration,
                                           remove_samples)
 
@@ -548,15 +549,18 @@ class TestingPage(QWidget):
         mv.setContentsMargins(24, 20, 24, 24)
         mv.setSpacing(8)
         mv.addWidget(label("Gaze data", "sheetTitle"))
-        hint = label("Saved calibrations by date. Double-click one to read it in words; right-click to remove it. "
+        hint = label("Saved calibrations by date. Double-click one to read it in words. Right-click to disable it "
+                     "(it is kept, but stops training the gaze model), enable it again, or remove it. "
                      "Only the active ones train the gaze model.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
         cols = QHBoxLayout()
         cols.setSpacing(24)
         self.active_list = side_list(self.open_detail)
+        self.disabled_list = side_list(self.open_detail)
         self.inactive_list = side_list(self.open_detail)
-        for title, sub, lst in [("Active", "Samples this version can use", self.active_list),
+        for title, sub, lst in [("Active", "Trains the gaze model", self.active_list),
+                                ("Non-active", "Works, but you turned it off", self.disabled_list),
                                 ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list)]:
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
@@ -658,8 +662,18 @@ class TestingPage(QWidget):
             return
         path = Path(item.data(Qt.UserRole))
         menu = QMenu(lst)
+        if lst is self.active_list:
+            menu.addAction("Disable (keep it, stop training on it)", lambda: self.set_enabled(path, False))
+        elif lst is self.disabled_list:
+            menu.addAction("Enable (train on it again)", lambda: self.set_enabled(path, True))
         menu.addAction(f"{I_DELETE}  Remove this calibration", lambda: self.remove_file(path))
         menu.exec(lst.mapToGlobal(pos))
+
+    def set_enabled(self, path: Path, enabled: bool):
+        """Right-click > Disable / Enable: the file moves between data/ and data/disabled/; the model retrains."""
+        set_calibration_enabled(path, enabled)
+        self.refresh()
+        self.data_changed.emit()
 
     def remove_file(self, path: Path):
         """Right-click > Remove: the file moves to data/trash (move it back to undo); the model retrains."""
@@ -673,7 +687,8 @@ class TestingPage(QWidget):
     def refresh(self):
         """Re-read data/ (new calibrations). Runs whenever the page shows."""
         usable = {p: calibration_usable(p) for p in list_calibrations()}
-        fill_list(self.active_list, [p for p, ok in usable.items() if ok], "No usable calibration yet")
+        fill_list(self.active_list, [p for p, ok in usable.items() if ok], "None active: enable one, or calibrate")
+        fill_list(self.disabled_list, list_disabled(), "None")
         fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
 
     def showEvent(self, e):
