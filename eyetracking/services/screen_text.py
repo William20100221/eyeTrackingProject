@@ -2,7 +2,8 @@
 What text is on the screen, and where (Windows only).
 
     lines_on_screen(hwnd)   -> list[Line]   one Line (text + box, screen px) per visual line
-    window_under_mouse()    -> hwnd         the top-level window under the mouse
+    window_at(x, y)         -> hwnd         the top-level window under a screen point (0 = none)
+    window_under_mouse()    -> hwnd
     active_window()         -> hwnd         the window with the focus
     window_title(hwnd)      -> str
 
@@ -15,12 +16,12 @@ Two ways in, tried in this order:
      used for one call and dropped; nothing is saved.
 Why not record the window: docs/screen_reading_dev_log.md.
 
-All boxes are physical screen pixels (the process is made DPI-aware here), the
-same frame as ctypes GetCursorPos. Qt's QCursor.pos() is in scaled pixels:
-multiply by the screen's devicePixelRatio before using it with these boxes.
+All boxes are physical screen pixels, the frame of ctypes GetCursorPos, as long
+as the process is DPI-aware: Qt makes it so; a plain script calls make_dpi_aware().
+Qt's own coordinates (QCursor.pos(), widget geometry) are scaled pixels: multiply
+by the screen's devicePixelRatio before using them with these boxes.
 
-Threads: UIA is COM. From a thread that isn't the main one, call
-comtypes.CoInitialize() once in that thread before lines_on_screen().
+Threads: UIA is COM; lines_on_screen() initialises COM for whatever thread calls it.
 
 Run:  python -m eyetracking.services.screen_text    (3 s to point the mouse at a window, then prints its lines)
 """
@@ -41,7 +42,6 @@ if sys.platform == "win32":
     import comtypes
     import comtypes.client
 
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)     # physical pixels; fails harmlessly if Qt already chose
     comtypes.client.GetModule("UIAutomationCore.dll")  # writes comtypes.gen.UIAutomationClient on first run
     from comtypes.gen import UIAutomationClient as UIA
 
@@ -54,14 +54,25 @@ if sys.platform == "win32":
 
 
 # ---------------------------------------------------------------- windows
+def make_dpi_aware() -> None:
+    """Physical pixels everywhere. For scripts without Qt (Qt does this itself, its own way)."""
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+
+
 def active_window() -> int:
     return _user32.GetForegroundWindow() or 0
+
+
+def window_at(x: float, y: float) -> int:
+    """The top-level window under a screen point; 0 on the desktop. Click-through
+    windows (the gaze dot) are skipped, like the mouse skips them."""
+    return _user32.GetAncestor(_user32.WindowFromPoint(wintypes.POINT(int(x), int(y))), 2) or 0   # 2 = GA_ROOT
 
 
 def window_under_mouse() -> int:
     pt = wintypes.POINT()
     _user32.GetCursorPos(ctypes.byref(pt))
-    return _user32.GetAncestor(_user32.WindowFromPoint(pt), 2) or 0     # 2 = GA_ROOT: the top-level window
+    return window_at(pt.x, pt.y)
 
 
 def window_title(hwnd: int) -> str:
@@ -90,6 +101,10 @@ def lines_on_screen(hwnd: int | None = None) -> list[Line]:
 
 
 def _uia_lines(hwnd: int) -> list[Line]:
+    try:
+        comtypes.CoInitialize()                          # COM per thread: the app captures on a worker thread
+    except OSError:
+        pass                                             # already initialised another way: fine
     uia = comtypes.CoCreateInstance(UIA.CUIAutomation._reg_clsid_, interface=UIA.IUIAutomation,
                                     clsctx=comtypes.CLSCTX_INPROC_SERVER)
     has_text = uia.CreatePropertyCondition(UIA.UIA_IsTextPatternAvailablePropertyId, True)
@@ -184,6 +199,7 @@ def _ocr_lines(hwnd: int) -> list[Line]:
 
 
 def main() -> int:
+    make_dpi_aware()
     print("Point the mouse at a window with text...")
     time.sleep(3)
     hwnd = window_under_mouse()
