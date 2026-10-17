@@ -354,5 +354,5 @@ if __name__ == "__main__":
     samples, weights, newest = training_set([CalibrationRecording((), (), tuple(dots)),   # unusable
                                              CalibrationRecording(tuple(sweep), tuple(head), tuple(dots))])
     assert len(samples) > 250 and set(weights) == {1.0} and newest is not None   # ~12 frames x 25 dots, a few cleaned out
-    assert head_prompt(0)[1] is False and head_prompt(10 ** 6) is None
+    assert HeadStep().feed(None, 0) == ("Look at the dot", False)
     print("ok")
