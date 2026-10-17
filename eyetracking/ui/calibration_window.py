@@ -18,7 +18,9 @@ or with FAKE features from your mouse position, so no camera is needed:
 
     python -m eyetracking.ui.calibration_window --mouse
 
-Space starts, Space again pauses / carries on (as often as you like),
+Step 2 shows a bar: move your head until both marks turn green, so every
+user turns a known amount. In steps 1 and 3 a frame with the head turned more
+than 3 degrees from the dot's first frame is left out. Space starts, Space again pauses / carries on (as often as you like),
 Esc leaves at any time. Screen positions are stored as fractions 0..1
 (x across, y down), so they work on any screen size.
 """
@@ -32,7 +34,7 @@ from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from eyetracking.core.calibration import CalibrationSession, head_prompt, point_grid, sweep_points
+from eyetracking.core.calibration import CalibrationSession, HeadStep, HeadStill, point_grid, sweep_points
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from eyetracking.services.storage import save_calibration
 from eyetracking.services.tracker import EyeTracker
@@ -72,6 +74,9 @@ class CalibrationWindow(QWidget):
         # step 2 also goes through a CalibrationSession, for its blink handling
         # (frames just before a blink are dropped): one long "dot" at the centre
         self._head = CalibrationSession([(0.5, 0.5)])
+        self._head_step = HeadStep()                # step 2: which move, how far the head is (the gauge)
+        self._still = HeadStill()                   # steps 1 and 3: the head must not move
+        self._head_moved = False
         self._prompt = ""                           # step 2 instruction
         # intro -> (settle -> collect) x line dots -> head -> (settle -> collect) x grid -> done
         self._phase = "intro"
@@ -114,6 +119,7 @@ class CalibrationWindow(QWidget):
             # it starts over; any other dot goes back to settle (its frames are kept)
             if self._phase == "head":
                 self._head = CalibrationSession([(0.5, 0.5)])
+                self._head_step = HeadStep()
             else:
                 self._phase = "settle"
             self._clock.restart()
@@ -129,7 +135,7 @@ class CalibrationWindow(QWidget):
         elapsed = self._clock.elapsed()
 
         if self._phase == "head":                     # step 2: centre dot, head moves
-            step = head_prompt(elapsed)
+            step = self._head_step.feed(features, elapsed)
             if step is None:
                 self._head.next_target()              # step over: flush the session
                 self._active = self._session          # on to step 3, the dot grid
@@ -143,11 +149,16 @@ class CalibrationWindow(QWidget):
         elif self._phase == "settle" and elapsed >= SETTLE_MS:
             self._phase = "collect"
             self._clock.restart()
+            self._still.reset()                       # the head's place for this dot: its first frame
 
         elif self._phase == "collect":                # steps 1 and 3: record the current dot
             # None (no face / blink / eyes reopening) also drops the frames held
             # back just before it: see CalibrationSession.add_sample
-            self._active.add_sample(features)
+            # a head that turned since the dot's first frame: the frame is left out and
+            # the dot waits (like for a blink), with "keep your head still" under it
+            self._head_moved = features is not None and self._still.moved(features)
+            if not self._head_moved:
+                self._active.add_sample(features)
 
             # move on after COLLECT_MS once the dot has enough good frames;
             # blinks extend the dot, up to MAX_COLLECT_MS
@@ -173,6 +184,29 @@ class CalibrationWindow(QWidget):
         self.finished.emit(CalibrationRecording(tuple(self._line.samples()), tuple(self._head.samples()),
                                                 tuple(self._session.samples())))
 
+    def _draw_gauge(self, p: QPainter, centre: QPointF) -> None:
+        """Step 2: a bar under the dot showing how far the head has moved, the two
+        targets (green once reached) and where the head is now."""
+        g = self._head_step.gauge()
+        if self._phase != "head" or g is None:
+            return
+        value, target, too_far, reached = g
+        w, y0 = 360, int(centre.y()) + 70
+        x0 = int(centre.x()) - w // 2
+        p.setPen(QPen(QColor(90, 90, 90), 2))
+        p.drawLine(x0, y0, x0 + w, y0)                       # the bar: -too far .. +too far
+        for sign, hit in ((-1, reached[0]), (1, reached[1])):
+            tx = int(centre.x() + sign * target / too_far * w / 2)
+            p.setPen(QPen(QColor(80, 220, 120) if hit else QColor(160, 160, 160), 3))
+            p.drawLine(tx, y0 - 10, tx, y0 + 10)             # a target mark
+        vx = int(centre.x() + max(-1.0, min(1.0, value / too_far)) * w / 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("white"))
+        p.drawEllipse(QPointF(vx, y0), 6, 6)                 # the head now
+        p.setPen(QColor(160, 160, 160))
+        p.drawText(QRectF(x0, y0 + 14, w, 20), Qt.AlignmentFlag.AlignCenter,
+                   "move until both marks turn green" if not all(reached) else "good, keep going")
+
     # ---- drawing ---------------------------------------------------
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
@@ -182,7 +216,7 @@ class CalibrationWindow(QWidget):
         if self._phase in ("intro", "done"):
             text = ("Three short steps, about two minutes:\n"
                     "1. Look at each dot on a line until it moves on, head still\n"
-                    "2. Keep looking at the centre dot while you move your head\n"
+                    "2. Keep looking at the centre dot and move your head as far as the bar asks\n"
                     "3. Look at each dot until it moves on, head still\n\n"
                     "Press Space to start, Space again to pause,\nEsc to leave at any time."
                     if self._phase == "intro" else "Calibration done.")
@@ -217,6 +251,7 @@ class CalibrationWindow(QWidget):
             # just under the dot, so it can be read without looking away from it
             p.drawText(self.rect().adjusted(0, int(centre.y()) + 30, 0, 0),
                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._prompt)
+            self._draw_gauge(p, centre)
             return
 
         x, y = self._active.current_target()
@@ -239,7 +274,11 @@ class CalibrationWindow(QWidget):
         p.setBrush(colour)
         p.drawEllipse(centre, 4, 4)
 
-        if self._phase == "collect" and self._clock.elapsed() > COLLECT_MS:
+        if self._phase == "collect" and self._head_moved:
+            p.setPen(QColor(235, 149, 46))
+            p.drawText(QRectF(centre.x() - 120, centre.y() + 22, 240, 24),
+                       Qt.AlignmentFlag.AlignCenter, "keep your head still")
+        elif self._phase == "collect" and self._clock.elapsed() > COLLECT_MS:
             # extended because of blinks: tell the user why the dot is staying
             p.setPen(QColor(80, 220, 120))
             p.drawText(QRectF(centre.x() - 100, centre.y() + 22, 200, 24),

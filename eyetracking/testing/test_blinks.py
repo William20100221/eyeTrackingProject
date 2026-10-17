@@ -59,7 +59,7 @@ import eyetracking.ui.calibration_window as cw
 if hasattr(cal, "SWEEP_CROSS_MS"):                        # branches with the moving sweep
     cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 100, 250    # speed it up
     cal.SWEEP_AXIS_MS = cal.SWEEP_SETTLE_MS + cal.SWEEP_CROSS_MS * cal.SWEEP_CROSSINGS
-cal.HEAD_SETTLE_MS, cal.HEAD_STEPS = 100, (("head", 500),)
+cal.HEAD_SETTLE_MS, cal.HEAD_MOVE_MIN_MS, cal.HEAD_MOVE_MAX_MS = 100, 100, 300   # the fake head never moves: max it is
 cw.SETTLE_MS, cw.COLLECT_MS, cw.DOT_SAMPLES, cw.MAX_COLLECT_MS, cw.TICK_MS = 50, 300, 10, 2000, 10
 
 qt = QApplication.instance() or QApplication([])
