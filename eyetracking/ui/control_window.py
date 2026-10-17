@@ -1158,29 +1158,33 @@ class SettingsWindow(QWidget):
         self.key_eye.triggered.connect(self._toggle_key)
         add = button("Add", "outlined")
         add.clicked.connect(lambda: self.add_key(self.key.text()))
-        self.keys_list = QListWidget(objectName="linesList")   # one entry per key; the key itself is never shown
-        self.keys_list.setWordWrap(True)
+        manage = QWidget()                               # one block: the add row, then the keys by brand
+        mv = QVBoxLayout(manage)
+        mv.setContentsMargins(0, 0, 0, 0)
+        mv.setSpacing(0)
+        mv.addWidget(self.row(I_KEY, "Manage keys",
+                              "Paste a key from Claude (sk-ant-…), ChatGPT (sk-…) or Gemini (AIza…): it is filed under "
+                              "its brand as Key 1, Key 2…, so the key itself is never shown, and stored encrypted for "
+                              "your Windows login. Double-click a key to use it; right-click to pick its model, ask "
+                              "for its models again, rename or remove it.", self.key, add))
+        self.rows[-1] = (manage, self.rows[-1][1] + " keys api claude chatgpt openai gemini ollama local model")
+        self.keys_list = QListWidget(objectName="linesList")   # brand headings, each with its keys
+        self.keys_list.setSelectionMode(QListWidget.NoSelection)
         self.keys_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.keys_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.keys_list.customContextMenuRequested.connect(self._key_menu)
         self.keys_list.itemActivated.connect(lambda it: it.data(Qt.UserRole) and self.use_entry(it.data(Qt.UserRole)))
-        keys_box = QWidget()
-        kv = QVBoxLayout(keys_box)
-        kv.setContentsMargins(52, 8, 16, 10)
-        kv.setSpacing(2)
-        kv.addWidget(label("Keys", "rowtitle"))
-        keys_hint = label("Each key gets a name (Key 1, Key 2…) so the key itself is never shown. Double-click one to "
-                          "use it; right-click to pick its model, ask for its models again, rename or remove it.", "rowsub")
-        keys_hint.setWordWrap(True)
-        kv.addWidget(keys_hint)
-        kv.addWidget(self.keys_list)
-        self.keys_note = label("", "rowsub")             # what the last add / refresh found
+        self.keys_note = label("", "rowsub")             # what the last add / refresh found; hidden when empty
         self.keys_note.setWordWrap(True)
-        kv.addWidget(self.keys_note)
+        self.keys_note.hide()
+        below = QVBoxLayout()
+        below.setContentsMargins(52, 0, 16, 12)
+        below.setSpacing(4)
+        below.addWidget(self.keys_list)
+        below.addWidget(self.keys_note)
+        mv.addLayout(below)
         self.group("AI", [
-            self.row(I_KEY, "Add a key", "Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart. "
-                     "Stored encrypted for your Windows login", self.key, add),
-            keys_box,
+            manage,
             self.row(I_LINES, "Summary length", "About this many words", words),
         ])
         self.camera_btn = button("", "assist")
@@ -1358,12 +1362,12 @@ class SettingsWindow(QWidget):
         key = text.strip()
         provider = provider_for_key(key)
         if provider is None:
-            self.keys_note.setText("That doesn't look like a Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…) key.")
+            self._note("That doesn't look like a Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…) key.")
             return None
         keys = self.stored_keys()
         same = next((k for k in keys if self.entry_secret(k) == key), None)
         if same is not None:
-            self.keys_note.setText(f"That key is already saved, as {same['name']}.")
+            self._note(f"That key is already saved, as {same['name']}.")
             self.key.clear()
             return same
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1374,7 +1378,7 @@ class SettingsWindow(QWidget):
         entry = self._new_entry(key, provider, models, keys)
         self._save_keys(keys + [entry])
         self.key.clear()
-        self.keys_note.setText(f"{entry['name']} added: {PROVIDER_NAMES[provider]}, {len(models)} model{'s' * (len(models) != 1)}."
+        self._note(f"{entry['name']} added: {PROVIDER_NAMES[provider]}, {len(models)} model{'s' * (len(models) != 1)}."
                                + (f" Couldn't ask {PROVIDER_NAMES[provider]} for this key's models ({error}), so "
                                   "these are the usual ones." if error else ""))
         self.use_entry(entry["id"])
@@ -1410,7 +1414,7 @@ class SettingsWindow(QWidget):
             self._save_keys([{**k, "models": models} if k["id"] == entry_id else k for k in keys])
         else:
             entry["models"] = models
-        self.keys_note.setText(f"{entry['name']}: {len(models)} models"
+        self._note(f"{entry['name']}: {len(models)} models"
                                + (f" (the usual ones: couldn't ask the provider, {error})." if error else "."))
         self.refresh_keys()
 
@@ -1461,30 +1465,50 @@ class SettingsWindow(QWidget):
         """The chat's picker: every key, each with its models; choosing one uses that key with that model."""
         menu = self.chat.model_btn.menu()
         menu.clear()
-        for entry in self.ai_entries():
-            self._model_menu(menu.addMenu(f"{entry['name']}  ·  {PROVIDER_NAMES[entry['provider']]}"), entry)
+        for brand in BRANDS:                             # grouped by brand, like Manage keys
+            mine = [e for e in self.ai_entries() if e["provider"] == brand]
+            if mine and menu.actions():
+                menu.addSeparator()
+            for entry in mine:
+                self._model_menu(menu.addMenu(f"{entry['name']}  ·  {PROVIDER_NAMES[brand]}"), entry)
         if not self.ai_entries():
             menu.addAction("No AI yet").setEnabled(False)
         menu.addSeparator()
         menu.addAction("Manage keys…", lambda: self.show_page(self.settings_page))
 
+    def _note(self, text: str):
+        self.keys_note.setText(text)
+        self.keys_note.setVisible(bool(text))
+
     def refresh_keys(self):
-        """The Settings list and the chat's picker, from the saved keys."""
+        """Manage keys: a heading per brand with its keys under it; and the chat's picker."""
         active = self.active_entry()
+        entries = self.ai_entries()
         self.keys_list.clear()
-        for e in self.ai_entries():
-            on = active is not None and e["id"] == active["id"]
-            where = (f"key ending …{e['last4']}" if e.get("last4") else "no key needed")
-            when = (f"added {datetime.fromisoformat(e['added']):%d %b %Y}" if e.get("added")
-                    else "from the environment" if e["id"] == "env" else "runs on this PC")
-            item = QListWidgetItem(f"{'●' if on else '○'}  {e['name']} — {PROVIDER_NAMES[e['provider']]}"
-                                   f"{'   (in use)' if on else ''}\n      {where} · model {model_label(e)} · "
-                                   f"{len(e['models'])} model{'s' * (len(e['models']) != 1)} · {when}")
-            item.setData(Qt.UserRole, e["id"])
-            self.keys_list.addItem(item)
-        if not self.keys_list.count():
-            self.keys_list.addItem(QListWidgetItem("No key yet: paste one above, or install Ollama (ollama.com)."))
-        self.keys_list.setFixedHeight(self.keys_list.count() * 56 + 6)
+        heading = QFont(self.keys_list.font())
+        heading.setBold(True)
+        for brand in BRANDS:
+            head = QListWidgetItem(PROVIDER_NAMES[brand])
+            head.setFont(heading)
+            head.setFlags(Qt.ItemIsEnabled)              # a heading: nothing to click
+            self.keys_list.addItem(head)
+            mine = [e for e in entries if e["provider"] == brand]
+            for e in mine:
+                on = active is not None and e["id"] == active["id"]
+                where = f"key ending …{e['last4']}" if e.get("last4") else "no key needed"
+                when = (f"added {datetime.fromisoformat(e['added']):%d %b %Y}" if e.get("added")
+                        else "from the environment" if e["id"] == "env" else "runs on this PC")
+                n = len(e["models"])
+                item = QListWidgetItem(f"    {'●' if on else '○'}  {e['name']}{'   (in use)' if on else ''}\n"
+                                       f"         {where} · model {model_label(e)} · {n} model{'s' * (n != 1)} · {when}")
+                item.setData(Qt.UserRole, e["id"])
+                self.keys_list.addItem(item)
+            if not mine:
+                empty = QListWidgetItem("    Not running: install Ollama (ollama.com), then start the app again"
+                                        if brand == "ollama" else "    No key yet")
+                empty.setFlags(Qt.ItemIsEnabled)
+                self.keys_list.addItem(empty)
+        self.keys_list.setFixedHeight(sum(self.keys_list.sizeHintForRow(i) for i in range(self.keys_list.count())) + 6)
         self.chat.model_btn.setText(f"{I_SPARKLE}  {active['name']} · {model_label(active)}  {I_CHEVRON}" if active
                                     else f"{I_SPARKLE}  No AI yet  {I_CHEVRON}")
 
@@ -1639,6 +1663,9 @@ class SettingsWindow(QWidget):
         if sys.platform == "win32":
             v = ctypes.c_uint(value)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), attribute, ctypes.byref(v), 4)
+
+
+BRANDS = ("claude", "openai", "gemini", "ollama")   # the order brands are listed in
 
 
 def model_label(entry: dict) -> str:
