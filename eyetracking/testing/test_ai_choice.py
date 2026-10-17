@@ -29,7 +29,11 @@ with tempfile.TemporaryDirectory() as folder:            # .env next to main.py:
 ai.OLLAMA_URL = "http://localhost:9"                      # nothing listens there
 assert ai.ollama_model() is None
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
+import eyetracking.ui.control_window as cw
+settings_file = Path(tempfile.mkdtemp()) / "settings.ini"
+cw.QSettings = lambda *_: QSettings(str(settings_file), QSettings.IniFormat)   # never the real settings
 qt = QApplication([])
 import eyetracking.app as appmod
 appmod.key_from_environment = lambda: None
