@@ -84,6 +84,16 @@ def list_calibrations() -> list[Path]:
     return sorted(DATA_DIR.glob("calibration_*.json"), reverse=True)
 
 
+def calibration_usable(path: Path) -> bool:
+    """True if this version of the app can train on the file: right format and
+    feature count. Other versions' files and damaged ones are listed as not usable."""
+    try:
+        load_calibration(path)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return True
+
+
 def calibration_text(path: Path) -> str:
     """One calibration in words, a line per sample, step by step:
     "#12 came from dot (2, 1) of the 5x5 grid: 0.412, 0.533, ..." """
