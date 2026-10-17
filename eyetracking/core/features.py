@@ -47,7 +47,7 @@ def describe_features(f: Sequence[float]) -> str:
     """One frame's features in words, for the gaze-data viewer."""
     rx, lx, ry, ly, yaw, pitch, roll, nx, ny, fw = f
     return (f"eyes: iris {rx:.0%} across, {ry:.0%} down in the right eye, {lx:.0%} / {ly:.0%} in the left; "
-            f"head: turned {yaw * 30:+.0f}°, nodded {pitch * 30:+.0f}°, tilted {roll * 30:+.0f}°; "
+            f"head: turned {round(yaw * 30):+d}°, nodded {round(pitch * 30):+d}°, tilted {round(roll * 30):+d}°; "
             f"nose {nx:.0%} across, {ny:.0%} down the picture; face {fw / 5:.2f} of the picture wide (bigger = closer)")
 
 
