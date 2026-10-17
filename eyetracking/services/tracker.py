@@ -14,13 +14,10 @@ from eyetracking.core.features import gaze_features
 from eyetracking.core.models import FrameResult
 from eyetracking.services.camera import Camera
 from eyetracking.services.landmarker import FaceLandmarker
-LONG_BLINK_MS = 300       # eyes shut this long = on purpose (a natural blink is ~100-150 ms)
 
 
 class EyeTracker:
     def __init__(self, camera_index: int | None = None) -> None:
-        self._closed_ms: int | None = None   # when the current blink started
-        self._long_blink = False             # a deliberate blink ended: see blinked()
         self._camera = Camera(camera_index)  # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
@@ -42,24 +39,9 @@ class EyeTracker:
     def read_features(self) -> tuple[float, ...] | None:
         """Features for one frame, or None if this frame should be skipped."""
         result = self.read()
-        if result is None or not result.face_found:
-            return None
-        t, blinking = result.timestamp_ms, is_blinking(result)
-        if blinking and self._closed_ms is None:
-            self._closed_ms = t                       # the lids closed on this frame
-        elif not blinking and self._closed_ms is not None:
-            if t - self._closed_ms >= LONG_BLINK_MS:  # held shut on purpose: see blinked()
-                self._long_blink = True
-            self._closed_ms = None
-        if blinking:
+        if result is None or not result.face_found or is_blinking(result):
             return None
         return gaze_features(result)
-
-    def blinked(self) -> bool:
-        """True once after each deliberate blink (eyes shut LONG_BLINK_MS or more),
-        on the frame they reopen. The gaze check records a sample on it."""
-        flag, self._long_blink = self._long_blink, False
-        return flag
 
     def close(self) -> None:
         self._landmarker.close()
