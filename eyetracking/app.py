@@ -31,6 +31,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer, Signal, Slot
@@ -46,7 +47,7 @@ from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
-from eyetracking.services.storage import load_all_calibrations, save_calibration
+from eyetracking.services.storage import load_all_calibrations, new_reading_path, save_calibration, save_reading
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, GazeCursor
@@ -265,6 +266,7 @@ class App(QObject):
         self.reading: ReadingWindow | None = None
         self.full_text = ""
         self.quiz: list[dict] = []                # questions still to ask
+        self.record: dict | None = None           # this reading's AI results, saved to data/history as they come
 
         # ponytail: camera + MediaPipe on the GUI thread (~30-50 ms a frame); move to a QThread if the UI stutters
         self.clock = QElapsedTimer()
@@ -411,6 +413,7 @@ class App(QObject):
         if reader is None:
             return
         full, read = reader.full_text(), reader.read_text()
+        self._start_record(full)
         self.ball.set_locked(False)
         self.control.show_page(self.panel)        # the response goes to the chat
         if not read.split():
@@ -420,8 +423,25 @@ class App(QObject):
         self.panel.reply(f"{self.reader_title}: you read {len(read.split())} of {len(full.split())} words, "
                          f"{unread} unread. Asking {self.provider} for what you missed...")
         self.background.run(lambda: summarize(full, read, "unread", self.provider, self.summary_words),
-                            lambda result: self._ai_error(result) if isinstance(result, Exception)
-                            else self.panel.reply(result))
+                            self._summary_ready)
+
+    def _summary_ready(self, result) -> None:
+        if isinstance(result, Exception):
+            self._ai_error(result)
+            return
+        self.panel.reply(result)
+        self.record["summary"] = result
+        self._save_record()
+
+    # ---- history: the AI's results, one file per reading --------------------
+    def _start_record(self, full_text: str) -> None:
+        self.record = {"title": " ".join(full_text.split()[:6]), "when": datetime.now().isoformat(timespec="seconds"),
+                       "summary": "", "questions": []}
+        self.record_path = new_reading_path()
+
+    def _save_record(self) -> None:
+        save_reading(self.record_path, self.record)
+        self.panel.refresh()                      # the History list shows it at once
 
     def _capture(self) -> None:
         """Once a second while recording: re-read the window under the gaze, off the GUI thread."""
@@ -523,6 +543,7 @@ class App(QObject):
     # ---- the reading AI ------------------------------------------------
     def _read_finished(self, full_text: str, read_text: str) -> None:
         self.full_text = full_text
+        self._start_record(full_text)
         unread = unread_word_count(mark_unread(full_text, read_text))
         self.control.show_page(self.panel)        # the summary and quiz show in the chat
         self.panel.reply(f"You skipped {unread} of {len(full_text.split())} words. "
@@ -537,6 +558,8 @@ class App(QObject):
             self._ai_error(result)
             return
         summary, self.quiz = result
+        self.record["summary"], self.record["questions"] = summary, list(self.quiz)   # the same dicts: answers land in them
+        self._save_record()
         self.panel.reply(summary)
         self._ask_next()
 
@@ -551,18 +574,22 @@ class App(QObject):
         self.panel.set_answering(False)           # back on while the next question is asked
         question = self.quiz.pop(0)
         if text.strip().lower() == "skip":
+            question["answer"] = "skip"
+            self._save_record()
             self.panel.reply(f"Model answer: {question['model_answer']}")
             self._ask_next()
             return
         self.panel.reply("Checking...")
         self.background.run(
             lambda: grade_answer(self.full_text, question, text, self.provider),
-            lambda result: self._graded(question, result))
+            lambda result: self._graded(question, text, result))
 
-    def _graded(self, question: dict, result) -> None:
+    def _graded(self, question: dict, answer: str, result) -> None:
         if isinstance(result, Exception):
             self._ai_error(result)
         else:
+            question.update(answer=answer, score=result["score"], explanation=result["explanation"])
+            self._save_record()
             self.panel.reply(f"Score {result['score']}/10. {result['explanation']}\n"
                              f"Model answer: {question['model_answer']}")
         self._ask_next()

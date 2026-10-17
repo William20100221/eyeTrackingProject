@@ -9,7 +9,7 @@ File format (FORMAT below): {"format": "gaze-calibration-v1", "saved_at": ...,
 "samples": [{"features": [...10], "target_x": .., "target_y": ..}, ...]}.
 Files from before the tag have no "format" but do have "samples": they count as v1.
 A file in any other format (the 3-step branches write v2 / v3) is not loaded.
-    data/history/chat_2026-09-29_141502.json     (one per app run: chat + quizzes)
+    data/history/reading_2026-09-29_141502.json  (one per reading: the AI's summary + quiz)
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from eyetracking.core.models import CalibrationSample
 from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"            # the date-time part of every file name
-HISTORY_DIR = DATA_DIR / "history"
+HISTORY_DIR = DATA_DIR / "history"   # the AI's summary + quiz, one file per reading
 FORMAT = "gaze-calibration-v1"
 
 
@@ -115,32 +115,46 @@ def calibration_text(path: Path) -> str:
     return "\n".join(lines)
 
 
-# ---- chat + quiz history ------------------------------------------------
-def new_chat_path() -> Path:
-    return HISTORY_DIR / f"chat_{datetime.now():{STAMP}}.json"
+# ---- history: the AI's results, one file per reading ------------------------
+def new_reading_path() -> Path:
+    return HISTORY_DIR / f"reading_{datetime.now():{STAMP}}.json"
 
 
-def save_chat(path: Path, messages: list[dict]) -> None:
-    """messages: [{"who": "you" | "assistant", "text": ..., "at": iso time}, ...]"""
+def save_reading(path: Path, record: dict) -> None:
+    """record: {"title": the text's first words, "when": iso time, "summary": str,
+    "questions": [{"question", "model_answer", "answer"?, "score"?, "explanation"?}, ...]}"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"messages": messages}, f, indent=2, ensure_ascii=False)
+        json.dump(record, f, indent=2, ensure_ascii=False)
 
 
-def list_chats() -> list[Path]:
-    """Every saved conversation, newest first."""
-    return sorted(HISTORY_DIR.glob("chat_*.json"), reverse=True)
+def list_readings() -> list[Path]:
+    """Every saved reading (summary + quiz), newest first."""
+    return sorted(HISTORY_DIR.glob("reading_*.json"), reverse=True)
 
 
-def chat_text(path: Path) -> str:
-    """A saved conversation as plain text, a paragraph per message."""
+def reading_title(path: Path) -> str:
     try:
         with open(path, encoding="utf-8") as f:
-            messages = json.load(f)["messages"]
+            return json.load(f)["title"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return path.name
+
+
+def reading_text(path: Path) -> str:
+    """A saved reading as plain text: the summary, then each question with your answer and score."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            r = json.load(f)
+        lines = [f"{r['title']}   ({r['when'][:16].replace('T', ' ')})", "", "Summary:", r["summary"] or "(none yet)"]
+        for i, q in enumerate(r["questions"], 1):
+            lines += ["", f"Question {i}: {q['question']}",
+                      f"Your answer: {q.get('answer', '(not answered)')}"
+                      + (f"   Score {q['score']}/10. {q['explanation']}" if "score" in q else ""),
+                      f"Model answer: {q['model_answer']}"]
+        return "\n".join(lines)
     except (OSError, ValueError, KeyError, TypeError) as e:
         return f"Can't read {path.name} ({e})."
-    return "\n\n".join(f"{'You' if m['who'] == 'you' else 'Assistant'} ({m['at'][11:16]}):\n{m['text']}"
-                       for m in messages)
 
 
 def latest_calibration() -> Path | None:

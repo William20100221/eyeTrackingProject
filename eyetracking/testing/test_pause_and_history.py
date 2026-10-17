@@ -5,7 +5,7 @@ Self-check (no webcam):  python -m eyetracking.testing.test_pause_and_history
    Space carries on (back to "settle" for the same dot), as often as you like;
    Esc leaves at any time
 2. Gaze data: usable or not (format + feature count); a calibration file in words, "#n came from dot (c, r) of the 5x5 grid"
-3. History: every chat / quiz message is saved and listed, newest file first
+3. History: a reading's AI results (summary, questions, answers, scores) are saved and listed
 """
 import os
 import tempfile
@@ -59,9 +59,12 @@ broken.write_text("{}")
 assert "Can't show this file" in storage.calibration_text(broken) and not storage.calibration_usable(broken)
 
 # ---- 3. history ----------------------------------------------------------
-chat_path = storage.new_chat_path()
-storage.save_chat(chat_path, [{"who": "assistant", "text": "Question: why?", "at": "2026-10-17T10:00:00"},
-                              {"who": "you", "text": "because", "at": "2026-10-17T10:00:09"}])
-assert storage.list_chats() == [chat_path]
-assert storage.chat_text(chat_path) == "Assistant (10:00):\nQuestion: why?\n\nYou (10:00):\nbecause"
+reading = storage.new_reading_path()
+storage.save_reading(reading, {"title": "The water cycle moves heat", "when": "2026-10-17T10:00:00", "summary": "Heat moves.",
+                               "questions": [{"question": "Why?", "model_answer": "Because.", "answer": "sun", "score": 7,
+                                              "explanation": "Close."}, {"question": "How?", "model_answer": "Rain."}]})
+assert storage.list_readings() == [reading] and storage.reading_title(reading) == "The water cycle moves heat"
+assert storage.reading_text(reading) == ("The water cycle moves heat   (2026-10-17 10:00)\n\nSummary:\nHeat moves.\n\n"
+                                         "Question 1: Why?\nYour answer: sun   Score 7/10. Close.\nModel answer: Because.\n\n"
+                                         "Question 2: How?\nYour answer: (not answered)\nModel answer: Rain."), storage.reading_text(reading)
 print("pause, gaze data and history ok")
