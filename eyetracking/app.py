@@ -240,6 +240,7 @@ class App(QObject):
         self.control.testing.data_changed.connect(self._retrain)
         self.panel.go_reading.connect(self.go_reading)
         self.ball.clicked.connect(self.ball_clicked)
+        self.control.shown.connect(lambda up: setattr(self.ball, "window_open", up))   # issue #12
         self.ball.open_requested.connect(lambda: self._show_window(self.panel))
         self.ball.menu_actions = [("Settings", self.open_settings)]
         # reading from the screen: see go_reading()

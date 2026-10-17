@@ -111,6 +111,7 @@ class FloatingBall(QWidget):
         self.menu_actions: list = []     # (text, slot) pairs the app adds to the right-click menu
         self.locked = False              # Go Reading: no dragging, no sliding away; click and right-click only
         self.eyes_open = False           # while locked: open = recording what you read, closed = paused
+        self.window_open = False         # the main window is up: the eye is open too (issue #12)
 
         self._slide = QPropertyAnimation(self, b"pos", self)
         self._slide.setDuration(180)
@@ -148,8 +149,9 @@ class FloatingBall(QWidget):
         dt = min((now - self._last_ms) / 1000, 0.05)
         self._last_ms = now
 
-        # spring open while hovered (or, locked, while recording), closed otherwise: slight overshoot = liquid feel
-        target = float(self.eyes_open) if self.locked else self._hover_target
+        # spring open while hovered or while the main window is up (locked: while recording),
+        # closed otherwise: slight overshoot = liquid feel
+        target = float(self.eyes_open) if self.locked else max(self._hover_target, float(self.window_open))
         self._open_vel += (170 * (target - self._open) - 18 * self._open_vel) * dt
         self._open += self._open_vel * dt
         self._hover += (self._hover_target - self._hover) * min(1.0, dt * 6)
