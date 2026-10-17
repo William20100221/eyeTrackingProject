@@ -1041,6 +1041,7 @@ class SettingsWindow(QWidget):
         scroll = QScrollArea()
         scroll.setWidget(inner)
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # the content always fits the width
         scroll.viewport().setAutoFillBackground(False)
         return scroll
 
@@ -1056,7 +1057,9 @@ class SettingsWindow(QWidget):
         text = QVBoxLayout()
         text.setSpacing(0)
         text.addWidget(label(title, "rowtitle"))
-        text.addWidget(label(sub, "rowsub"))
+        subtitle = label(sub, "rowsub")
+        subtitle.setWordWrap(True)        # wraps instead of holding the page wide (issue #14: clipped rows)
+        text.addWidget(subtitle)
         h.addLayout(text, 1)
         for t in trailing:
             h.addWidget(t)
@@ -1130,6 +1133,7 @@ class SettingsWindow(QWidget):
         actions.addWidget(done)
         v.addLayout(actions)
         self.seed_before_sheet = self.seed
+        self.sheet.hide()                 # opens on Theme colour > Change
         return self.sheet
 
     # ----- behaviour
