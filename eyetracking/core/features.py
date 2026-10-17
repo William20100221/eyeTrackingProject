@@ -16,6 +16,8 @@ the skull, so the iris height measured from them does move with gaze.
 Raw = straight from the face, not yet adjusted for this user. The line
 model (core/line_model.py) turns them into a 3D line from each eye.
 """
+from typing import Sequence
+
 from eyetracking.core.models import FrameResult
 
 # MediaPipe indices. "right" = the person's right eye (left side of the image).
@@ -70,3 +72,16 @@ def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
     down = [(y[R_IRIS] - corners_y[0]) * CORNER_TO_NOSE_CM / ruler,
             (y[L_IRIS] - corners_y[1]) * CORNER_TO_NOSE_CM / ruler]
     return tuple(float(f) for f in eye + head + down)
+
+
+def describe_features(f: Sequence[float]) -> str:
+    """One frame's features in words, for the gaze-data viewer."""
+    rx, lx, ry, ly, yaw, pitch, roll, x, y, z, dr, dl = f
+    return (f"eyes: iris {rx:.0%} across, {ry:.0%} down in the right eye, {lx:.0%} / {ly:.0%} in the left; "
+            f"head: turned {yaw:+.0f}°, nodded {pitch:+.0f}°, tilted {roll:+.0f}°, "
+            f"{z:.0f} cm from the camera ({x:+.0f} cm across, {y:+.0f} cm up)" + f"; iris {dr:+.2f} / {dl:+.2f} cm below the eye corners")
+
+
+def head_degrees(f: Sequence[float]) -> tuple[float, float]:
+    """(yaw, pitch) in degrees: how far the head was turned and nodded."""
+    return f[4], f[5]
