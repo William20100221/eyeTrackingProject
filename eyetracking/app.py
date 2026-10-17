@@ -325,7 +325,7 @@ class App(QObject):
                 return "ollama"
             key = pick_ai() or ""                 # first run: paste a key (remembered)
             if key:
-                self.control.store.setValue("api_key", key)
+                self.control.store_key(key)   # encrypted
                 self.control.key.setText(key)
         provider = self._use_key(key) if key else None
         return forced or provider or "claude"
