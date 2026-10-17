@@ -1,6 +1,6 @@
 """Study Assistant main window: direction 3 ("Toolbar") in PySide6.
 
-Four tabs in the title bar: Chat, Practice, Settings, Calibration. Calibration (and
+Four tabs in the title bar: Chat, Testing, Calibration, Settings. Calibration (and
 check) pages fill the screen with no title bar or buttons, then the window goes
 back to the Chat tab. pick_camera() is the small camera popup used at first start.
 
@@ -27,12 +27,12 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
 from eyetracking.services.storage import (calibration_lines, calibration_usable, file_date, list_calibrations,
-                                          list_readings, reading_text, reading_title, remove_calibration,
+                                          list_readings, reading_messages, reading_title, remove_calibration,
                                           remove_samples)
 
 DEFAULTS = {
@@ -47,6 +47,9 @@ DEFAULTS = {
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 
+PAGE_OF_TAB = {0: 0, 1: 1, 3: 2}          # title-bar tab -> page in the stack (tab 2, Calibration, is full screen)
+TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
+
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
 ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 11 / Windows 10
 
@@ -58,7 +61,7 @@ I_THEME, I_PALETTE, I_BALL, I_LAYERS = "", "", "", ""
 I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
-I_PRACTICE = "\uE7BE"   # Education (graduation cap)
+I_TESTING = "\uE9D9"   # Diagnostic
 I_BACK, I_DELETE = "\uE72B", "\uE74D"
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
@@ -177,21 +180,20 @@ QMenu::item:selected { background: $hover; }
 #sideTitle { font-size: 12px; font-weight: 600; color: $onSurfaceVariant; padding: 8px 12px 4px 12px; }
 QPushButton[kind="nav"] { text-align: left; padding: 0 12px; border-radius: 8px; font-weight: 400; font-size: 14px; }
 QPushButton[kind="nav"]:hover { background: $hover; }
+QPushButton[kind="nav"]:checked, QPushButton[kind="nav"]:checked:hover { background: $selected; color: $onSurface; }
+#lead { font-size: 15px; }
 #sideLabel { font-size: 14px; padding: 6px 12px 2px 12px; }
 QListWidget#sideList { background: transparent; border: none; outline: none; font-size: 13px; }
 QListWidget#sideList::item { padding: 6px 12px 6px 36px; border-radius: 8px; color: $onSurfaceVariant; }
 QListWidget#sideList::item:hover { background: $hover; }
-QListWidget#sideList::item:selected { background: $secondaryContainer; color: $onSecondaryContainer; }
-QPlainTextEdit#textView { background: $surfaceContainerLowest; border: 1px solid $outlineVariant; border-radius: 8px;
-    padding: 8px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px;
-    selection-background-color: $primary; selection-color: $onPrimary; }
+QListWidget#sideList::item:selected { background: $selected; color: $onSurface; }
 #hero { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 32px; font-weight: 600; }
 #heroSub { font-size: 14px; color: $onSurfaceVariant; }
 QLabel#theirs { font-size: 15px; }
 #mine { background: $surfaceContainerHigh; border-radius: 18px; }
 #mine QLabel { font-size: 15px; background: transparent; }
-QPushButton[kind="go"] { background: $primary; color: $onPrimary; min-height: 64px; max-height: 64px;
-    border-radius: 32px; font-size: 17px; }
+QPushButton[kind="go"] { background: $primary; color: $onPrimary; min-height: 56px; max-height: 56px;
+    border-radius: 28px; font-size: 16px; }
 QPushButton[kind="go"]:hover { background: $primaryHover; }
 QPushButton[kind="go"]:pressed { background: $primaryPress; }
 #answerBox { background: $surfaceContainerHigh; border-radius: 28px; }
@@ -216,6 +218,7 @@ def build_qss(c: dict) -> str:
         c,
         hover=rgba(c["onSurface"], .08),
         press=rgba(c["onSurface"], .12),
+        selected=rgba(c["onSurface"], .14),     # the chosen sidebar entry: a darker neutral, not a tint
         primaryHover=mix(c["onPrimary"], c["primary"], .08),
         primaryPress=mix(c["onPrimary"], c["primary"], .12),
         secContainerHover=mix(c["onSecondaryContainer"], c["secondaryContainer"], .08),
@@ -467,29 +470,31 @@ def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
         item.setToolTip(f"{when}\n{name(path)}" if name else when)
         item.setData(Qt.UserRole, str(path))
         lst.addItem(item)
-    if not paths:
-        lst.addItem(QListWidgetItem(empty))   # no path: double-click does nothing
+    if not paths and empty:
+        lst.addItem(QListWidgetItem(empty))   # no path: clicking does nothing
 
 
-def show_text(parent: QWidget, title: str, text: str):
-    """Read-only text in a themed dialog (it takes the window's style sheet)."""
-    dlg = QDialog(parent, Qt.Dialog | Qt.WindowCloseButtonHint)
-    dlg.setObjectName("root")
-    dlg.setAttribute(Qt.WA_StyledBackground)
-    dlg.setWindowTitle(title)
-    dlg.resize(760, 560)
-    v = QVBoxLayout(dlg)
-    v.addWidget(QPlainTextEdit(text, objectName="textView", readOnly=True))
-    dlg.exec()
+def message_widget(text: str, mine: bool) -> QWidget:
+    """One chat message: yours as a bubble, the assistant's as plain text."""
+    text_label = QLabel(text, objectName="theirs")
+    text_label.setWordWrap(True)
+    text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    if not mine:
+        return text_label
+    bubble = QFrame(objectName="mine")
+    QVBoxLayout(bubble).addWidget(text_label)
+    bubble.setMaximumWidth(520)
+    return bubble
 
 
-# ---------------------------------------------------------------- practice page
+# ---------------------------------------------------------------- testing page
 
-class PracticePage(QWidget):
-    """Practice tab: the sample text and the gaze check, plus the saved gaze data
-    (calibrations by date) split into the files this version can train on and the rest."""
+class TestingPage(QWidget):
+    """Testing tab. The sidebar picks a page on the right: what the sample text and
+    the gaze check do (with the button that starts them), or the saved gaze data
+    (calibrations by date, split into the files this version can train on and the rest)."""
 
-    command = Signal(str)          # a sidebar button: "read" | "check"
+    command = Signal(str)          # a start button: "read" | "check"
     data_changed = Signal()        # samples or a file removed: the app retrains the gaze model
 
     def __init__(self):
@@ -503,15 +508,33 @@ class PracticePage(QWidget):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
-        sv.addWidget(label("Practice", "sideTitle"))
-        for glyph, text, cmd in [(I_READ, "Sample text", "read"), (I_EYE, "Gaze check", "check")]:
+        sv.addWidget(label("Testing", "sideTitle"))
+        self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
+        for i, (glyph, text) in enumerate([(I_READ, "Sample text"), (I_EYE, "Gaze check"), (I_LINES, "Gaze data")]):
             b = button(f"{glyph}   {text}", "nav")
-            b.clicked.connect(lambda _=False, c=cmd: self.command.emit(c))
+            b.setCheckable(True)
+            self.side_nav.addButton(b, i)
             sv.addWidget(b)
         sv.addStretch(1)
         h.addWidget(side)
 
-        self.main = QStackedWidget()                     # 0: the two lists, 1: one calibration's detail
+        # 0: sample text, 1: gaze check (what they do + a start button), 2: the data lists, 3: one calibration's detail
+        self.main = QStackedWidget()
+        self.main.addWidget(self._intro(
+            I_READ, "Sample text", "Read a short text while the tracker watches where you look.",
+            ["Each paragraph turns green once your eyes have rested on it long enough: about a tenth of a second per word.",
+             "Press Done, or stare at it, when you finish. The AI then summarises what you skipped and asks you about it, "
+             "in the Chat tab.",
+             "Open .txt loads a text of your own. Esc leaves without the AI part."],
+            "Open the sample text", "read"))
+        self.main.addWidget(self._intro(
+            I_EYE, "Gaze check", "A full-screen test of the gaze model: how accurate is it today?",
+            ["A green dot follows where the model thinks you look. The faint rings are the calibration dots: look at one "
+             "and see where the dot lands.",
+             "Press Enter to record a sample of where you are looking. Samples are numbered on screen (#index  x  y) and "
+             "saved to data/gaze_check_<time>.csv when you leave.",
+             "Space pauses. Esc saves and leaves. It needs a calibration first."],
+            "Start the gaze check", "check"))
         lists = QWidget()
         mv = QVBoxLayout(lists)
         mv.setContentsMargins(24, 20, 24, 24)
@@ -544,7 +567,7 @@ class PracticePage(QWidget):
         dv.setSpacing(8)
         head = QHBoxLayout()
         back = button(f"{I_BACK}  Back", "text")
-        back.clicked.connect(lambda: self.main.setCurrentIndex(0))
+        back.clicked.connect(lambda: self.main.setCurrentIndex(2))
         self.detail_title = label("", "sheetTitle")
         head.addWidget(back)
         head.addWidget(self.detail_title, 1)
@@ -563,6 +586,27 @@ class PracticePage(QWidget):
         self.main.addWidget(detail)
         self.detail_path: Path | None = None
         h.addWidget(self.main, 1)
+        self.side_nav.idClicked.connect(self.main.setCurrentIndex)
+        self.side_nav.button(2).setChecked(True)         # Gaze data first: the overview of what the model learns from
+        self.main.setCurrentIndex(2)
+
+    def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
+        """An instruction page: what the test does, then the button that starts it."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(24, 20, 24, 24)
+        v.setSpacing(12)
+        v.addWidget(label(f"{glyph}   {title}", "sheetTitle"))
+        for i, text in enumerate([lead] + [f"•   {s}" for s in steps]):
+            w = label(text, "lead" if i == 0 else "sheetText")
+            w.setWordWrap(True)
+            v.addWidget(w)
+        go = button(action, "filled")
+        go.clicked.connect(lambda: self.command.emit(cmd))
+        v.addSpacing(8)
+        v.addWidget(go, 0, Qt.AlignLeft)
+        v.addStretch(1)
+        return page
 
     def open_detail(self, path: Path):
         """One calibration in words, in place of the lists."""
@@ -579,7 +623,7 @@ class PracticePage(QWidget):
             removable |= dot is not None
             self.detail.addItem(item)
         self.remove_btn.setVisible(removable)
-        self.main.setCurrentIndex(1)
+        self.main.setCurrentIndex(3)
 
     def remove_selected(self):
         chosen = set()
@@ -593,7 +637,10 @@ class PracticePage(QWidget):
                            and self.detail.item(i).data(Qt.UserRole) is not None}
         if chosen:
             remove_samples(self.detail_path, chosen)
-            self.open_detail(self.detail_path)
+            if self.detail_path.exists():
+                self.open_detail(self.detail_path)
+            else:                                        # the last samples went: so did the file
+                self.main.setCurrentIndex(2)
             self.refresh()
             self.data_changed.emit()
 
@@ -646,14 +693,15 @@ class ChatPage(QWidget):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
-        sv.addWidget(label("History", "sideTitle"))   # past readings (summary + quiz): double-click to read one
-        self.chat_list = side_list(lambda p: show_text(self, reading_title(p), reading_text(p)))
+        sv.addWidget(label("Chats", "sideTitle"))
+        # the live chat first, then past readings (summary + quiz): one click shows it on the right
+        self.chat_list = QListWidget(objectName="sideList")
+        self.chat_list.currentItemChanged.connect(lambda it, _: self._show_chat(it))
         sv.addWidget(self.chat_list, 1)
         h.addWidget(side)
         self.said: list[str] = []                # every message shown this run, newest last
 
         col = QWidget()
-        col.setMaximumWidth(760)
         self.v = v = QVBoxLayout(col)
         v.setContentsMargins(24, 24, 24, 32)
         v.setSpacing(16)
@@ -700,13 +748,48 @@ class ChatPage(QWidget):
         v.addWidget(self.go)
         v.addStretch(1)                                  # 5
 
+        self.archive = QScrollArea()                     # a past reading, read-only, in place of the live chat
+        self.archive.setWidgetResizable(True)
+        self.archive.viewport().setAutoFillBackground(False)
+        self.view = QStackedWidget()                     # 0: the live chat, 1: a past reading
+        self.view.setMaximumWidth(760)
+        self.view.addWidget(col)
+        self.view.addWidget(self.archive)
         h.addStretch(1)
-        h.addWidget(col, 20)
+        h.addWidget(self.view, 20)
         h.addStretch(1)
 
     def refresh(self):
-        """Re-read data/history (a reading is written as the AI answers). Runs whenever the page shows."""
-        fill_list(self.chat_list, list_readings(), "Nothing yet", reading_title)
+        """Re-read data/history (a reading is written once the AI answers). Runs whenever the page shows."""
+        current = self.chat_list.currentItem()
+        chosen = current.data(Qt.UserRole) if current else None
+        self.chat_list.blockSignals(True)
+        fill_list(self.chat_list, list_readings(), "", reading_title)
+        live = QListWidgetItem(f"{I_CHAT}   Today")           # the live chat: no path
+        self.chat_list.insertItem(0, live)
+        rows = [self.chat_list.item(i) for i in range(self.chat_list.count())]
+        self.chat_list.setCurrentItem(next((r for r in rows if r.data(Qt.UserRole) == chosen), live))
+        self.chat_list.blockSignals(False)
+        self._show_chat(self.chat_list.currentItem())
+
+    def _show_chat(self, item):
+        """One click in the sidebar: the live chat, or a past reading on the right."""
+        path = item.data(Qt.UserRole) if item else None
+        if not path:
+            self.view.setCurrentIndex(0)
+            return
+        path = Path(path)
+        host = QWidget(objectName="content")
+        col = QVBoxLayout(host)
+        col.setContentsMargins(24, 24, 32, 32)
+        col.setSpacing(20)
+        col.addWidget(label(reading_title(path), "sheetTitle"))
+        col.addWidget(label(f"{file_date(path):%d %b %Y, %H:%M}", "sheetText"))
+        for text, mine in reading_messages(path):
+            col.addWidget(message_widget(text, mine), 0, Qt.AlignRight if mine else Qt.Alignment())
+        col.addStretch(1)
+        self.archive.setWidget(host)                     # replaces (and frees) the previous one
+        self.view.setCurrentIndex(1)
 
     def showEvent(self, e):
         self.refresh()
@@ -736,21 +819,10 @@ class ChatPage(QWidget):
             self.v.setStretch(0, 0)
             self.v.setStretch(1, 1)
             self.v.setStretch(5, 0)
-        text_label = QLabel(text, objectName="theirs")
-        text_label.setWordWrap(True)
-        text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        if mine:                                         # you: a bubble on the right; the assistant: plain text
-            bubble = QFrame(objectName="mine")
-            QVBoxLayout(bubble).addWidget(text_label)
-            bubble.setMaximumWidth(520)
-            row = QHBoxLayout()
-            row.addStretch(1)
-            row.addWidget(bubble)
-            self.msgs.insertLayout(self.msgs.count() - 1, row)
-        else:
-            self.msgs.insertWidget(self.msgs.count() - 1, text_label)
+        w = message_widget(text, mine)                   # you: a bubble on the right; the assistant: plain text
+        self.msgs.insertWidget(self.msgs.count() - 1, w, 0, Qt.AlignRight if mine else Qt.Alignment())
         QTimer.singleShot(0, self._scroll_to_bottom)
-        return text_label
+        return w.findChild(QLabel) if mine else w
 
     def _scroll_to_bottom(self):
         bar = self.scroll.verticalScrollBar()
@@ -797,9 +869,9 @@ class SettingsWindow(QWidget):
         root.setSpacing(0)
         self.titlebar = self._title_bar()
         root.addWidget(self.titlebar)
-        # pages: 0 = chat, 1 = practice, 2 = settings; a calibration / check page is added while it runs
+        # pages: 0 = chat, 1 = testing, 2 = settings; a calibration / check page is added while it runs
         self.chat = ChatPage()
-        self.practice = PracticePage()
+        self.testing = TestingPage()
         self.settings_page = QWidget()
         sp = QVBoxLayout(self.settings_page)
         sp.setContentsMargins(0, 0, 0, 0)
@@ -812,7 +884,7 @@ class SettingsWindow(QWidget):
         sp.addLayout(body, 1)
         self.pages = QStackedWidget()
         self.pages.addWidget(self.chat)
-        self.pages.addWidget(self.practice)
+        self.pages.addWidget(self.testing)
         self.pages.addWidget(self.settings_page)
         root.addWidget(self.pages, 1)
         self._before_page = None          # (was visible, was maximized) while a full-screen page runs
@@ -842,8 +914,8 @@ class SettingsWindow(QWidget):
         h.addStretch(1)
 
         self.nav = QButtonGroup(self)   # exclusive, so clicking the selected tab can't un-select it
-        for i, (glyph, name) in enumerate([(I_CHAT, "Chat"), (I_PRACTICE, "Practice"), (I_SETTINGS, "Settings"),
-                                           (I_EYE, "Calibration")]):
+        for i, (glyph, name) in enumerate([(I_CHAT, "Chat"), (I_TESTING, "Testing"), (I_EYE, "Calibration"),
+                                           (I_SETTINGS, "Settings")]):
             b = QPushButton(glyph, objectName="settingsBtn")
             b.setCheckable(True)
             b.setToolTip(name)
@@ -854,8 +926,9 @@ class SettingsWindow(QWidget):
             h.addWidget(b)
             h.addSpacing(4)
         self.nav.button(0).setChecked(True)
-        # tabs 0-2 are pages in the stack; Calibration (3) runs full screen instead
-        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 3 else self.pages.setCurrentIndex(i))
+        # Calibration (tab 2) runs full screen; the other tabs are pages in the stack
+        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 2
+                                   else self.pages.setCurrentIndex(PAGE_OF_TAB[i]))
         h.addSpacing(4)
 
         caps = QWidget(objectName="caps")
@@ -1116,9 +1189,9 @@ class SettingsWindow(QWidget):
             self.showNormal()
 
     def show_page(self, page: QWidget):
-        """Bring the window up on `page` (self.chat, self.practice or self.settings_page)."""
+        """Bring the window up on `page` (self.chat, self.testing or self.settings_page)."""
         self.pages.setCurrentWidget(page)
-        self.nav.button(self.pages.currentIndex()).setChecked(True)
+        self.nav.button(TAB_OF_PAGE[self.pages.currentIndex()]).setChecked(True)
         if not self.isVisible() or self.isMinimized():
             self.showNormal()
         self.raise_()
