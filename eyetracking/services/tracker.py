@@ -20,15 +20,12 @@ from eyetracking.services.landmarker import FaceLandmarker
 # moment, which throws the iris-between-the-lids numbers off
 # ponytail: counted in frames (~150 ms at 20 fps), not time; fine while the frame rate is steady
 BLINK_RECOVERY_FRAMES = 3
-LONG_BLINK_MS = 300       # eyes shut this long = on purpose (a natural blink is ~100-150 ms)
 
 
 class EyeTracker:
     def __init__(self, camera_index: int | None = None) -> None:
         self.face_found = False              # set by read_features(); a blink still counts as a face
         self._recovering = 0                 # frames left to skip after a blink
-        self._closed_ms: int | None = None   # when the current blink started
-        self._long_blink = False             # a deliberate blink ended: see blinked()
         self._camera = Camera(camera_index)  # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
@@ -56,26 +53,13 @@ class EyeTracker:
         self.face_found = result is not None and result.face_found
         if not self.face_found:
             return None
-        t, blinking = result.timestamp_ms, is_blinking(result)
-        if blinking and self._closed_ms is None:
-            self._closed_ms = t                       # the lids closed on this frame
-        elif not blinking and self._closed_ms is not None:
-            if t - self._closed_ms >= LONG_BLINK_MS:  # held shut on purpose: see blinked()
-                self._long_blink = True
-            self._closed_ms = None
-        if blinking:
+        if is_blinking(result):
             self._recovering = BLINK_RECOVERY_FRAMES
             return None
         if self._recovering:                     # eyes just reopened: not trusted yet
             self._recovering -= 1
             return None
         return gaze_features(result)
-
-    def blinked(self) -> bool:
-        """True once after each deliberate blink (eyes shut LONG_BLINK_MS or more),
-        on the frame they reopen. The gaze check records a sample on it."""
-        flag, self._long_blink = self._long_blink, False
-        return flag
 
     def close(self) -> None:
         self._landmarker.close()
