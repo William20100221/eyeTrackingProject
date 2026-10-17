@@ -20,8 +20,8 @@ from PySide6.QtWidgets import QApplication
 import eyetracking.ui.control_window as cw
 
 cw.QSettings = lambda *_: QSettings(str(Path(tempfile.mkdtemp()) / "settings.ini"), QSettings.IniFormat)
-cw.save_chat = lambda path, messages: None               # no history files from a test
 import eyetracking.app as appmod
+appmod.save_reading = lambda path, record: None          # no history files from a test
 from eyetracking.core.reading import FIXATION_S, Line
 
 qt = QApplication([])
@@ -96,10 +96,11 @@ pump()
 assert not app.ball.eyes_open and not app.ball.locked and app.control.isVisible() and app.reader is None
 assert not app.debug.isVisible()
 n = len(LINES[0].text.split())
-assert any(f"you read {n} of" in m["text"] for m in app.panel.history), app.panel.history
+assert any(f"you read {n} of" in m for m in app.panel.said), app.panel.said
 wait(lambda: asked)
 assert asked[0][2] == "unread" and asked[0][1].split() == LINES[0].text.split()
-wait(lambda: app.panel.history[-1]["text"] == "SUMMARY")
+wait(lambda: app.panel.said[-1] == "SUMMARY")
+assert app.record["summary"] == "SUMMARY" and app.record["title"] == "The water cycle moves heat around"
 
 # 5. a reading where nothing was read, ended by "Open assistant" from the menu
 app.panel.go.click()
@@ -109,5 +110,5 @@ assert app.reader is not None and app.ball.locked
 app.ball.open_requested.emit()
 pump()
 assert app.reader is None and not app.ball.locked and app.control.isVisible()
-assert "didn't see you read" in app.panel.history[-1]["text"]
+assert "didn't see you read" in app.panel.said[-1]
 print("go reading ok")
