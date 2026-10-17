@@ -50,10 +50,13 @@ from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (KEY_ENV, MODELS, grade_answer, key_from_environment, make_questions,
                                              ollama_model, provider_for_key, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
-from eyetracking.services.storage import load_all_calibrations, new_reading_path, save_calibration, save_reading
+from eyetracking.services.storage import (load_all_calibrations, migrate_layout, new_reading_path, save_blink_scores,
+                                          save_calibration, save_reading)
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, GazeCursor
+from eyetracking.core.blink_scores import advice as blink_advice
+from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
 from eyetracking.ui.control_window import TEXT_FONTS, SettingsWindow, pick_ai, pick_camera
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
@@ -237,12 +240,13 @@ class App(QObject):
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
-        self.control.testing.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
+        self.control.testing.command.connect(lambda c: {"read": self.read, "check": self.check, "blink": self.blink_test}[c]())
         self.control.testing.data_changed.connect(self._retrain)
         self.panel.go_reading.connect(self.go_reading)
         self.ball.clicked.connect(self.ball_clicked)
+        self.ball.double_clicked.connect(self.toggle_reading)
         self.control.shown.connect(lambda up: setattr(self.ball, "window_open", up))   # issue #12
-        self.ball.open_requested.connect(lambda: self._show_window(self.panel))
+        self.ball.open_requested.connect(lambda: self._show_window(None))
         self.ball.menu_actions = [("Settings", self.open_settings)]
         # reading from the screen: see go_reading()
         self.reader: ReadingTracker | None = None   # set while the ball's eyes are open
@@ -258,6 +262,7 @@ class App(QObject):
         self.tracker = None                       # opened by _use_camera(), only while needed (issue #11)
         self.camera_users: set[str] = set()       # what needs the gaze right now
         self.camera = settings["camera"]
+        migrate_layout()                          # files from older versions, loose in data/, go into their folders
         self.model = self._load_model()
         self.smoothed: tuple[float, float] | None = None
         self.fullscreen: QWidget | None = None   # calibration / check page, while open
@@ -275,7 +280,7 @@ class App(QObject):
         self.timer.start(TICK_MS)
 
         self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
-        self.control.show_page(self.panel)
+        self.control.show_last()
 
     # ---- settings + camera -------------------------------------------
     def _camera_index(self) -> int:
@@ -472,18 +477,31 @@ class App(QObject):
 
     def ball_clicked(self) -> None:
         if not self.ball.locked:
-            self._show_window(self.panel)
+            self._show_window(None)               # where it was left
         elif self.reader is None:
             self.start_reading()
         else:
             self.stop_reading()
 
-    def _show_window(self, page: QWidget) -> None:
-        """The window coming back ends a reading (with its summary) and unlocks the ball."""
+    def toggle_reading(self) -> None:
+        """Double-click on the ball: record what you read (as Go Reading + a click would), or stop."""
+        if self.reader is not None:
+            self.stop_reading()
+            return
+        if not self.ball.locked:
+            self.go_reading()
+        self.start_reading()
+
+    def _show_window(self, page: QWidget | None) -> None:
+        """The window coming back ends a reading (with its summary) and unlocks the ball.
+        page None: the page it was left on."""
         if self.reader is not None:
             self.stop_reading()
         self.ball.set_locked(False)
-        self.control.show_page(page)
+        if page is None:
+            self.control.show_last()
+        else:
+            self.control.show_page(page)
 
     def start_reading(self) -> None:
         if not self._use_camera("screen"):
@@ -585,7 +603,7 @@ class App(QObject):
 
     def _fullscreen_closed(self) -> None:
         self.fullscreen = None
-        self._release_camera("calibration", "check")
+        self._release_camera("calibration", "check", "blink")
         self.ball.setVisible(self.show_ball)
         self.clock.restart()
         self.timer.start(TICK_MS)
@@ -630,8 +648,32 @@ class App(QObject):
         if not self._use_camera("check"):
             return
         window = GazeWindow(get_point=get)
-        window.logged.connect(lambda path: self.panel.reply(f"Gaze samples saved: {Path(path).name}"))
+        window.logged.connect(self._gaze_logged)
         self._open_fullscreen(window)
+
+    def _gaze_logged(self, path: str) -> None:
+        self.control.testing.refresh()            # Data > Gaze checks lists it
+        self.panel.reply(f"Gaze samples saved: {Path(path).name}. See Testing > Data > Gaze checks.")
+
+    def blink_test(self) -> None:
+        """Testing > Blink test: record blink scores in six eye states, saved under data/blink_scores."""
+        if not self._use_camera("blink"):
+            return
+        if self.mouse:
+            get = fake_scores_from_mouse
+        else:
+            def get():
+                r = self.tracker.read()
+                return (r.blink_score_left, r.blink_score_right) if r is not None and r.face_found else None
+        window = BlinkWindow(get_scores=get)
+        window.finished.connect(lambda rows: self._blink_done(window, rows))
+        self._open_fullscreen(window)
+
+    def _blink_done(self, window: BlinkWindow, rows: list) -> None:
+        QTimer.singleShot(800, window.close)      # show "done" briefly
+        path = save_blink_scores(rows)
+        self.control.testing.refresh()
+        self.panel.reply(f"Blink scores saved to {path.name}. {blink_advice(rows)}")
 
     def read(self) -> None:
         if self.model is None and not self.mouse:
