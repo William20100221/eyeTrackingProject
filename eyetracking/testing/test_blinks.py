@@ -23,6 +23,7 @@ def frame(blink: float) -> FrameResult:
 seq = [0.1, 0.1, 0.9, 0.9] + [0.1] * (BLINK_RECOVERY_FRAMES + 2)
 t = EyeTracker.__new__(EyeTracker)                       # no camera: feed frames by hand
 t.face_found, t._recovering = False, 0
+t._closed_ms, t._long_blink = None, False
 frames = iter(seq)
 t.read = lambda: frame(next(frames))
 got = [t.read_features() is not None for _ in seq]

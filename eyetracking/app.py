@@ -537,7 +537,7 @@ class App(QObject):
         else:
             def get():
                 return self.predict(self.tracker.read_features())
-        window = GazeWindow(get_point=get)
+        window = GazeWindow(get_point=get, get_blink=None if self.mouse else self.tracker.blinked)   # mouse mode: click
         window.logged.connect(lambda path: self.panel.reply(f"Gaze samples saved: {Path(path).name}"))
         self._open_fullscreen(window)
 
