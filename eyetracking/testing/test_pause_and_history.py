@@ -6,6 +6,7 @@ Self-check (no webcam):  python -m eyetracking.testing.test_pause_and_history
    Esc leaves at any time
 2. Gaze data: usable or not (format + feature count); disable / enable (data/disabled/); a calibration in words, per dot;
    removing samples or the whole file (the original kept in data/trash), "#n came from dot (c, r) of the 5x5 grid"
+4. One folder per kind of data, older files moved in; gaze-check and blink-score files in words
 3. History: a reading's AI results (summary, questions, answers, scores) are saved and listed
 """
 import os
@@ -24,7 +25,9 @@ from eyetracking.ui.calibration_window import CalibrationWindow
 
 qt = QApplication([])
 tmp = Path(tempfile.mkdtemp())
-storage.DATA_DIR, storage.HISTORY_DIR = tmp, tmp / "history"     # never touch the real data/
+storage.DATA_DIR = tmp                                           # never touch the real data/
+storage.CALIB_DIR, storage.DISABLED_DIR, storage.TRASH_DIR = tmp / "calibrations", tmp / "calibrations/disabled", tmp / "calibrations/trash"
+storage.GAZE_CHECK_DIR, storage.BLINK_DIR, storage.HISTORY_DIR = tmp / "gaze_checks", tmp / "blink_scores", tmp / "history"
 
 
 def key(window, k):
@@ -55,10 +58,9 @@ path = storage.save_calibration([CalibrationSample((0.1, 0.2) + (0.0,) * (N_FEAT
 text = storage.calibration_text(path)
 assert "dot (2, 1) of the 5x5 grid: 2 samples" in text and "#2: eyes: iris 10% across" in text, text
 assert storage.list_calibrations() == [path] and storage.calibration_usable(path)
-broken = tmp / "calibration_2026-01-01_000000.json"
+broken = storage.CALIB_DIR / "calibration_2026-01-01_000000.json"
 broken.write_text("{}")
 assert "Can't show this file" in storage.calibration_text(broken) and not storage.calibration_usable(broken)
-storage.DISABLED_DIR = tmp / "disabled"                         # disabling: kept, but out of training
 off = storage.set_calibration_enabled(path, False)
 assert storage.list_calibrations() == [broken] and storage.list_disabled() == [off] and storage.calibration_usable(off)
 from eyetracking.ui.control_window import TestingPage
@@ -71,9 +73,8 @@ page.data_changed.connect(lambda: retrained.append(True))
 page.set_enabled(off, True)                                     # Enable: back in data/, the model retrains
 assert storage.list_calibrations() == [path, broken] and storage.list_disabled() == [] and retrained
 assert page.active_list.item(0).data(0x0100) == str(path) and page.disabled_list.item(0).data(0x0100) is None
-storage.TRASH_DIR = tmp / "trash"                               # removing: the original goes to trash first
 assert storage.remove_samples(path, {0}) == 1 and "1 sample," in storage.calibration_text(path)
-assert (tmp / "trash" / path.name).exists()
+assert (storage.TRASH_DIR / path.name).exists()
 storage.remove_calibration(path)
 assert storage.list_calibrations() == [broken] and not path.exists()
 
@@ -92,4 +93,21 @@ try:                                                            # an empty calib
 except ValueError:
     pass
 assert storage.list_calibrations() == [broken]
+# ---- 4. one folder per kind of data; older loose files are moved in; csv files in words
+loose = tmp / "gaze_check_2026-01-02_000000.csv"
+loose.write_text("index,x,y\n0,0.5,0.5\n")
+assert storage.migrate_layout() == 1 and storage.list_gaze_checks() == [storage.GAZE_CHECK_DIR / loose.name] and not loose.exists()
+assert storage.file_date(loose).day == 2
+check = storage.save_gaze_check([(0, 0.05, 0.05), (1, 0.5, 0.52)])
+words = storage.gaze_check_lines(check)
+assert words[0].startswith("Gaze check of") and "2 samples" in words[0], words[0]
+assert words[2] == "#0: 5% across, 5% down; nearest calibration dot (1, 1), 0% of the screen away", words
+assert words[3] == "#1: 50% across, 52% down; nearest calibration dot (3, 3), 2% of the screen away", words
+rows = [("open", 0, 0.05, 0.06), ("open", 33, 0.07, 0.05), ("down", 66, 0.2, 0.21), ("closed", 99, 0.8, 0.85),
+        ("closed", 132, 0.9, 0.88), ("wink_left", 165, 0.9, 0.1)]
+blink = storage.save_blink_scores(rows)
+assert storage.load_blink_scores(blink) == rows and storage.list_blink_scores() == [blink]
+words = storage.blink_score_lines(blink)
+assert "Closed eyes score at least 0.8" in words[-1] and "never pass 0.21" in words[-1] and "wink" in words[-1], words[-1]
+assert storage.trash_file(blink) == storage.BLINK_DIR / "trash" / blink.name and storage.list_blink_scores() == []
 print("pause, gaze data and history ok")

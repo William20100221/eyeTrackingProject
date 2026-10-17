@@ -32,7 +32,9 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
 
 from eyetracking.services.camera import camera_names
 from eyetracking.services.secret_store import PREFIX, protect, unprotect
-from eyetracking.services.storage import (calibration_lines, calibration_usable, file_date, list_calibrations,
+from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
+                                          gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
+                                          trash_file,
                                           list_disabled, set_calibration_enabled,
                                           list_readings, reading_messages, reading_title, remove_calibration,
                                           remove_samples)
@@ -64,6 +66,7 @@ I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
 I_TESTING = "\uE9D9"   # Diagnostic
+I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
 I_BACK, I_DELETE = "\uE72B", "\uE74D"
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
@@ -189,6 +192,9 @@ QListWidget#sideList { background: transparent; border: none; outline: none; fon
 QListWidget#sideList::item { padding: 6px 12px 6px 36px; border-radius: 8px; color: $onSurfaceVariant; }
 QListWidget#sideList::item:hover { background: $hover; }
 QListWidget#sideList::item:selected { background: $selected; color: $onSurface; }
+QListWidget#linesList { background: transparent; border: none; outline: none; font-size: 14px; }
+QListWidget#linesList::item { padding: 4px 12px; color: $onSurface; }
+QListWidget#linesList::item:selected { background: $selected; }
 #hero { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 32px; font-weight: 600; }
 #heroSub { font-size: 14px; color: $onSurfaceVariant; }
 QLabel#theirs { font-size: 15px; }
@@ -496,14 +502,69 @@ def message_widget(text: str, mine: bool) -> tuple[QWidget, QLabel]:
     return row, text_label
 
 
+class DataPage(QWidget):
+    """One kind of recorded data: the files by date on the left, the chosen one in
+    words on the right. Right-click a file to remove it (it moves to a trash folder
+    beside it)."""
+
+    def __init__(self, title: str, hint: str, list_files, to_lines, empty: str):
+        super().__init__()
+        self._list, self._lines, self._empty = list_files, to_lines, empty
+        h = QHBoxLayout(self)
+        h.setContentsMargins(24, 20, 24, 24)
+        h.setSpacing(24)
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        left.addWidget(label(title, "sheetTitle"))
+        text = label(hint, "sheetText")
+        text.setWordWrap(True)
+        left.addWidget(text)
+        self.files = QListWidget(objectName="sideList")
+        self.files.currentItemChanged.connect(lambda it, _: self._show(it))
+        self.files.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.files.customContextMenuRequested.connect(self._menu)
+        left.addWidget(self.files, 1)
+        col = QWidget()
+        col.setLayout(left)
+        col.setFixedWidth(320)
+        h.addWidget(col)
+        self.lines = QListWidget(objectName="linesList")
+        self.lines.setWordWrap(True)
+        self.lines.setSelectionMode(QListWidget.NoSelection)
+        h.addWidget(self.lines, 1)
+
+    def refresh(self):
+        self.files.blockSignals(True)
+        fill_list(self.files, self._list(), self._empty)
+        self.files.blockSignals(False)
+        self.files.setCurrentRow(0)
+        self._show(self.files.currentItem())
+
+    def _show(self, item):
+        self.lines.clear()
+        if item is not None and item.data(Qt.UserRole):
+            for line in self._lines(Path(item.data(Qt.UserRole))):
+                self.lines.addItem(QListWidgetItem(line))
+
+    def _menu(self, pos):
+        item = self.files.itemAt(pos)
+        if item is None or not item.data(Qt.UserRole):
+            return
+        path = Path(item.data(Qt.UserRole))
+        menu = QMenu(self.files)
+        menu.addAction(f"{I_DELETE}  Remove", lambda: (trash_file(path), self.refresh()))
+        menu.exec(self.files.mapToGlobal(pos))
+
+
 # ---------------------------------------------------------------- testing page
 
 class TestingPage(QWidget):
-    """Testing tab. The sidebar picks a page on the right: what the sample text and
-    the gaze check do (with the button that starts them), or the saved gaze data
-    (calibrations by date, split into the files this version can train on and the rest)."""
+    """Testing tab. The sidebar picks a page on the right. Tests: what the sample text,
+    the gaze check and the blink test do, with the button that starts them. Data: the
+    calibrations (active / non-active / not usable), the gaze checks and the blink
+    scores, each by date and readable in words."""
 
-    command = Signal(str)          # a start button: "read" | "check"
+    command = Signal(str)          # a start button: "read" | "check" | "blink"
     data_changed = Signal()        # samples or a file removed: the app retrains the gaze model
 
     def __init__(self):
@@ -517,17 +578,24 @@ class TestingPage(QWidget):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
-        sv.addWidget(label("Testing", "sideTitle"))
         self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
-        for i, (glyph, text) in enumerate([(I_READ, "Sample text"), (I_EYE, "Gaze check"), (I_LINES, "Gaze data")]):
-            b = button(f"{glyph}   {text}", "nav")
-            b.setCheckable(True)
-            self.side_nav.addButton(b, i)
-            sv.addWidget(b)
+        sections = [("Tests", [(I_READ, "Sample text"), (I_EYE, "Gaze check"), (I_BLINK, "Blink test")]),
+                    ("Data", [(I_LINES, "Calibrations"), (I_CHART, "Gaze checks"), (I_BLINK, "Blink scores")])]
+        i = 0
+        for section, items in sections:
+            sv.addWidget(label(section, "sideTitle"))
+            for glyph, text in items:
+                b = button(f"{glyph}   {text}", "nav")
+                b.setCheckable(True)
+                self.side_nav.addButton(b, i)                # its id = the page index on the right
+                sv.addWidget(b)
+                i += 1
+            sv.addSpacing(8)
         sv.addStretch(1)
         h.addWidget(side)
 
-        # 0: sample text, 1: gaze check (what they do + a start button), 2: the data lists, 3: one calibration's detail
+        # 0-2: the tests (what they do + a start button); 3: calibrations; 4: gaze checks; 5: blink scores;
+        # 6: one calibration's detail (from 3)
         self.main = QStackedWidget()
         self.main.addWidget(self._intro(
             I_READ, "Sample text", "Read a short text while the tracker watches where you look.",
@@ -544,11 +612,22 @@ class TestingPage(QWidget):
              "saved to data/gaze_check_<time>.csv when you leave.",
              "Space pauses. Esc saves and leaves. It needs a calibration first."],
             "Start the gaze check", "check"))
+        self.main.addWidget(self._intro(
+            I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off can be set from "
+            "your own numbers instead of a guess.",
+            ["A blink score is a number MediaPipe gives for each eye every frame: 0 = wide open, 1 = shut. The app uses "
+             "it to skip frames where the eyes are closing or closed: calibration doesn't record them, and the live gaze "
+             "holds its last point instead of jumping when the iris disappears behind the lid.",
+             "Today the cut-off is a guess: 0.50 on both eyes. The test asks you to keep your eyes open, look down, "
+             "squint, close them, and wink each eye, 6 seconds each after a 3-second countdown, and records the scores.",
+             "The result is listed under Data > Blink scores, in words, with the cut-off it suggests. Space starts, "
+             "Esc leaves."],
+            "Start the blink test", "blink"))
         lists = QWidget()
         mv = QVBoxLayout(lists)
         mv.setContentsMargins(24, 20, 24, 24)
         mv.setSpacing(8)
-        mv.addWidget(label("Gaze data", "sheetTitle"))
+        mv.addWidget(label("Calibrations", "sheetTitle"))
         hint = label("Saved calibrations by date. Double-click one to read it in words. Right-click to disable it "
                      "(it is kept, but stops training the gaze model), enable it again, or remove it. "
                      "Only the active ones train the gaze model.", "sheetText")
@@ -579,7 +658,7 @@ class TestingPage(QWidget):
         dv.setSpacing(8)
         head = QHBoxLayout()
         back = button(f"{I_BACK}  Back", "text")
-        back.clicked.connect(lambda: self.main.setCurrentIndex(2))
+        back.clicked.connect(lambda: self.main.setCurrentIndex(3))
         self.detail_title = label("", "sheetTitle")
         head.addWidget(back)
         head.addWidget(self.detail_title, 1)
@@ -588,19 +667,32 @@ class TestingPage(QWidget):
                      "the gaze model retrained. The untouched original stays in data/trash.", "sheetText")
         hint.setWordWrap(True)
         dv.addWidget(hint)
-        self.detail = QListWidget(objectName="sideList")
+        self.detail = QListWidget(objectName="linesList")
         self.detail.setSelectionMode(QListWidget.ExtendedSelection)
         self.detail.setWordWrap(True)                    # a sample's words are long
         dv.addWidget(self.detail, 1)
         self.remove_btn = button(f"{I_DELETE}  Remove selected", "outlined")
         self.remove_btn.clicked.connect(self.remove_selected)
         dv.addWidget(self.remove_btn, 0, Qt.AlignLeft)
+        self.gaze_checks = DataPage(
+            "Gaze checks", "Each gaze check's samples (recorded with Enter), with the nearest calibration dot and how "
+            "far off it was. Right-click a file to remove it.", list_gaze_checks, gaze_check_lines, "No gaze check yet")
+        self.blink_scores = DataPage(
+            "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
+            "file to remove it.", list_blink_scores, blink_score_lines, "No blink test yet")
+        self.main.addWidget(self.gaze_checks)
+        self.main.addWidget(self.blink_scores)
         self.main.addWidget(detail)
         self.detail_path: Path | None = None
         h.addWidget(self.main, 1)
         self.side_nav.idClicked.connect(self.main.setCurrentIndex)
-        self.side_nav.button(2).setChecked(True)         # Gaze data first: the overview of what the model learns from
-        self.main.setCurrentIndex(2)
+        self.show_page(3)                                # Calibrations first: what the model learns from
+
+    def show_page(self, i: int):
+        """Open sidebar entry `i` (0-5; the calibration detail, 6, opens as its list)."""
+        i = 3 if i == 6 else max(0, min(i, 5))
+        self.side_nav.button(i).setChecked(True)
+        self.main.setCurrentIndex(i)
 
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
         """An instruction page: what the test does, then the button that starts it."""
@@ -635,7 +727,7 @@ class TestingPage(QWidget):
             removable |= dot is not None
             self.detail.addItem(item)
         self.remove_btn.setVisible(removable)
-        self.main.setCurrentIndex(3)
+        self.main.setCurrentIndex(6)
 
     def remove_selected(self):
         chosen = set()
@@ -652,7 +744,7 @@ class TestingPage(QWidget):
             if self.detail_path.exists():
                 self.open_detail(self.detail_path)
             else:                                        # the last samples went: so did the file
-                self.main.setCurrentIndex(2)
+                self.main.setCurrentIndex(3)
             self.refresh()
             self.data_changed.emit()
 
@@ -690,6 +782,8 @@ class TestingPage(QWidget):
         fill_list(self.active_list, [p for p, ok in usable.items() if ok], "None active: enable one, or calibrate")
         fill_list(self.disabled_list, list_disabled(), "None")
         fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
+        self.gaze_checks.refresh()
+        self.blink_scores.refresh()
 
     def showEvent(self, e):
         self.refresh()
@@ -922,6 +1016,9 @@ class SettingsWindow(QWidget):
         self._grip = G
 
         self.load(self.read_store())
+        # the window reopens where it was left (page, and the Testing entry); an AI answer still opens the chat
+        self.pages.currentChanged.connect(lambda i: i < 3 and self.store.setValue("last_page", i))
+        self.testing.side_nav.idClicked.connect(lambda i: self.store.setValue("testing_page", i))
         QGuiApplication.styleHints().colorSchemeChanged.connect(lambda _: self.apply_theme())
 
     # ----- layout pieces
@@ -1235,6 +1332,12 @@ class SettingsWindow(QWidget):
             self.showMaximized()
         else:
             self.showNormal()
+
+    def show_last(self):
+        """Bring the window up where it was left: the same page, and the same Testing entry."""
+        page = self.pages.widget(max(0, min(self.store.value("last_page", 0, type=int), 2)))
+        self.testing.show_page(self.store.value("testing_page", 3, type=int))
+        self.show_page(page)
 
     def show_page(self, page: QWidget):
         """Bring the window up on `page` (self.chat, self.testing or self.settings_page)."""

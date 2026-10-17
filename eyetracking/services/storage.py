@@ -3,7 +3,7 @@ Save and load calibration samples as JSON, so one calibration can be reused
 for many model experiments without sitting through the dots again.
 
 Files go in <project root>/data, named by date and time, e.g.
-    data/calibration_2026-09-29_140312.json
+    data/calibrations/calibration_2026-09-29_140312.json
 
 File format (FORMAT below): {"format": "gaze-calibration-v1", "saved_at": ...,
 "samples": [{"features": [...10], "target_x": .., "target_y": ..}, ...]}.
@@ -13,26 +13,53 @@ A file in any other format (the 3-step branches write v2 / v3) is not loaded.
 """
 from __future__ import annotations
 
+import csv
 import json
+import math
 import shutil
 import statistics
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from eyetracking.core.calibration import describe_target
+from eyetracking.core import blink_scores
+from eyetracking.core.calibration import describe_target, grid_positions
 from eyetracking.core.features import N_FEATURES, describe_features, head_degrees
 from eyetracking.core.models import CalibrationSample
 from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"            # the date-time part of every file name
-HISTORY_DIR = DATA_DIR / "history"   # the AI's summary + quiz, one file per reading
+# ---- the layout of data/: one folder per kind of data -----------------------
+CALIB_DIR = DATA_DIR / "calibrations"       # what the gaze model learns from
+DISABLED_DIR = CALIB_DIR / "disabled"       # kept, but turned off by the user
+TRASH_DIR = CALIB_DIR / "trash"             # removed files, and the originals of edited ones
+GAZE_CHECK_DIR = DATA_DIR / "gaze_checks"   # samples recorded in the gaze check (csv)
+BLINK_DIR = DATA_DIR / "blink_scores"       # blink scores per eye state, from the blink test (csv)
+HISTORY_DIR = DATA_DIR / "history"          # the AI's summary + quiz, one file per reading
+
+
+def migrate_layout() -> int:
+    """Files from before Oct 2026 sat loose in data/ (and data/disabled, data/trash):
+    move them into their folders. Returns how many moved. Safe to call at every start."""
+    moves = [(DATA_DIR, "calibration_*.json", CALIB_DIR), (DATA_DIR / "disabled", "calibration_*.json", DISABLED_DIR),
+             (DATA_DIR / "trash", "calibration_*.json", TRASH_DIR), (DATA_DIR, "gaze_check_*.csv", GAZE_CHECK_DIR),
+             (DATA_DIR, "blink_scores_*.csv", BLINK_DIR)]
+    n = 0
+    for folder, pattern, target in moves:
+        for path in list(folder.glob(pattern)) if folder != target else []:
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(target / path.name))
+            n += 1
+    for folder in (DATA_DIR / "disabled", DATA_DIR / "trash"):
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+    return n
 FORMAT = "gaze-calibration-v1"
 
 
 def file_date(path: Path) -> datetime:
-    """calibration_2026-09-29_140312.json -> 29 Sep 2026 14:03:12"""
-    return datetime.strptime(path.stem.split("_", 1)[1], STAMP)
+    """calibration_2026-09-29_140312.json -> 29 Sep 2026 14:03:12 (any of the dated file names)"""
+    return datetime.strptime(path.stem[-17:], STAMP)
 
 
 def save_calibration(samples: list[CalibrationSample], path: Path | None = None) -> Path:
@@ -42,7 +69,7 @@ def save_calibration(samples: list[CalibrationSample], path: Path | None = None)
         raise ValueError("no samples: nothing worth saving")
     now = datetime.now()
     if path is None:
-        path = DATA_DIR / f"calibration_{now:{STAMP}}.json"
+        path = CALIB_DIR / f"calibration_{now:{STAMP}}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
@@ -75,7 +102,7 @@ def load_all_calibrations(n_features: int, older_weight: float = 0.5
     Files with a different feature count (an older version) are skipped."""
     # ponytail: every older file weighs the same; decay by age/date if old sessions start to hurt
     samples, weights = [], []
-    for path in sorted(DATA_DIR.glob("calibration_*.json"), reverse=True):
+    for path in sorted(CALIB_DIR.glob("calibration_*.json"), reverse=True):
         try:
             found = load_calibration(path)
         except (OSError, ValueError, KeyError, TypeError) as e:   # damaged or hand-edited file
@@ -91,13 +118,12 @@ def load_all_calibrations(n_features: int, older_weight: float = 0.5
 
 def list_calibrations() -> list[Path]:
     """Every calibration file in data/ (the ones that can train the model), newest first."""
-    return sorted(DATA_DIR.glob("calibration_*.json"), reverse=True)
+    return sorted(CALIB_DIR.glob("calibration_*.json"), reverse=True)
 
 
 # ---- disabled: works, but the user turned it off --------------------------
 # Kept in data/disabled/. Training only reads data/calibration_*.json, so a file
 # there is left out without any check in the training code; enabling moves it back.
-DISABLED_DIR = DATA_DIR / "disabled"
 
 
 def list_disabled() -> list[Path]:
@@ -108,7 +134,7 @@ def list_disabled() -> list[Path]:
 def set_calibration_enabled(path: Path, enabled: bool) -> Path:
     """Move a calibration between data/ (trains the model) and data/disabled/ (kept, doesn't).
     Returns its new path."""
-    folder = DATA_DIR if enabled else DISABLED_DIR
+    folder = CALIB_DIR if enabled else DISABLED_DIR
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / path.name
     if target != path:
@@ -182,7 +208,6 @@ def calibration_text(path: Path) -> str:
 
 
 # ---- removing: the untouched original always stays in data/trash/ ------------
-TRASH_DIR = DATA_DIR / "trash"
 
 
 def keep_original(path: Path) -> None:
@@ -266,5 +291,90 @@ def reading_messages(path: Path) -> list[tuple[str, bool]]:
 def latest_calibration() -> Path | None:
     """Newest saved file, or None if nothing has been saved yet.
     Works because the date-time names sort in time order."""
-    files = sorted(DATA_DIR.glob("calibration_*.json"))
+    files = sorted(CALIB_DIR.glob("calibration_*.json"))
     return files[-1] if files else None
+
+
+# ---- gaze checks: the samples recorded with Enter ----------------------------
+def save_gaze_check(samples: list[tuple[int, float, float]], folder: Path | None = None) -> Path:
+    """(index, x, y) rows -> data/gaze_checks/gaze_check_<time>.csv. Returns the path."""
+    folder = folder or GAZE_CHECK_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"gaze_check_{datetime.now():{STAMP}}.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["index", "x", "y"])
+        w.writerows((i, f"{x:.4f}", f"{y:.4f}") for i, x, y in samples)
+    return path
+
+
+def list_gaze_checks() -> list[Path]:
+    return sorted(GAZE_CHECK_DIR.glob("gaze_check_*.csv"), reverse=True)
+
+
+def _nearest_dot(x: float, y: float) -> tuple[int, int, float]:
+    """(column, row) of the closest calibration dot, counted from the top left, and how far it is
+    (as a fraction of the screen)."""
+    positions = grid_positions()
+    col = min(range(len(positions)), key=lambda i: abs(positions[i] - x))
+    row = min(range(len(positions)), key=lambda i: abs(positions[i] - y))
+    return col + 1, row + 1, math.hypot(positions[col] - x, positions[row] - y)
+
+
+def gaze_check_lines(path: Path) -> list[str]:
+    """A gaze check in words: one line per sample, with the nearest calibration dot and the distance."""
+    try:
+        with open(path, newline="") as f:
+            rows = [(int(i), float(x), float(y)) for i, x, y in list(csv.reader(f))[1:]]
+    except (OSError, ValueError) as e:
+        return [f"Can't read {path.name} ({e})."]
+    near = [_nearest_dot(x, y) for _, x, y in rows]
+    average = sum(d for _, _, d in near) / len(near) if near else 0.0
+    spacing = grid_positions()[1] - grid_positions()[0]
+    lines = [f"Gaze check of {file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples. If you were looking at the "
+             f"rings, the average distance to the nearest calibration dot is the error: {average:.0%} of the screen "
+             f"(the dots are {spacing:.1%} apart).", ""]
+    for (i, x, y), (col, row, d) in zip(rows, near):
+        lines.append(f"#{i}: {x:.0%} across, {y:.0%} down; nearest calibration dot ({col}, {row}), {d:.0%} of the screen away")
+    return lines
+
+
+# ---- blink scores: from the blink test ---------------------------------------
+def save_blink_scores(rows: list[blink_scores.Row], folder: Path | None = None) -> Path:
+    """(state, ms, left, right) rows -> data/blink_scores/blink_scores_<time>.csv."""
+    folder = folder or BLINK_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"blink_scores_{datetime.now():{STAMP}}.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["state", "t_ms", "left", "right"])
+        w.writerows((state, ms, f"{left:.4f}", f"{right:.4f}") for state, ms, left, right in rows)
+    return path
+
+
+def list_blink_scores() -> list[Path]:
+    return sorted(BLINK_DIR.glob("blink_scores_*.csv"), reverse=True)
+
+
+def load_blink_scores(path: Path) -> list[blink_scores.Row]:
+    with open(path, newline="") as f:
+        return [(state, int(ms), float(left), float(right)) for state, ms, left, right in list(csv.reader(f))[1:]]
+
+
+def blink_score_lines(path: Path) -> list[str]:
+    """A blink test in words: each state's scores, then the cut-off it suggests."""
+    try:
+        rows = load_blink_scores(path)
+    except (OSError, ValueError) as e:
+        return [f"Can't read {path.name} ({e})."]
+    return [f"Blink test of {file_date(path):%d %b %Y, %H:%M}: {len(rows)} frames.", ""] + blink_scores.lines(rows)
+
+
+def trash_file(path: Path) -> Path:
+    """Move a recorded file into a trash folder beside it (move it back to undo)."""
+    trash = path.parent / "trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    target = trash / path.name
+    target.unlink(missing_ok=True)
+    shutil.move(str(path), str(target))
+    return target

@@ -111,4 +111,11 @@ app.ball.open_requested.emit()
 pump()
 assert app.reader is None and not app.ball.locked and app.control.isVisible()
 assert "didn't see you read" in app.panel.said[-1]
+# 6. a double-click on the ball records without Go Reading, and a second one stops
+app.ball.double_clicked.emit()
+pump()
+assert app.reader is not None and app.ball.locked and not app.control.isVisible()
+app.ball.double_clicked.emit()
+pump()
+assert app.reader is None and not app.ball.locked and app.control.isVisible()
 print("go reading ok")
