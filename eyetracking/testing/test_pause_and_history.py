@@ -4,7 +4,7 @@ Self-check (no webcam):  python -m eyetracking.testing.test_pause_and_history
 1. Calibration: Space starts, Space pauses (timer stops, nothing recorded),
    Space carries on (a timed step starts over, a dot goes back to "settle"), as often as you like;
    Esc leaves at any time
-2. Gaze data: usable or not (format + feature count); a calibration in words, per dot;
+2. Gaze data: usable or not (format + feature count); disable / enable (data/disabled/); a calibration in words, per dot;
    removing samples or the whole file (the original kept in data/trash), "#n came from dot (c, r) of the 5x5 grid"
 3. History: a reading's AI results (summary, questions, answers, scores) are saved and listed
 """
@@ -58,6 +58,19 @@ assert storage.list_calibrations() == [path] and storage.calibration_usable(path
 broken = tmp / "calibration_2026-01-01_000000.json"
 broken.write_text("{}")
 assert "Can't show this file" in storage.calibration_text(broken) and not storage.calibration_usable(broken)
+storage.DISABLED_DIR = tmp / "disabled"                         # disabling: kept, but out of training
+off = storage.set_calibration_enabled(path, False)
+assert storage.list_calibrations() == [broken] and storage.list_disabled() == [off] and storage.calibration_usable(off)
+from eyetracking.ui.control_window import TestingPage
+page = TestingPage()
+page.refresh()
+counts = lambda: (page.active_list.count(), page.disabled_list.count(), page.inactive_list.count())
+assert counts() == (1, 1, 1) and page.active_list.item(0).data(0x0100) is None, counts()   # active: placeholder only
+retrained = []
+page.data_changed.connect(lambda: retrained.append(True))
+page.set_enabled(off, True)                                     # Enable: back in data/, the model retrains
+assert storage.list_calibrations() == [path, broken] and storage.list_disabled() == [] and retrained
+assert page.active_list.item(0).data(0x0100) == str(path) and page.disabled_list.item(0).data(0x0100) is None
 storage.TRASH_DIR = tmp / "trash"                               # removing: the original goes to trash first
 assert storage.remove_samples(path, {0}) == 1 and "1 sample," in storage.calibration_text(path)
 assert (tmp / "trash" / path.name).exists()
