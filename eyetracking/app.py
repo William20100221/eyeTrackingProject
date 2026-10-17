@@ -3,7 +3,7 @@ The whole app, wired together.
 
     python main.py                       (asks which camera, in the console)
     python main.py --mouse               (no camera: your mouse plays the eyes)
-    python main.py --provider gemini     (AI provider, see services/reading_ai.py)
+    python main.py --provider gemini     (force the AI; normally your key says which, see services/reading_ai.py)
 
 The main window (ui/control_window.py) has three tabs:
     Chat         replies, quiz; "Go Reading" closes the window and locks the ball
@@ -45,22 +45,21 @@ from eyetracking.core.quality import check_recording
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
-from eyetracking.services.reading_ai import MODELS, grade_answer, make_questions, summarize
+from eyetracking.services.reading_ai import (KEY_ENV, MODELS, grade_answer, key_from_environment, make_questions,
+                                             ollama_model, provider_for_key, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
 from eyetracking.services.storage import load_all_calibrations, new_reading_path, save_calibration, save_reading
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, GazeCursor
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import MODEL_IDS, TEXT_FONTS, SettingsWindow, pick_camera
+from eyetracking.ui.control_window import TEXT_FONTS, SettingsWindow, pick_ai, pick_camera
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
 SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier but laggier
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
 CAPTURE_MS = 1000        # how often the text of the window being read is re-read (scrolling, a new page)
-
-KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
 
 PARA = "font-size:22px; color:#1F2328; padding:18px; border-radius:12px; background:{};"
 UNREAD_BG, READ_BG = "white", "#DDF3E4"
@@ -219,9 +218,9 @@ class Background(QObject):
 
 
 class App(QObject):
-    def __init__(self, mouse: bool, provider: str) -> None:
+    def __init__(self, mouse: bool, provider: str | None = None) -> None:
         super().__init__()
-        self.mouse, self.provider = mouse, provider
+        self.mouse, self.forced_provider = mouse, provider
 
         # the main window: Chat + Settings + Calibration tabs (ui/control_window.py)
         self.control = SettingsWindow()
@@ -251,6 +250,7 @@ class App(QObject):
         self.capture_timer.timeout.connect(self._capture)
         self._capturing = False
         settings = self.control.read_store()
+        self.provider = self._choose_ai(provider, settings["api_key"])
 
         self.tracker = None
         self.camera = settings["camera"]
@@ -276,7 +276,7 @@ class App(QObject):
         self.timer.timeout.connect(self.tick)
         self.timer.start(TICK_MS)
 
-        self.panel.status.setText(self._model_status())
+        self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
         self.control.show_page(self.panel)
 
     # ---- settings + camera -------------------------------------------
@@ -299,10 +299,8 @@ class App(QObject):
         self.show_ball = values["show_ball"]
         self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
         self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
-        if values["api_key"]:      # the field is for the provider this run uses
-            os.environ[KEY_ENV[self.provider]] = values["api_key"]
-        # ponytail: the model choice applies to the claude provider only (--provider gemini/openai keep theirs)
-        reading_ai.MODELS["claude"] = MODEL_IDS.get(values["model"], reading_ai.MODELS["claude"])
+        if values["api_key"] and (provider := self._use_key(values["api_key"])):
+            self.provider = self.forced_provider or provider   # a new key switches the AI at once
         self.summary_words = values["summary_words"]
         if self.tracker is not None and values["camera"] != self.camera:   # switch cameras live
             self.tracker.close()
@@ -313,6 +311,38 @@ class App(QObject):
             except Exception as e:
                 self.tracker, self.mouse = None, True
                 self.panel.reply(f"That camera didn't start ({e}). Mouse mode until you pick another.")
+
+    def _choose_ai(self, forced: str | None, saved_key: str) -> str:
+        """Which AI answers. A key wins (saved in Settings, or in the environment / a
+        .env next to main.py); its prefix says the provider. No key: Ollama if it runs
+        on this PC, else ask once with a popup. --provider overrides the choice."""
+        found = key_from_environment()
+        key = saved_key or (found[1] if found else "")
+        if not key and not forced:
+            local = ollama_model()
+            if local:
+                reading_ai.MODELS["ollama"] = local
+                return "ollama"
+            key = pick_ai() or ""                 # first run: paste a key (remembered)
+            if key:
+                self.control.store.setValue("api_key", key)
+                self.control.key.setText(key)
+        provider = self._use_key(key) if key else None
+        return forced or provider or "claude"
+
+    def _use_key(self, key: str) -> str | None:
+        """Put the key where its provider's SDK looks; returns that provider (None: not a known key)."""
+        provider = provider_for_key(key)
+        if provider:
+            os.environ[KEY_ENV[provider]] = key
+        return provider
+
+    def _ai_status(self) -> str:
+        if self.provider == "ollama":
+            return f"AI: Ollama on this PC ({reading_ai.MODELS['ollama']})."
+        if os.environ.get(KEY_ENV.get(self.provider, "")):
+            return f"AI: {self.provider}."
+        return "No AI key yet: paste one in Settings, or install Ollama (ollama.com) for a free local AI."
 
     def open_settings(self) -> None:
         self._show_window(self.control.settings_page)
@@ -331,7 +361,7 @@ class App(QObject):
     def _retrain(self) -> None:
         """Gaze data was removed in the Practice tab: train again on what is left."""
         self.model = self._load_model()
-        self.panel.status.setText(self._model_status())
+        self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
         self.panel.reply(f"Gaze model retrained on {self.samples_used} samples.")
 
     def _model_status(self) -> str:
@@ -631,7 +661,8 @@ class App(QObject):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Eye-tracking reading assistant")
     parser.add_argument("--mouse", action="store_true", help="no camera: the mouse plays your eyes")
-    parser.add_argument("--provider", choices=list(MODELS), default="claude")
+    parser.add_argument("--provider", choices=list(MODELS), default=None,
+                        help="force the AI; normally the app works it out from your key (or uses Ollama)")
     args, _ = parser.parse_known_args()
 
     qt_app = QApplication(sys.argv)
