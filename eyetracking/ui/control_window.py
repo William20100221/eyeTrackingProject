@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
+from eyetracking.services.secret_store import PREFIX, protect, unprotect
 from eyetracking.services.storage import (calibration_lines, calibration_usable, file_date, list_calibrations,
                                           list_readings, reading_messages, reading_title, remove_calibration,
                                           remove_samples)
@@ -43,7 +44,7 @@ DEFAULTS = {
     "hide_fullscreen": False,
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
-    "api_key": "",              # Claude / Gemini / OpenAI key (its prefix says which); QSettings, plain text
+    "api_key": "",              # Claude / Gemini / OpenAI key (its prefix says which); stored encrypted (DPAPI)
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 
@@ -1024,9 +1025,12 @@ class SettingsWindow(QWidget):
         wl.addWidget(label("words", "unit"))
         self.key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)
         self.key.setAccessibleName("API key")
+        self.key_eye = self.key.addAction(QIcon(), QLineEdit.TrailingPosition)   # show / hide the key
+        self.key_eye.setToolTip("Show the key")
+        self.key_eye.triggered.connect(self._toggle_key)
         self.group("Summaries and quizzes", [
             self.row(I_KEY, "AI key", "Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart. "
-                     "Empty = Ollama on this PC", self.key),
+                     "Empty = Ollama on this PC. Stored encrypted for your Windows login", self.key),
             self.row(I_LINES, "Summary length", "About this many words", words),
         ])
         self.camera_btn = button("", "assist")
@@ -1139,7 +1143,21 @@ class SettingsWindow(QWidget):
     # ----- behaviour
 
     def read_store(self) -> dict:
-        return {k: self.store.value(k, d, type=type(d)) for k, d in DEFAULTS.items()}
+        values = {k: self.store.value(k, d, type=type(d)) for k, d in DEFAULTS.items()}
+        stored = values["api_key"]
+        values["api_key"] = unprotect(stored)
+        if stored and not stored.startswith(PREFIX):
+            self.store_key(values["api_key"])     # an old plain-text key: encrypt it now (issue #13)
+        return values
+
+    def _toggle_key(self):
+        shown = self.key.echoMode() == QLineEdit.Normal
+        self.key.setEchoMode(QLineEdit.Password if shown else QLineEdit.Normal)
+        self.key_eye.setToolTip("Show the key" if shown else "Hide the key")
+
+    def store_key(self, key: str):
+        """The AI key goes into QSettings encrypted for this Windows user, never as plain text."""
+        self.store.setValue("api_key", protect(key))
 
     def load(self, values: dict):
         for k, sw in self.switches.items():
@@ -1157,7 +1175,10 @@ class SettingsWindow(QWidget):
         values.update(seed=self.seed, theme=self.mode, summary_words=self.words.value(),
                       camera=self.camera, api_key=self.key.text().strip())
         for k, v in values.items():
-            self.store.setValue(k, v)
+            if k == "api_key":
+                self.store_key(v)
+            else:
+                self.store.setValue(k, v)
         self.saved.emit(values)
         self.save_btn.setText("Saved")
         QTimer.singleShot(1500, lambda: self.save_btn.setText("Save changes"))
@@ -1249,6 +1270,7 @@ class SettingsWindow(QWidget):
             pal.setColor(QPalette.PlaceholderText, QColor(c["onSurfaceVariant"]))
             edit.setPalette(pal)
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
+        self.key_eye.setIcon(glyph_icon(I_EYE, c["onSurfaceVariant"]))
         self._dwm(34, int(c["outlineVariant"][5:7] + c["outlineVariant"][3:5] + c["outlineVariant"][1:3], 16))
         self.update()
 
