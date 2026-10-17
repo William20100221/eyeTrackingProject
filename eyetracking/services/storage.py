@@ -4,6 +4,11 @@ for many model experiments without sitting through the dots again.
 
 Files go in <project root>/data, named by date and time, e.g.
     data/calibration_2026-09-29_140312.json
+
+File format (FORMAT below): {"format": "gaze-calibration-v1", "saved_at": ...,
+"samples": [{"features": [...10], "target_x": .., "target_y": ..}, ...]}.
+Files from before the tag have no "format" but do have "samples": they count as v1.
+A file in any other format (the 3-step branches write v2 / v3) is not loaded.
     data/history/chat_2026-09-29_141502.json     (one per app run: chat + quizzes)
 """
 from __future__ import annotations
@@ -20,6 +25,7 @@ from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"            # the date-time part of every file name
 HISTORY_DIR = DATA_DIR / "history"
+FORMAT = "gaze-calibration-v1"
 
 
 def file_date(path: Path) -> datetime:
@@ -36,6 +42,7 @@ def save_calibration(samples: list[CalibrationSample], path: Path | None = None)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
+        "format": FORMAT,
         "saved_at": now.isoformat(timespec="seconds"),
         "samples": [asdict(s) for s in samples],
     }
@@ -45,8 +52,12 @@ def save_calibration(samples: list[CalibrationSample], path: Path | None = None)
 
 
 def load_calibration(path: Path) -> list[CalibrationSample]:
+    """Read one file. Raises ValueError if it isn't in this version's FORMAT."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
+    tag = data.get("format", FORMAT if "samples" in data else None) if isinstance(data, dict) else None
+    if tag != FORMAT:
+        raise ValueError(f"not in the current format ({FORMAT})")
     # JSON has no tuples: features come back as a list, so turn it back
     return [CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
             for s in data["samples"]]
