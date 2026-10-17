@@ -4,7 +4,7 @@ Self-check (no webcam):  python -m eyetracking.testing.test_pause_and_history
 1. Calibration: Space starts, Space pauses (timer stops, nothing recorded),
    Space carries on (a timed step starts over, a dot goes back to "settle"), as often as you like;
    Esc leaves at any time
-2. Gaze data: a calibration file in words, "#n came from dot (c, r) of the 5x5 grid"
+2. Gaze data: usable or not (format + feature count); a calibration file in words, "#n came from dot (c, r) of the 5x5 grid"
 3. History: every chat / quiz message is saved and listed, newest file first
 """
 import os
@@ -52,10 +52,10 @@ x, y = point_grid()[1]
 path = storage.save_calibration(CalibrationRecording((), (), (CalibrationSample((0.1, 0.2), x, y),) * 2))
 text = storage.calibration_text(path)
 assert "#2 came from dot (2, 1) of the 5x5 grid: 0.100, 0.200" in text, text
-assert storage.list_calibrations() == [path]
+assert storage.list_calibrations() == [path] and storage.calibration_usable(path)
 broken = tmp / "calibration_2026-01-01_000000.json"
 broken.write_text("{}")
-assert "Can't show this file" in storage.calibration_text(broken)
+assert "Can't show this file" in storage.calibration_text(broken) and not storage.calibration_usable(broken)
 
 # ---- 3. history ----------------------------------------------------------
 chat_path = storage.new_chat_path()
