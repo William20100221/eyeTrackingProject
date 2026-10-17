@@ -1,6 +1,6 @@
 """Study Assistant main window: direction 3 ("Toolbar") in PySide6.
 
-Three tabs in the title bar: Chat, Settings, Calibration. Calibration (and
+Four tabs in the title bar: Chat, Practice, Settings, Calibration. Calibration (and
 check) pages fill the screen with no title bar or buttons, then the window goes
 back to the Chat tab. pick_camera() is the small camera popup used at first start.
 
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
-from eyetracking.services.storage import (calibration_text, chat_text, file_date, list_calibrations, list_chats,
+from eyetracking.services.storage import (calibration_text, calibration_usable, chat_text, file_date, list_calibrations, list_chats,
                                           new_chat_path, save_chat)
 
 DEFAULTS = {
@@ -63,6 +63,7 @@ I_THEME, I_PALETTE, I_BALL, I_LAYERS = "", "", "", ""
 I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
+I_PRACTICE = "\uE7BE"   # Education (graduation cap)
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
 
@@ -451,15 +452,46 @@ class Grip(QWidget):
             self.window().windowHandle().startSystemResize(self.edges)
 
 
-# ---------------------------------------------------------------- chat page
+# ---------------------------------------------------------------- dated file lists
 
-class ChatPage(QWidget):
-    """ChatGPT-style page. The app talks to it like the old chat panel:
-    reply(text) to speak, message_sent(str) for quiz answers."""
+def side_list(parent: QWidget, to_text) -> QListWidget:
+    """A list of dated files; double-click (or Enter) shows to_text(path) in a dialog."""
+    lst = QListWidget(objectName="sideList")
+    lst.setToolTip("Double-click to open")
+    lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and show_text(
+        parent, it.text(), to_text(Path(it.data(Qt.UserRole)))))
+    return lst
 
-    message_sent = Signal(str)     # a quiz answer (or "skip")
+
+def fill_list(lst: QListWidget, paths: list[Path], empty: str):
+    lst.clear()
+    for path in paths:
+        item = QListWidgetItem(f"{file_date(path):%d %b %Y   %H:%M}")
+        item.setData(Qt.UserRole, str(path))
+        lst.addItem(item)
+    if not paths:
+        lst.addItem(QListWidgetItem(empty))   # no path: double-click does nothing
+
+
+def show_text(parent: QWidget, title: str, text: str):
+    """Read-only text in a themed dialog (it takes the window's style sheet)."""
+    dlg = QDialog(parent, Qt.Dialog | Qt.WindowCloseButtonHint)
+    dlg.setObjectName("root")
+    dlg.setAttribute(Qt.WA_StyledBackground)
+    dlg.setWindowTitle(title)
+    dlg.resize(760, 560)
+    v = QVBoxLayout(dlg)
+    v.addWidget(QPlainTextEdit(text, objectName="textView", readOnly=True))
+    dlg.exec()
+
+
+# ---------------------------------------------------------------- practice page
+
+class PracticePage(QWidget):
+    """Practice tab: the sample text and the gaze check, plus the saved gaze data
+    (calibrations by date) split into the files this version can train on and the rest."""
+
     command = Signal(str)          # a sidebar button: "read" | "check"
-    go_reading = Signal()          # the big button: close the window (the ball is still there)
 
     def __init__(self):
         super().__init__()
@@ -477,13 +509,66 @@ class ChatPage(QWidget):
             b = button(f"{glyph}   {text}", "nav")
             b.clicked.connect(lambda _=False, c=cmd: self.command.emit(c))
             sv.addWidget(b)
-        # saved calibrations by date, and past chats + quizzes: double-click (or Enter) to read one
-        sv.addWidget(label(f"{I_LINES}   Gaze data", "sideLabel"))
-        self.calib_list = self._side_list(calibration_text)
-        sv.addWidget(self.calib_list, 1)
-        sv.addSpacing(8)
-        sv.addWidget(label("History", "sideTitle"))
-        self.chat_list = self._side_list(chat_text)
+        sv.addStretch(1)
+        h.addWidget(side)
+
+        main = QWidget()
+        mv = QVBoxLayout(main)
+        mv.setContentsMargins(24, 20, 24, 24)
+        mv.setSpacing(8)
+        mv.addWidget(label("Gaze data", "sheetTitle"))
+        hint = label("Saved calibrations by date. Double-click one to read it. Only the active ones train the gaze model.",
+                     "sheetText")
+        hint.setWordWrap(True)
+        mv.addWidget(hint)
+        cols = QHBoxLayout()
+        cols.setSpacing(24)
+        self.active_list = side_list(self, calibration_text)
+        self.inactive_list = side_list(self, calibration_text)
+        for title, sub, lst in [("Active", "Samples this version can use", self.active_list),
+                                ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list)]:
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            col.addWidget(label(title, "gh"))
+            col.addWidget(label(sub, "rowsub"))
+            col.addWidget(lst, 1)
+            cols.addLayout(col, 1)
+        mv.addLayout(cols, 1)
+        h.addWidget(main, 1)
+
+    def refresh(self):
+        """Re-read data/ (new calibrations). Runs whenever the page shows."""
+        usable = {p: calibration_usable(p) for p in list_calibrations()}
+        fill_list(self.active_list, [p for p, ok in usable.items() if ok], "No usable calibration yet")
+        fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
+
+    def showEvent(self, e):
+        self.refresh()
+        super().showEvent(e)
+
+
+# ---------------------------------------------------------------- chat page
+
+class ChatPage(QWidget):
+    """ChatGPT-style page. The app talks to it like the old chat panel:
+    reply(text) to speak, message_sent(str) for quiz answers."""
+
+    message_sent = Signal(str)     # a quiz answer (or "skip")
+    go_reading = Signal()          # the big button: close the window (the ball is still there)
+
+    def __init__(self):
+        super().__init__()
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        side = QFrame(objectName="side")
+        side.setFixedWidth(260)
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(12, 12, 12, 12)
+        sv.setSpacing(2)
+        sv.addWidget(label("History", "sideTitle"))   # past chats + quizzes: double-click (or Enter) to read one
+        self.chat_list = side_list(self, chat_text)
         sv.addWidget(self.chat_list, 1)
         h.addWidget(side)
         self.history: list[dict] = []            # this run's chat + quiz, saved as it goes
@@ -541,41 +626,13 @@ class ChatPage(QWidget):
         h.addWidget(col, 20)
         h.addStretch(1)
 
-    # ----- sidebar lists
-
-    def _side_list(self, to_text) -> QListWidget:
-        lst = QListWidget(objectName="sideList")
-        lst.setToolTip("Double-click to open")
-        lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and self.show_text(
-            it.text(), to_text(Path(it.data(Qt.UserRole)))))
-        return lst
-
     def refresh(self):
-        """Re-read data/ (new calibrations, this run's chat). Runs whenever the page shows."""
-        for lst, paths in ((self.calib_list, list_calibrations()), (self.chat_list, list_chats())):
-            lst.clear()
-            for path in paths:
-                item = QListWidgetItem(f"{file_date(path):%d %b %Y   %H:%M}")
-                item.setData(Qt.UserRole, str(path))
-                lst.addItem(item)
-            if not paths:
-                lst.addItem(QListWidgetItem("Nothing yet"))   # no path: double-click does nothing
+        """Re-read data/history (this run's chat is written as it goes). Runs whenever the page shows."""
+        fill_list(self.chat_list, list_chats(), "Nothing yet")
 
     def showEvent(self, e):
         self.refresh()
         super().showEvent(e)
-
-    def show_text(self, title: str, text: str):
-        """Read-only text in a themed dialog (it takes the window's style sheet)."""
-        dlg = QDialog(self, Qt.Dialog | Qt.WindowCloseButtonHint)
-        dlg.setObjectName("root")
-        dlg.setAttribute(Qt.WA_StyledBackground)
-        dlg.setWindowTitle(title)
-        dlg.resize(760, 560)
-        v = QVBoxLayout(dlg)
-        view = QPlainTextEdit(text, objectName="textView", readOnly=True)
-        v.addWidget(view)
-        dlg.exec()
 
     def _log(self, text: str, mine: bool):
         self.history.append({"who": "you" if mine else "assistant", "text": text,
@@ -667,8 +724,9 @@ class SettingsWindow(QWidget):
         root.setSpacing(0)
         self.titlebar = self._title_bar()
         root.addWidget(self.titlebar)
-        # pages: 0 = chat, 1 = settings; a calibration / check page is added while it runs
+        # pages: 0 = chat, 1 = practice, 2 = settings; a calibration / check page is added while it runs
         self.chat = ChatPage()
+        self.practice = PracticePage()
         self.settings_page = QWidget()
         sp = QVBoxLayout(self.settings_page)
         sp.setContentsMargins(0, 0, 0, 0)
@@ -681,6 +739,7 @@ class SettingsWindow(QWidget):
         sp.addLayout(body, 1)
         self.pages = QStackedWidget()
         self.pages.addWidget(self.chat)
+        self.pages.addWidget(self.practice)
         self.pages.addWidget(self.settings_page)
         root.addWidget(self.pages, 1)
         self._before_page = None          # (was visible, was maximized) while a full-screen page runs
@@ -709,36 +768,22 @@ class SettingsWindow(QWidget):
         h.addWidget(label("Study Assistant", "appname"))
         h.addStretch(1)
 
-        chat = QPushButton(I_CHAT, objectName="settingsBtn")
-        chat.setCheckable(True)
-        chat.setChecked(True)
-        chat.setToolTip("Chat")
-        chat.setAccessibleName("Chat")
-        chat.setCursor(Qt.PointingHandCursor)
-        chat.setFocusPolicy(Qt.TabFocus)
-        settings = QPushButton(I_SETTINGS, objectName="settingsBtn")
-        settings.setCheckable(True)
-        settings.setToolTip("Settings")
-        settings.setAccessibleName("Settings")
-        settings.setCursor(Qt.PointingHandCursor)
-        settings.setFocusPolicy(Qt.TabFocus)
-        self.nav = QButtonGroup(self)   # exclusive, so clicking the selected gear can't un-select it
-        self.nav.addButton(chat, 0)
-        self.nav.addButton(settings, 1)
-        calib = QPushButton(I_EYE, objectName="settingsBtn")   # same look as the gear
-        calib.setCheckable(True)
-        calib.setToolTip("Calibration")
-        calib.setAccessibleName("Calibration")
-        calib.setCursor(Qt.PointingHandCursor)
-        calib.setFocusPolicy(Qt.TabFocus)
-        self.nav.addButton(calib, 2)
-        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 2 else self.pages.setCurrentIndex(i))
-        h.addWidget(chat)
+        self.nav = QButtonGroup(self)   # exclusive, so clicking the selected tab can't un-select it
+        for i, (glyph, name) in enumerate([(I_CHAT, "Chat"), (I_PRACTICE, "Practice"), (I_SETTINGS, "Settings"),
+                                           (I_EYE, "Calibration")]):
+            b = QPushButton(glyph, objectName="settingsBtn")
+            b.setCheckable(True)
+            b.setToolTip(name)
+            b.setAccessibleName(name)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFocusPolicy(Qt.TabFocus)
+            self.nav.addButton(b, i)
+            h.addWidget(b)
+            h.addSpacing(4)
+        self.nav.button(0).setChecked(True)
+        # tabs 0-2 are pages in the stack; Calibration (3) runs full screen instead
+        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 3 else self.pages.setCurrentIndex(i))
         h.addSpacing(4)
-        h.addWidget(settings)
-        h.addSpacing(4)
-        h.addWidget(calib)
-        h.addSpacing(8)
 
         caps = QWidget(objectName="caps")
         ch = QHBoxLayout(caps)
@@ -1008,7 +1053,7 @@ class SettingsWindow(QWidget):
             self.showNormal()
 
     def show_page(self, page: QWidget):
-        """Bring the window up on `page` (self.chat or self.settings_page)."""
+        """Bring the window up on `page` (self.chat, self.practice or self.settings_page)."""
         self.pages.setCurrentWidget(page)
         self.nav.button(self.pages.currentIndex()).setChecked(True)
         if not self.isVisible() or self.isMinimized():
