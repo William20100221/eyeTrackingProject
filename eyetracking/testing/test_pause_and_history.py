@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 
 import eyetracking.services.storage as storage
 from eyetracking.core.calibration import describe_target, point_grid
+from eyetracking.core.features import N_FEATURES
 from eyetracking.ui.calibration_window import CalibrationWindow
 
 qt = QApplication([])
@@ -49,7 +50,7 @@ assert describe_target(*point_grid()[1]) == "dot (2, 1) of the 5x5 grid"      # 
 assert describe_target(0.43, 0.61) == "the point 43% across, 61% down"
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 x, y = point_grid()[1]
-path = storage.save_calibration(CalibrationRecording((), (), (CalibrationSample((0.1, 0.2), x, y),) * 2))
+path = storage.save_calibration(CalibrationRecording((), (), (CalibrationSample((0.1, 0.2) + (0.0,) * (N_FEATURES - 2), x, y),) * 2))
 text = storage.calibration_text(path)
 assert "#2 came from dot (2, 1) of the 5x5 grid: 0.100, 0.200" in text, text
 assert storage.list_calibrations() == [path] and storage.calibration_usable(path)
