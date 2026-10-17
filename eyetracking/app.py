@@ -10,7 +10,9 @@ The main window (ui/control_window.py) has three tabs:
     Testing      sample text, gaze check, saved gaze data (active / not usable)
     Calibration  25 dots, saves the data, retrains the gaze model
     Settings     camera, AI key, theme
-The floating ball stays on the whole time. Unlocked: click it to open the window.
+The camera is on only while something uses the gaze (calibration, the gaze
+check, the sample text, Go Reading with the ball's eyes open), then off again
+(the ball's halo is grey). The floating ball stays on the whole time. Unlocked: click it to open the window.
 Locked (after Go Reading): a click opens its eyes and it records what you read in
 whatever window you look at; a click closes them and the AI summarises what you
 missed, in the chat. Right-click still gives the menu.
@@ -252,14 +254,9 @@ class App(QObject):
         settings = self.control.read_store()
         self.provider = self._choose_ai(provider, settings["api_key"])
 
-        self.tracker = None
+        self.tracker = None                       # opened by _use_camera(), only while needed (issue #11)
+        self.camera_users: set[str] = set()       # what needs the gaze right now
         self.camera = settings["camera"]
-        if not mouse:
-            try:
-                self.tracker = EyeTracker(self._camera_index())
-            except Exception as e:                 # no camera, popup closed, MediaPipe failed
-                print(f"Camera didn't start ({e}): running in mouse mode instead.")
-                self.mouse = True
         self.model = self._load_model()
         self.smoothed: tuple[float, float] | None = None
         self.fullscreen: QWidget | None = None   # calibration / check page, while open
@@ -302,15 +299,58 @@ class App(QObject):
         if values["api_key"] and (provider := self._use_key(values["api_key"])):
             self.provider = self.forced_provider or provider   # a new key switches the AI at once
         self.summary_words = values["summary_words"]
-        if self.tracker is not None and values["camera"] != self.camera:   # switch cameras live
-            self.tracker.close()
+        if values["camera"] != self.camera:
             self.camera = values["camera"]
-            try:
-                self.tracker = EyeTracker(self._camera_index())
-                self.panel.reply(f"Now using the camera: {self.camera}.")
-            except Exception as e:
-                self.tracker, self.mouse = None, True
-                self.panel.reply(f"That camera didn't start ({e}). Mouse mode until you pick another.")
+            if self.tracker is not None:          # in use right now: switch at once
+                self.tracker.close()
+                self.tracker = None
+                if self._open_camera():
+                    self.panel.reply(f"Now using the camera: {self.camera}.")
+
+    # ---- the camera: on only while something needs the gaze (issue #11) -----
+    # Trade-off: a feature now waits about a second for the camera and MediaPipe
+    # when it starts, instead of the camera light being on (and a CPU core busy at
+    # 30 frames a second) for the whole time the app runs.
+    def _use_camera(self, user: str) -> bool:
+        """`user` needs the gaze: open the camera if it is off. False if it can't be opened."""
+        if self.mouse:
+            return True
+        self.camera_users.add(user)
+        if self.tracker is None and not self._open_camera():
+            self.camera_users.discard(user)
+            return False
+        return True
+
+    def _release_camera(self, *users: str) -> None:
+        """`users` are done with the gaze; the last one out closes the camera."""
+        self.camera_users.difference_update(users)
+        if not self.camera_users and self.tracker is not None:
+            self.tracker.close()                  # camera light off, MediaPipe freed
+            self.tracker = None
+            self.ball.set_tracking_state(None)    # grey halo: camera off
+            self.cursor.hide()
+
+    def _open_camera(self) -> bool:
+        """Open the chosen camera and MediaPipe (about a second, on this thread).
+        The chat's status line says so, and the pointer waits, meanwhile."""
+        try:
+            index = self._camera_index()          # may ask with the popup first
+        except RuntimeError as e:                 # no camera, or the popup was closed
+            self.panel.reply(f"The camera didn't start ({e}).")
+            return False
+        self.panel.status.setText("Opening the camera…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()              # paint the status before the wait
+        # ponytail: opens on the GUI thread (~1 s freeze); move to a QThread if that feels slow
+        try:
+            self.tracker = EyeTracker(index)
+            return True
+        except Exception as e:                    # camera busy, MediaPipe failed
+            self.panel.reply(f"The camera didn't start ({e}). Pick another in Settings > Camera.")
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
 
     def _choose_ai(self, forced: str | None, saved_key: str) -> str:
         """Which AI answers. A key wins (saved in Settings, or in the environment / a
@@ -387,6 +427,8 @@ class App(QObject):
 
     def tick(self) -> None:
         dt = self.clock.restart() / 1000
+        if not self.mouse and self.tracker is None:   # camera off: nothing needs the gaze
+            return
         if self.mouse:
             face, features = True, fake_point_from_mouse()
         else:
@@ -435,6 +477,9 @@ class App(QObject):
         self.control.show_page(page)
 
     def start_reading(self) -> None:
+        if not self._use_camera("screen"):
+            self._show_window(self.panel)         # the reason is in the chat
+            return
         self.reader, self.reader_hwnd, self.reader_title = ReadingTracker(), 0, ""
         self.ball.eyes_open = True
         self.debug.show_word(("-", "look at the text you want to read"), 0, 0, "")
@@ -443,6 +488,7 @@ class App(QObject):
 
     def stop_reading(self) -> None:
         """Eyes closed: stop recording; the AI summarises what was missed on the page(s) read."""
+        self._release_camera("screen")
         self.capture_timer.stop()
         self.ball.eyes_open = False
         self.debug.hide()
@@ -530,12 +576,15 @@ class App(QObject):
 
     def _fullscreen_closed(self) -> None:
         self.fullscreen = None
+        self._release_camera("calibration", "check")
         self.ball.setVisible(self.show_ball)
         self.clock.restart()
         self.timer.start(TICK_MS)
 
     # ---- commands (tabs + chat sidebar buttons) ------------------------
     def calibrate(self) -> None:
+        if not self._use_camera("calibration"):
+            return
         get = fake_features_from_mouse if self.mouse else self.tracker.read_features
         window = CalibrationWindow(get_features=get)
         window.finished.connect(lambda samples: self._calibrated(window, samples))
@@ -562,6 +611,8 @@ class App(QObject):
         else:
             def get():
                 return self.predict(self.tracker.read_features())
+        if not self._use_camera("check"):
+            return
         window = GazeWindow(get_point=get)
         window.logged.connect(lambda path: self.panel.reply(f"Gaze samples saved: {Path(path).name}"))
         self._open_fullscreen(window)
@@ -569,6 +620,8 @@ class App(QObject):
     def read(self) -> None:
         if self.model is None and not self.mouse:
             self.panel.reply("Calibrate first: open the Calibration tab.")
+            return
+        if not self._use_camera("reading"):
             return
         if self.reading is None:
             self.reading = ReadingWindow(SAMPLE_FULL)
@@ -578,6 +631,7 @@ class App(QObject):
 
     def _reading_closed(self) -> None:
         self.reading = None
+        self._release_camera("reading")
 
     # ---- the reading AI ------------------------------------------------
     def _read_finished(self, full_text: str, read_text: str) -> None:
