@@ -10,4 +10,5 @@ dependencies = [
     "pygrabber>=0.2",
     "pyside6>=6.11.2",
     "scikit-learn>=1.9.1",
+    "winocr>=0.0.15",
 ]
