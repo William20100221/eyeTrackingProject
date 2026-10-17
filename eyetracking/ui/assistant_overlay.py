@@ -93,6 +93,7 @@ class FloatingBall(QWidget):
 
     clicked = Signal()             # PORT (outbound): left click (the app decides: open the window, or eyes open/closed)
     open_requested = Signal()      # PORT (outbound): "Open assistant" in the right-click menu
+    double_clicked = Signal()      # PORT (outbound): double-click (the app starts / stops recording what you read)
 
     def __init__(self, avatar: str | None = None):
         super().__init__()
@@ -112,6 +113,12 @@ class FloatingBall(QWidget):
         self.locked = False              # Go Reading: no dragging, no sliding away; click and right-click only
         self.eyes_open = False           # while locked: open = recording what you read, closed = paused
         self.window_open = False         # the main window is up: the eye is open too (issue #12)
+
+        # a click is reported only once the double-click interval has passed without a second one
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(QApplication.doubleClickInterval())
+        self._click_timer.timeout.connect(self.clicked.emit)
 
         self._slide = QPropertyAnimation(self, b"pos", self)
         self._slide.setDuration(180)
@@ -272,12 +279,18 @@ class FloatingBall(QWidget):
             self.move(target)
 
     def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton and self._press is not None:
             self._press = None
             if self._moved:
                 self.snap_to_edge()
             else:
-                self.clicked.emit()
+                self._click_timer.start()     # a single click, unless a second one follows
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._click_timer.stop()          # not a single click after all
+            self._press = None
+            self.double_clicked.emit()
 
     def enterEvent(self, _e):
         self._hover_target = 1.0
