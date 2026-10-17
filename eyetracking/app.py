@@ -237,6 +237,7 @@ class App(QObject):
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
         self.control.practice.command.connect(lambda c: {"read": self.read, "check": self.check}[c]())
+        self.control.practice.data_changed.connect(self._retrain)
         self.panel.go_reading.connect(self.go_reading)
         self.ball.clicked.connect(self.ball_clicked)
         self.ball.open_requested.connect(lambda: self._show_window(self.panel))
@@ -328,6 +329,12 @@ class App(QObject):
         samples, weights, self.profile = training_set(load_all_calibrations())
         self.samples_used = len(samples)
         return GazeModel().fit(samples, weights) if samples else None
+
+    def _retrain(self) -> None:
+        """Gaze data was removed in the Practice tab: train again on what is left."""
+        self.model = self._load_model()
+        self.panel.status.setText(self._model_status())
+        self.panel.reply(f"Gaze model retrained on {self.samples_used} samples.")
 
     def _model_status(self) -> str:
         if self.mouse:
