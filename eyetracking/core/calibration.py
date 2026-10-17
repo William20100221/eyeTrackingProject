@@ -155,26 +155,85 @@ def sweep_target(elapsed_ms: float) -> tuple[float, float, bool] | None:
 # Step 2: the head step. Eyes on the centre, head moves.
 # =====================================================================
 
-HEAD_SETTLE_MS = 1500    # "look at the dot" before any head movement: not recorded
-HEAD_STEPS = (           # (what the user is told, how long) - covers all 6 head numbers
-    ("Keep looking at the dot. Turn your head slowly left and right", 5000),
-    ("Keep looking at the dot. Nod slowly up and down", 5000),
-    ("Keep looking at the dot. Tilt your head toward each shoulder", 4000),
-    ("Keep looking at the dot. Lean closer to the screen, then back", 4000),
+HEAD_SETTLE_MS = 1500    # "look at the dot" first: the head's rest position is measured here, nothing recorded
+HEAD_MOVES = (           # (what the user is told, feature index, target either way, too far) - the 6 head numbers
+    ("Turn your head slowly left and right", 4, 15.0, 35.0),    # yaw, degrees
+    ("Nod slowly up and down", 5, 10.0, 30.0),                   # pitch
+    ("Tilt your head toward each shoulder", 6, 10.0, 30.0),      # roll
+    ("Lean closer to the screen, then back", 9, 4.0, 15.0),      # z, cm
 )
+HEAD_MOVE_MIN_MS = 2500  # a move lasts at least this long...
+HEAD_MOVE_MAX_MS = 8000  # ...and ends here at the latest, targets reached or not
+# ponytail: targets are guesses (a comfortable turn that still gives MediaPipe a good face); tune on real users
 
 
-def head_prompt(elapsed_ms: float) -> tuple[str, bool] | None:
-    """The instruction to show after `elapsed_ms`: (text, record?), or None when
-    the head step is over. The dot itself stays at the screen centre."""
-    if elapsed_ms < HEAD_SETTLE_MS:
-        return "Look at the dot", False
-    t = elapsed_ms - HEAD_SETTLE_MS
-    for text, ms in HEAD_STEPS:
-        if t < ms:
-            return text, True
-        t -= ms
-    return None
+class HeadStep:
+    """Step 2, driven by the head itself. After the settle, each move asks one head
+    number (yaw, pitch, roll, distance) to go past a target BOTH ways; a bar on
+    screen (gauge) shows how far it is. The move ends once both sides were reached
+    and HEAD_MOVE_MIN_MS passed, or at HEAD_MOVE_MAX_MS. Frames past "too far"
+    are not recorded: MediaPipe's face gets unreliable there."""
+
+    def __init__(self) -> None:
+        self.move = 0
+        self.rest: list[float] | None = None      # the head numbers at the end of the settle
+        self._settle: list[Sequence[float]] = []
+        self.value = 0.0                          # this move's number, relative to rest
+        self.reached = [False, False]             # the minus side, the plus side
+        self._move_start_ms = 0.0
+
+    def feed(self, features: Sequence[float] | None, elapsed_ms: float) -> tuple[str, bool] | None:
+        """One frame -> (instruction, record this frame?), or None when the step is over."""
+        if elapsed_ms < HEAD_SETTLE_MS or not self._settle:
+            if features is not None:
+                self._settle.append(features)
+            return "Look at the dot", False
+        if self.rest is None:                     # the settle just ended
+            self.rest = [sum(f[i] for f in self._settle) / len(self._settle) for i in range(len(self._settle[0]))]
+            self._move_start_ms = elapsed_ms
+        if self.move >= len(HEAD_MOVES):
+            return None
+        text, i, target, too_far = HEAD_MOVES[self.move]
+        if features is not None:
+            self.value = features[i] - self.rest[i]
+            self.reached[0] |= self.value <= -target
+            self.reached[1] |= self.value >= target
+        t = elapsed_ms - self._move_start_ms
+        if (all(self.reached) and t >= HEAD_MOVE_MIN_MS) or t >= HEAD_MOVE_MAX_MS:
+            self.move += 1
+            self.reached, self.value, self._move_start_ms = [False, False], 0.0, elapsed_ms
+            if self.move >= len(HEAD_MOVES):
+                return None
+            text = HEAD_MOVES[self.move][0]
+        return f"Keep looking at the dot. {text}", abs(self.value) <= too_far
+
+    def gauge(self) -> tuple[float, float, float, list[bool]] | None:
+        """(value, target, too far, reached) for the bar on screen; None outside a move."""
+        if self.rest is None or self.move >= len(HEAD_MOVES):
+            return None
+        _, _, target, too_far = HEAD_MOVES[self.move]
+        return self.value, target, too_far, list(self.reached)
+
+
+HEAD_STILL_DEG = 3.0     # yaw / pitch may drift this much from a dot's first frame; further = the frame is dropped
+
+
+class HeadStill:
+    """Steps 1 and 3 want the head still while the eyes work. A frame whose yaw or
+    pitch is more than HEAD_STILL_DEG from the first frame of the current dot has
+    'moved' and is left out (the dot waits, like for a blink). reset() per dot."""
+
+    def __init__(self) -> None:
+        self.ref: tuple[float, float] | None = None
+
+    def reset(self) -> None:
+        self.ref = None
+
+    def moved(self, features: Sequence[float]) -> bool:
+        if self.ref is None:
+            self.ref = (features[4], features[5])
+            return False
+        return abs(features[4] - self.ref[0]) > HEAD_STILL_DEG or abs(features[5] - self.ref[1]) > HEAD_STILL_DEG
 
 
 # =====================================================================
@@ -299,5 +358,5 @@ if __name__ == "__main__":
     samples, weights, newest = training_set([CalibrationRecording((), (), tuple(dots)),   # unusable
                                              CalibrationRecording(tuple(sweep), tuple(head), tuple(dots))])
     assert len(samples) == 25 and weights == [1.0] * 25 and newest is not None
-    assert head_prompt(0)[1] is False and head_prompt(10 ** 6) is None
+    assert HeadStep().feed(None, 0) == ("Look at the dot", False)
     print("ok")
