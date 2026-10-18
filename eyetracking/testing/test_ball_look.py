@@ -15,14 +15,14 @@ from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication
 
 import eyetracking.ui.control_window as cw
-from eyetracking.ui.assistant_overlay import ACCENT, FloatingBall
+from eyetracking.ui.assistant_overlay import MARK_RED, FloatingBall
 
 tmp = Path(tempfile.mkdtemp())
 cw.QSettings = lambda *_: QSettings(str(tmp / "settings.ini"), QSettings.IniFormat)   # never the user's settings
 qt = QApplication([])
 
 ball = FloatingBall()
-assert ball.look == "logo" and not ball.avatar.isNull() and ball.ring == QColor(ACCENT)   # the default: the logo
+assert ball.look == "logo" and not ball.avatar.isNull() and ball.ring == QColor(MARK_RED)   # the default: the logo
 ball.set_look("image", str(tmp / "missing.png"), "#ff0000")
 assert ball.look == "image" and ball.avatar.width() == ball.BALL * 2 and ball.ring == QColor("#ff0000")   # unreadable: the logo
 me = QPixmap(10, 10)
@@ -31,9 +31,9 @@ me.save(str(tmp / "me.png"))
 ball.set_look("image", str(tmp / "me.png"), "#00ff00")
 assert ball.avatar.width() == 10 and ball.ring == QColor("#00ff00")                      # the user's picture
 ball.set_look("water", "", "")
-assert ball.look in ("water", "logo") and ball.ring == QColor(ACCENT)                      # no OpenGL offscreen: the logo
+assert ball.look in ("water", "logo") and ball.ring == QColor(MARK_RED)                      # no OpenGL offscreen: the logo
 ball.set_look("logo", "", "not a colour")
-assert ball.look == "logo" and ball.ring == QColor(ACCENT)
+assert ball.look == "logo" and ball.ring == QColor(MARK_RED)
 ball.resize(ball.size())
 ball.grab()                                                                                 # paints without error
 
