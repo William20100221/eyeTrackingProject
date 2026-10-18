@@ -28,6 +28,7 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
@@ -377,20 +378,35 @@ class ColorDot(QWidget):
         p.drawEllipse(QRectF(.5, .5, 19, 19))
 
 
+MARK_SVG = Path(__file__).with_name("app_mark.svg")   # the logo: an eye whose pages are a screen ("1b · Screen pages")
+
+
+def app_icon() -> QIcon:
+    """The logo as the window / taskbar icon, crisp at every size Windows asks for."""
+    renderer = QSvgRenderer(str(MARK_SVG))
+    icon = QIcon()
+    for px in (16, 24, 32, 48, 64, 128, 256):
+        pm = QPixmap(px, px)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        renderer.render(p)
+        p.end()
+        icon.addPixmap(pm)
+    return icon
+
+
 class AppMark(QWidget):
+    """The logo in the title bar, drawn from the SVG (its own colours: red, cream, navy)."""
+
     def __init__(self):
         super().__init__()
-        self.setFixedSize(20, 20)
+        self.setFixedSize(22, 22)
+        self._svg = QSvgRenderer(str(MARK_SVG), self)
 
     def paintEvent(self, _):
-        c = self.window().c
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(c["primary"]))
-        p.drawRoundedRect(QRectF(0, 0, 20, 20), 5, 5)
-        p.setBrush(QColor(c["onPrimary"]))
-        p.drawEllipse(QPointF(10, 10), 4, 4)
+        self._svg.render(p, QRectF(0, 0, 22, 22))
 
 
 class RoleTile(QWidget):
