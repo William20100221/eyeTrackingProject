@@ -49,6 +49,7 @@ from PySide6.QtSvg import QSvgRenderer
 from eyetracking.ui.water_ball import WaterBallRenderer
 
 MARK_SVG = Path(__file__).with_name("app_mark.svg")   # the logo: the still ball's default face
+MARK_RED = "#E5483B"                                  # the logo's red: the ring until the settings say otherwise
 
 # --------------------------------------------------------------------------- theme
 ACCENT   = "#3D6CF6"
@@ -136,9 +137,9 @@ class FloatingBall(QWidget):
 
         # the look (Settings > Floating ball): "logo" or "image" = still, inside a thin ring of `ring`
         # colour; "water" = the moving liquid eye (ui/water_ball.py, OpenGL; still if there is none)
-        self.look, self.ring = "logo", QColor(ACCENT)
+        self.look, self.ring = "logo", QColor(MARK_RED)
         self._water: WaterBallRenderer | None = None
-        self.set_look("logo", "", ACCENT)
+        self.set_look("logo", "", MARK_RED)
         self._clock = QElapsedTimer()
         self._clock.start()
         self._last_ms = 0
@@ -154,7 +155,7 @@ class FloatingBall(QWidget):
         """Settings > Floating ball: "water" (moving), "logo" or "image" (still, in a thin ring of `ring`).
         An image that can't be read, or no OpenGL for the water, falls back to the logo."""
         self.look = look
-        self.ring = QColor(ring) if ring and QColor(ring).isValid() else QColor(ACCENT)
+        self.ring = QColor(ring) if ring and QColor(ring).isValid() else QColor(MARK_RED)
         if look == "water" and self._water is None:
             try:
                 self._water = WaterBallRenderer()
@@ -513,7 +514,7 @@ def main() -> int:
     cursor = GazeCursor()
     dwell = DwellController(cursor)
 
-    keep = [ball, cursor, dwell]   # stop Python garbage-collecting them
+    app.keep = [ball, cursor, dwell]   # stop Python garbage-collecting them
 
     # ======================= EYE TRACKING HOOK 6 =========================
     # How to wire the real tracker in. The camera and MediaPipe must NOT run
