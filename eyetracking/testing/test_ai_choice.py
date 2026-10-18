@@ -13,6 +13,7 @@ import eyetracking.services.reading_ai as ai
 
 assert ai.provider_for_key("sk-ant-abc") == "claude" and ai.provider_for_key("sk-abc") == "openai"
 assert ai.provider_for_key("AIzaXYZ") == "gemini" and ai.provider_for_key("hello") is None
+assert ai.provider_for_key("AQ.Ab8RN6XYZ") == "gemini" and ai.provider_for_key("AQ") is None   # AI Studio's newer keys
 
 for name in ai.KEY_ENV.values():                         # a clean environment for the test
     os.environ.pop(name, None)
