@@ -1165,16 +1165,16 @@ class SettingsWindow(QWidget):
             lk.addWidget(b)
             self.look_group.addButton(b, i)
         self.look_group.idClicked.connect(lambda i: self.set_ball_look(BALL_LOOKS[i]))
-        self.image_name = label("", "rowsub")
-        self.image_btn = button("Choose image…", "assist")
+        self.image_btn = button("Choose image…", "assist")   # shows the chosen file's name
         self.image_btn.clicked.connect(self.choose_ball_image)
         self.ring_dot = ColorDot(lambda: self.ball_ring or self.seed)
         self.ring_hex = label("", "hex")
         self.ring_hex.setMinimumWidth(62)
-        ring_pick = button("Change", "text")
-        ring_pick.clicked.connect(self.choose_ring)
-        ring_theme = button("Theme colour", "text")
-        ring_theme.clicked.connect(lambda: self.set_ball_ring(""))
+        ring_btn = button("Change", "text")               # one button: the row must fit beside the open colour sheet
+        ring_menu = QMenu(ring_btn)
+        ring_menu.addAction("Pick a colour…", self.choose_ring)
+        ring_menu.addAction("Theme colour", lambda: self.set_ball_ring(""))
+        ring_btn.setMenu(ring_menu)
         self.group("Floating ball", [
             self.row(I_BALL, "Show floating ball", "Opens the assistant from any app", self.switches["show_ball"]),
             self.row(I_LAYERS, "Keep it above other windows", "Turn off to let it hide behind full windows",
@@ -1184,9 +1184,9 @@ class SettingsWindow(QWidget):
             self.row(I_BALL, "Ball look", "The logo or your own image (still, inside a thin ring), or the moving "
                      "water ball. Applies when you save", looks),
             self.row(I_BALL, "Image", "Your picture for the still ball (png, jpg); it is cropped to a circle",
-                     self.image_name, self.image_btn),
-            self.row(I_PALETTE, "Ring colour", "The thin ring around the still ball", self.ring_dot, self.ring_hex,
-                     ring_pick, ring_theme),
+                     self.image_btn),
+            self.row(I_PALETTE, "Ring colour", "The thin ring around the still ball: a colour of yours, or the theme's",
+                     self.ring_dot, self.ring_hex, ring_btn),
         ])
 
         self.words = QSpinBox(minimum=50, maximum=500, singleStep=25, alignment=Qt.AlignRight)
@@ -1567,7 +1567,9 @@ class SettingsWindow(QWidget):
 
     def set_ball_image(self, path: str):
         self.ball_image = path
-        self.image_name.setText(Path(path).name if path else "No image yet: the logo is used")
+        name = Path(path).name if path else ""
+        self.image_btn.setText((name if len(name) <= 24 else name[:21] + "…") if name else "Choose image…")
+        self.image_btn.setToolTip(path or "No image yet: the logo is used")
 
     def choose_ball_image(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose the ball's image", self.ball_image or str(Path.home()),

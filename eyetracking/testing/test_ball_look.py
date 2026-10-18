@@ -42,7 +42,7 @@ assert w.ball_look == "logo" and not w.image_btn.isEnabled() and w.ring_hex.text
 w.set_ball_image(str(tmp / "me.png"))
 w.set_ball_look("image")
 w.set_ball_ring("#123456")
-assert w.image_btn.isEnabled() and w.image_name.text() == "me.png" and w.ring_hex.text() == "#123456"
+assert w.image_btn.isEnabled() and w.image_btn.text() == "me.png" and w.ring_hex.text() == "#123456"
 saved = []
 w.saved.connect(saved.append)
 w.save()
