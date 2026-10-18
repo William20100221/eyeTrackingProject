@@ -53,7 +53,7 @@ from eyetracking.services import storage
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import TEXT_FONTS, SettingsWindow, pick_camera
+from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, pick_camera
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
 
 
@@ -402,6 +402,7 @@ def main() -> int:
     font = QFont()
     font.setFamilies(TEXT_FONTS)              # the window's fonts (icon font last, for its glyphs)
     qt_app.setFont(font)
+    qt_app.setWindowIcon(app_icon())          # the logo on the taskbar and every window
     app = App(mouse=args.mouse)
     try:
         return qt_app.exec()
