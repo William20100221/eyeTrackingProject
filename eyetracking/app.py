@@ -305,6 +305,7 @@ class App(QObject):
         self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
         self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
         self.summary_words = values["summary_words"]
+        self.ball.set_look(values["ball_look"], values["ball_image"], values["ball_ring"] or values["seed"])
         if values["camera"] != self.camera:
             self.camera = values["camera"]
             if self.tracker is not None:          # in use right now: switch at once

@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 import random
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import (
     QElapsedTimer, QEasingCurve, QObject, QPoint, QPointF, QPropertyAnimation,
@@ -43,7 +44,11 @@ from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QMenu, QTextEdit, QWidget,
 )
 
+from PySide6.QtSvg import QSvgRenderer
+
 from eyetracking.ui.water_ball import WaterBallRenderer
+
+MARK_SVG = Path(__file__).with_name("app_mark.svg")   # the logo: the still ball's default face
 
 # --------------------------------------------------------------------------- theme
 ACCENT   = "#3D6CF6"
@@ -129,12 +134,11 @@ class FloatingBall(QWidget):
         self._ticker.timeout.connect(self._tick)
         self._ticker.start(40)
 
-        # water-eye look (ui/water_ball.py). None = no OpenGL here: old look instead
-        try:
-            self._water = WaterBallRenderer()
-        except RuntimeError as e:
-            print(f"Floating ball: plain look ({e})")
-            self._water = None
+        # the look (Settings > Floating ball): "logo" or "image" = still, inside a thin ring of `ring`
+        # colour; "water" = the moving liquid eye (ui/water_ball.py, OpenGL; still if there is none)
+        self.look, self.ring = "logo", QColor(ACCENT)
+        self._water: WaterBallRenderer | None = None
+        self.set_look("logo", "", ACCENT)
         self._clock = QElapsedTimer()
         self._clock.start()
         self._last_ms = 0
@@ -145,6 +149,27 @@ class FloatingBall(QWidget):
         self._look_ms = -10_000                   # when it was last fed
         self._blink = -1.0                        # -1 = not blinking, else 0..1 through a blink
         self._next_blink = 4.0                    # seconds until the next idle blink
+
+    def set_look(self, look: str, image: str = "", ring: str = "") -> None:
+        """Settings > Floating ball: "water" (moving), "logo" or "image" (still, in a thin ring of `ring`).
+        An image that can't be read, or no OpenGL for the water, falls back to the logo."""
+        self.look = look
+        self.ring = QColor(ring) if ring and QColor(ring).isValid() else QColor(ACCENT)
+        if look == "water" and self._water is None:
+            try:
+                self._water = WaterBallRenderer()
+            except RuntimeError as e:
+                print(f"Floating ball: still look ({e})")
+                self.look = "logo"
+        self.avatar = QPixmap(image) if look == "image" and image else QPixmap()
+        if self.look != "water" and self.avatar.isNull():
+            px = self.BALL * 2                        # the logo, drawn sharp from its SVG
+            self.avatar = QPixmap(px, px)
+            self.avatar.fill(Qt.GlobalColor.transparent)
+            p = QPainter(self.avatar)
+            QSvgRenderer(str(MARK_SVG)).render(p)
+            p.end()
+        self.update()
 
     # where the eye looks: the app's gaze point if fed lately, else the mouse
     def look_at(self, global_pos: QPoint) -> None:
@@ -208,7 +233,7 @@ class FloatingBall(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         circle = QRectF(self.PAD, self.PAD, self.BALL, self.BALL)
 
-        if self._water is not None:
+        if self.look == "water" and self._water is not None:
             # the shader's drop fills ~80% of its image; size it so the drop = the ball
             side = self.BALL / 0.8
             lid = 1 - math.sin(math.pi * min(self._blink, 1)) if self._blink >= 0 else 1.0
@@ -228,10 +253,10 @@ class FloatingBall(QWidget):
         p.setBrush(glow)
         p.drawEllipse(circle.adjusted(-self.PAD, -self.PAD, self.PAD, self.PAD))
 
-        p.setBrush(QColor("white"))          # white ring
+        p.setBrush(self.ring)                # the thin ring (Settings > Floating ball > Ring colour)
         p.drawEllipse(circle)
 
-        inner = circle.adjusted(4, 4, -4, -4)
+        inner = circle.adjusted(3, 3, -3, -3)
         if not self.avatar.isNull():
             clip = QPainterPath()
             clip.addEllipse(inner)
