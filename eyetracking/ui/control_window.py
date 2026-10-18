@@ -53,13 +53,13 @@ from eyetracking.services.storage import (blink_score_lines, calibration_lines, 
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS
 
 DEFAULTS = {
-    "seed": "#3D6CF6",
+    "seed": "#E5483B",          # the logo's red
     "theme": "system",          # system | light | dark
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
     "person_mode": False,       # on: data under data/<person>/; off: straight under data/
     "person": "",
 }
-SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
+SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#E5483B", "#D32F2F", "#D81B60", "#7E57C2"]
 
 PAGE_OF_TAB = {0: 0, 2: 1}                # title-bar tab -> page in the stack (tab 1, Calibration, is full screen)
 TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
