@@ -55,7 +55,7 @@ class App(QObject):
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
         self.testing.command.connect(lambda c: {"calibrate": self.calibrate, "check": self.check, "blink": self.blink_test}[c]())
-        self.testing.method_changed.connect(lambda _: self._retrain(quiet=True))
+        self.testing.method_changed.connect(lambda _: self.testing.status.setText(self._model_status()))
         self.testing.data_changed.connect(self._retrain)
         settings = self.control.read_store()
 
@@ -165,8 +165,9 @@ class App(QObject):
             self.models.pop(method.id, None)
 
     def _retrain(self, quiet: bool = False) -> None:
-        """The chosen method's data changed (a calibration added, removed, disabled): train again."""
-        self._train(self.method)
+        """Calibrations changed (removed, disabled, enabled; any type, from the Data page): train every model again."""
+        for m in METHOD_BY_ID.values():
+            self._train(m)
         self.testing.status.setText(self._model_status())
         if not quiet:
             self.testing.say(self._model_status())

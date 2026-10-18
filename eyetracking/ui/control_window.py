@@ -477,21 +477,27 @@ def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
         lst.addItem(QListWidgetItem(empty))   # no path: clicking does nothing
 
 
-def fill_grouped(lst: QListWidget, groups: list[tuple[str, list[Path]]], empty: str):
-    """Dated files under headings (a person each): a heading can't be clicked or opened."""
+def fill_tree(lst: QListWidget, rows: list, empty: str):
+    """Headings and dated files in order. A row is ("person", name), ("type", method name)
+    or a Path. Headings can't be clicked or opened; a person's is larger than a type's,
+    types sit under names and dates under types (indented, so the levels read at a glance)."""
     lst.clear()
-    for heading, paths in groups:
-        item = QListWidgetItem(heading)
-        item.setFlags(Qt.NoItemFlags)
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
+    indent = "      " if any(not isinstance(r, Path) and r[0] == "person" for r in rows) else ""
+    for row in rows:
+        if isinstance(row, Path):
+            item = QListWidgetItem(f"{indent}      {file_date(row):%d %b %Y   %H:%M}")
+            item.setData(Qt.UserRole, str(row))
+        else:
+            kind, text = row
+            item = QListWidgetItem(text if kind == "person" else indent + text)
+            item.setFlags(Qt.NoItemFlags)
+            font = item.font()
+            font.setBold(True)
+            if kind == "person":
+                font.setPointSizeF(font.pointSizeF() * 1.15)
+            item.setFont(font)
         lst.addItem(item)
-        for path in paths:
-            row = QListWidgetItem(f"{file_date(path):%d %b %Y   %H:%M}")
-            row.setData(Qt.UserRole, str(path))
-            lst.addItem(row)
-    if not groups and empty:
+    if not rows and empty:
         lst.addItem(QListWidgetItem(empty))
 
 
@@ -622,10 +628,10 @@ class TestingPage(QWidget):
         mv.setSpacing(8)
         self.lists_title = label("Calibrations", "sheetTitle")
         mv.addWidget(self.lists_title)
-        hint = label("The chosen method's calibrations by person, then by date (data/<person>/<method>/). Double-click one "
-                     "to read it in words. Right-click to disable it (kept, but it stops training the model), enable it "
-                     "again, or remove it. The person in use (Settings > Person mode) is the one whose active files train "
-                     "the model.", "sheetText")
+        hint = label("Every calibration, by person, then by calibration type, then by date (data/<person>/<type>/). "
+                     "Double-click one to read it in words. Right-click to disable it (kept, but it stops training), enable "
+                     "it again, or remove it. The person in use (Settings > Person mode) is the one whose active files "
+                     "train the models.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
         cols = QHBoxLayout()
@@ -633,7 +639,7 @@ class TestingPage(QWidget):
         self.active_list = side_list(self.open_detail)
         self.disabled_list = side_list(self.open_detail)
         self.inactive_list = side_list(self.open_detail)
-        for title, sub, lst in [("Active", "Trains the method's model", self.active_list),
+        for title, sub, lst in [("Active", "Trains the models", self.active_list),
                                 ("Non-active", "Works, but you turned it off", self.disabled_list),
                                 ("Not usable", "Another version, or the file can't be read", self.inactive_list)]:
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -754,7 +760,6 @@ class TestingPage(QWidget):
         self.method_steps.setText("\n".join(f"{i + 1}.  {s}" for i, s in enumerate(m.steps))
                                   + f"\n\nSaved as {storage.method_dir(m.id).relative_to(storage.BASE_DIR.parent).as_posix()}"
                                     f"/{m.id}_<date>_<time>.json")
-        self.lists_title.setText(f"Calibrations · {m.name}")
         self.refresh()
         if announce:
             self.method_changed.emit(method_id)
@@ -845,21 +850,23 @@ class TestingPage(QWidget):
     def refresh(self):
         """Re-read data/. Runs whenever the page shows, the method changes, or a file was saved."""
         roots = storage.person_roots()
-        cols: tuple[list, list, list] = ([], [], [])          # active, non-active, not usable: (person, files)
+        cols: tuple[list, list, list] = ([], [], [])          # active, non-active, not usable: rows for fill_tree
         for name, root in roots:
-            usable = {p: calibration_usable(p) for p in list_calibrations(self.method_id, root)}
+            mine: tuple[list, list, list] = ([], [], [])       # this person's rows, per column
+            for m in METHODS:                                   # every calibration type, under the person's name
+                usable = {p: calibration_usable(p) for p in list_calibrations(m.id, root)}
+                files = ([p for p, ok in usable.items() if ok], list_disabled(m.id, root),
+                         [p for p, ok in usable.items() if not ok])
+                for rows, paths in zip(mine, files):
+                    if paths:
+                        rows += [("type", m.name), *paths]
             heading = (name or "No person (data/)") + ("   · in use" if root == storage.DATA_DIR else "")
-            files = ([p for p, ok in usable.items() if ok], list_disabled(self.method_id, root),
-                     [p for p, ok in usable.items() if not ok])
-            for col, paths in zip(cols, files):
-                if paths:
-                    col.append((heading, paths))
-        for lst, groups, empty in zip((self.active_list, self.disabled_list, self.inactive_list), cols,
-                                      ("None active: enable one, or calibrate", "None", "None")):
-            if len(roots) > 1:                                  # people exist: a heading per person
-                fill_grouped(lst, groups, empty)
-            else:
-                fill_list(lst, groups[0][1] if groups else [], empty)
+            for col, rows in zip(cols, mine):
+                if rows:                                        # people exist: the name above its types
+                    col += ([("person", heading)] if len(roots) > 1 else []) + rows
+        for lst, rows, empty in zip((self.active_list, self.disabled_list, self.inactive_list), cols,
+                                    ("None active: enable one, or calibrate", "None", "None")):
+            fill_tree(lst, rows, empty)
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
 

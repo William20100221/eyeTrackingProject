@@ -35,19 +35,20 @@ assert "Saved as data/original-3x3/original-3x3_<date>_<time>.json" in page.meth
 rec = CalibrationRecording((), (), (CalibrationSample((0.5,) * N_FEATURES, 0.5, 0.5),))
 mine = storage.save_calibration(rec, "original-3x3")            # someone's file straight under data/
 page.refresh()
-assert page.active_list.item(0).data(0x0100) == str(mine)
+assert page.active_list.item(0).text() == "Original 3×3" and page.active_list.item(1).data(0x0100) == str(mine)   # no people: types only
 
 w.set_person("Ann")                                              # Settings: person Ann, mode on, Save
 w.person_switch.setChecked(True)
 w.save()
 assert storage.DATA_DIR == tmp / "data" / "Ann" and (tmp / "data" / "Ann" / "sweep").is_dir()
 texts = lambda lst: [lst.item(i).text() for i in range(lst.count())]
-assert texts(page.active_list) == ["No person (data/)", texts(page.active_list)[1]]   # sorted by person: data/'s file
-assert page.active_list.item(1).data(0x0100) == str(mine) and page.active_list.item(0).flags() == Qt.NoItemFlags  # a heading: inert
+assert texts(page.active_list)[:2] == ["No person (data/)", "      Original 3×3"] and len(texts(page.active_list)) == 3   # name, then type
+assert page.active_list.item(2).data(0x0100) == str(mine)
+assert page.active_list.item(0).flags() == page.active_list.item(1).flags() == Qt.NoItemFlags   # headings: inert
 ann = storage.save_calibration(rec, "original-3x3")              # Ann's first calibration
 page.refresh()
-assert texts(page.active_list)[0] == "No person (data/)" and texts(page.active_list)[2] == "Ann   · in use", texts(page.active_list)
-assert page.active_list.item(3).data(0x0100) == str(ann)
+assert texts(page.active_list)[3:5] == ["Ann   · in use", "      Original 3×3"], texts(page.active_list)
+assert page.active_list.item(5).data(0x0100) == str(ann)
 assert storage.set_calibration_enabled(mine, False).parent == tmp / "data" / "original-3x3" / "disabled"   # in ITS folder
 page.refresh()
 assert texts(page.disabled_list)[0] == "No person (data/)" and texts(page.active_list)[0] == "Ann   · in use"

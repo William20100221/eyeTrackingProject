@@ -75,18 +75,22 @@ off = storage.set_calibration_enabled(path, False)
 assert off == storage.method_dir("original-3x3") / "disabled" / path.name and storage.method_of(off) == "original-3x3"
 assert storage.list_calibrations("original-3x3") == [broken] and storage.list_disabled("original-3x3") == [off]
 page = cw.TestingPage("original-3x3")
-counts = lambda: (page.active_list.count(), page.disabled_list.count(), page.inactive_list.count())
-assert counts() == (1, 1, 1) and page.active_list.item(0).data(0x0100) is None, counts()   # active: placeholder only
-assert page.lists_title.text() == "Calibrations · Original 3×3"
+texts = lambda lst: [lst.item(i).text() for i in range(lst.count())]
+files = lambda lst: [lst.item(i).data(0x0100) for i in range(lst.count())]
+assert page.lists_title.text() == "Calibrations"                 # every type, each under its name
+assert texts(page.active_list)[0] == "Original 5×5" and files(page.active_list) == [None, str(other)]
+assert texts(page.disabled_list)[0] == "Original 3×3" and files(page.disabled_list) == [None, str(off)]
+assert texts(page.inactive_list)[0] == "Original 3×3" and files(page.inactive_list) == [None, str(broken)]
 retrained = []
 page.data_changed.connect(lambda: retrained.append(True))
 page.set_enabled(off, True)                                     # Enable: back in the method's folder, the model retrains
 assert storage.list_calibrations("original-3x3") == [path, broken] and storage.list_disabled("original-3x3") == [] and retrained
-assert page.active_list.item(0).data(0x0100) == str(path) and page.disabled_list.item(0).data(0x0100) is None
+assert texts(page.active_list)[::2] == ["Original 3×3", "Original 5×5"] and files(page.active_list) == [None, str(path), None, str(other)]
+assert texts(page.disabled_list) == ["None"]
 chosen = []
 page.method_changed.connect(chosen.append)
-page.set_method("original-5x5")                                 # another method: its own files only
-assert chosen == ["original-5x5"] and page.active_list.item(0).data(0x0100) == str(other) and counts() == (1, 1, 1)
+page.set_method("original-5x5")                                 # the chosen method doesn't filter the lists
+assert chosen == ["original-5x5"] and files(page.active_list) == [None, str(path), None, str(other)]
 assert storage.remove_samples(path, {0}) == 1 and "1 sample," in storage.calibration_text(path)
 assert (storage.method_dir("original-3x3") / "trash" / path.name).exists()
 storage.remove_calibration(path)
