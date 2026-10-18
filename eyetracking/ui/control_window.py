@@ -33,7 +33,7 @@ from eyetracking.services.camera import camera_names
 import eyetracking.services.storage as storage
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_disabled,
-                                          list_gaze_checks, method_of, remove_calibration, remove_samples,
+                                          remove_calibration, remove_samples,
                                           set_calibration_enabled, trash_file)
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS
 
@@ -501,14 +501,31 @@ def fill_tree(lst: QListWidget, rows: list, empty: str):
         lst.addItem(QListWidgetItem(empty))
 
 
+def person_type_rows(list_for) -> list:
+    """fill_tree rows of every person's files: list_for(method id, person folder) -> paths.
+    Person headings only once people exist; a type only when it has files."""
+    roots = storage.person_roots()
+    rows = []
+    for name, root in roots:
+        mine = []
+        for m in METHODS:
+            paths = list_for(m.id, root)
+            if paths:
+                mine += [("type", m.name), *paths]
+        if mine:
+            heading = (name or "No person (data/)") + ("   · in use" if root == storage.DATA_DIR else "")
+            rows += ([("person", heading)] if len(roots) > 1 else []) + mine
+    return rows
+
+
 class DataPage(QWidget):
     """One kind of recorded data: the files by date on the left, the chosen one in
     words on the right. Right-click a file to remove it (it moves to a trash folder
     beside it)."""
 
-    def __init__(self, title: str, hint: str, list_files, to_lines, empty: str, name=None):
+    def __init__(self, title: str, hint: str, list_files, to_lines, empty: str, name=None, tree=False):
         super().__init__()
-        self._list, self._lines, self._empty, self._name = list_files, to_lines, empty, name
+        self._list, self._lines, self._empty, self._name, self._tree = list_files, to_lines, empty, name, tree
         h = QHBoxLayout(self)
         h.setContentsMargins(24, 20, 24, 24)
         h.setSpacing(24)
@@ -530,13 +547,19 @@ class DataPage(QWidget):
         self.lines = QListWidget(objectName="linesList")
         self.lines.setWordWrap(True)
         self.lines.setSelectionMode(QListWidget.NoSelection)
+        self.lines.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # wrap to the width, never clip
+        self.lines.setResizeMode(QListWidget.Adjust)                    # re-wrap when the scrollbar appears
         h.addWidget(self.lines, 1)
 
     def refresh(self):
         self.files.blockSignals(True)
-        fill_list(self.files, self._list(), self._empty, self._name)
+        if self._tree:
+            fill_tree(self.files, self._list(), self._empty)
+        else:
+            fill_list(self.files, self._list(), self._empty, self._name)
         self.files.blockSignals(False)
-        self.files.setCurrentRow(0)
+        first = next((i for i in range(self.files.count()) if self.files.item(i).data(Qt.UserRole)), 0)
+        self.files.setCurrentRow(first)                  # the first file, past the headings
         self._show(self.files.currentItem())
 
     def _show(self, item):
@@ -604,14 +627,9 @@ class TestingPage(QWidget):
         # 5: blink scores; 6: the log; 7: one calibration's detail (from 3)
         self.main = QStackedWidget()
         self.main.addWidget(self._calibrate_page())
-        self.main.addWidget(self._intro(
-            I_CHART, "Gaze check", "A full-screen test of the chosen method's model: how accurate is it today?",
-            ["A green dot follows where the model thinks you look. The faint rings are the method's calibration "
-             "dots: look at one and see where the dot lands.",
-             "Press Enter to record a sample of where you are looking. Samples are numbered on screen (#index  x  y) "
-             "and saved in the method's folder when you leave, with the method in the file name.",
-             "Space pauses. Esc saves and leaves. It needs a calibration of the chosen method first."],
-            "Start the gaze check", "check"))
+        self.check_person = ""                   # whose model the check tests (the app sets the person in use)
+        self.check_method = method_id                                     # ...and which calibration type
+        self.main.addWidget(self._check_page())
         self.main.addWidget(self._intro(
             I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off can be set from "
             "your own numbers instead of a guess.",
@@ -653,9 +671,9 @@ class TestingPage(QWidget):
         mv.addLayout(cols, 1)
         self.main.addWidget(lists)
         self.gaze_checks = DataPage(
-            "Gaze checks", "Every method's gaze checks (the method is in the name). Each sample with the nearest "
-            "calibration dot of that method's grid and how far off it was. Right-click a file to remove it.",
-            list_gaze_checks, gaze_check_lines, "No gaze check yet", name=method_of)
+            "Gaze checks", "By person, then by calibration type, then by date. Each sample with the ring that was "
+            "lit and how far the model was from it. Right-click a file to remove it.",
+            lambda: person_type_rows(storage.list_gaze_checks), gaze_check_lines, "No gaze check yet", tree=True)
         self.blink_scores = DataPage(
             "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
             "file to remove it.", list_blink_scores, blink_score_lines, "No blink test yet")
@@ -764,6 +782,77 @@ class TestingPage(QWidget):
         if announce:
             self.method_changed.emit(method_id)
 
+    # ----- the gaze check: one person's model of one calibration type
+
+    def _check_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(24, 20, 24, 24)
+        v.setSpacing(12)
+        v.addWidget(label(f"{I_CHART}   Gaze check", "sheetTitle"))
+        lead = label("Test one person's model of one calibration type. Every type is tested on the same 25 rings, "
+                     "so their errors can be compared: which method is the most accurate for this person?", "lead")
+        lead.setWordWrap(True)
+        v.addWidget(lead)
+        pick = QHBoxLayout()
+        pick.setSpacing(8)
+        pick.addWidget(label("Person", "rowtitle"))
+        self.check_person_btn = button("", "assist")
+        self.check_person_menu = QMenu(self.check_person_btn)
+        self.check_person_menu.aboutToShow.connect(self._fill_check_person_menu)
+        self.check_person_btn.setMenu(self.check_person_menu)
+        pick.addWidget(self.check_person_btn)
+        pick.addSpacing(16)
+        pick.addWidget(label("Calibration type", "rowtitle"))
+        self.check_chips = QButtonGroup(self)
+        for i, m in enumerate(METHODS):
+            b = CheckButton(m.name, "chip")
+            self.check_chips.addButton(b, i)
+            pick.addWidget(b)
+        self.check_chips.idClicked.connect(lambda i: self.set_check(method_id=METHODS[i].id))
+        pick.addStretch(1)
+        v.addLayout(pick)
+        self.check_results = label("", "sheetText")              # the comparison: every type, this person
+        self.check_results.setTextFormat(Qt.RichText)
+        v.addWidget(self.check_results)
+        for s in ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, "
+                  "and the next ring lights up. A sample's error is its distance to the lit ring.",
+                  "Do a full round of 25 for a fair number. Space pauses. Esc saves and leaves; the file goes in that "
+                  "person's folder of that calibration type."]:
+            w = label(f"•   {s}", "sheetText")
+            w.setWordWrap(True)
+            v.addWidget(w)
+        go = button("Start the gaze check", "filled")
+        go.clicked.connect(lambda: self.command.emit("check"))
+        v.addSpacing(8)
+        v.addWidget(go, 0, Qt.AlignLeft)
+        v.addStretch(1)
+        return page
+
+    def _fill_check_person_menu(self):
+        self.check_person_menu.clear()
+        for name, _ in storage.person_roots():
+            self.check_person_menu.addAction(name or "No person (data/)", lambda n=name: self.set_check(person=n))
+
+    def set_check(self, person: str | None = None, method_id: str | None = None):
+        """Whose model and which calibration type the gaze check tests; the comparison follows the person."""
+        if person is not None:
+            self.check_person = person
+        if method_id is not None:
+            self.check_method = method_id
+        self.check_person_btn.setText(f"{self.check_person or 'No person (data/)'}  {I_CHEVRON}")
+        self.check_chips.button([m.id for m in METHODS].index(self.check_method)).setChecked(True)
+        pct = lambda e: "–" if e is None else f"{e:.1%}"
+        rows = "".join(
+            f"<tr><td>{'<b>' if m == self.check_method else ''}{METHOD_BY_ID[m].name}</td><td align=right>{cal}</td>"
+            f"<td align=right>{n}</td><td align=right>{pct(last)}</td><td align=right>{pct(mean)}</td></tr>"
+            for m, cal, n, last, mean in storage.method_results(storage.person_root(self.check_person)))
+        self.check_results.setText(
+            "<table cellspacing=0 cellpadding=4><tr><th align=left>Calibration type</th><th>Calibrations</th>"
+            f"<th>Gaze checks</th><th>Latest error</th><th>Mean error</th></tr>{rows}</table>"
+            "<br>Error: the mean distance from where the model said to the lit ring, as a share of the screen. "
+            "Lower is better.")
+
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
         """An instruction page: what the test does, then the button that starts it."""
         page = QWidget()
@@ -869,6 +958,7 @@ class TestingPage(QWidget):
             fill_tree(lst, rows, empty)
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
+        self.set_check()
 
     def showEvent(self, e):
         self.refresh()

@@ -68,12 +68,31 @@ app.fullscreen.close()
 pump()
 assert log == ["open", "close"] and app.tracker is None                        # done: off
 app.check()                                                                    # no model yet: refused, camera stays off
-assert log[-1] == "close" and "calibrate first" in app.testing.status.text()
+assert log[-1] == "close" and "no usable calibration yet" in app.testing.status.text(), app.testing.status.text()
 app.blink_test()                                                               # the blink test: on
 assert log[-1] == "open" and app.camera_users == {"blink"}
 app.fullscreen.close()
 pump()
 assert log[-1] == "close" and app.tracker is None and not app.camera_users
+
+# a gaze check of ANOTHER person's 3x3 (not the person in use): trained from that person's files only
+import numpy as np
+from eyetracking.core.calibration import point_grid
+from eyetracking.core.line_model import ScreenGeometry, features_for
+from eyetracking.core.models import CalibrationRecording, CalibrationSample
+rng = np.random.default_rng(3)
+frames = lambda t: [CalibrationSample(features_for(ScreenGeometry(27.7, 18.9), t, list(rng.normal([0, 0, 0, 0, -5, -65], 1)),
+                                                  (2, -1), 0.9, rng), *t) for _ in range(20)]
+storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(3) for s in frames(t))), "original-3x3",
+                         tmp / "data" / "William" / "original-3x3" / "original-3x3_2026-10-18_120000.json")
+app.testing.set_check(person="William", method_id="original-3x3")
+app.check()
+assert app.fullscreen.method_id == "original-3x3" and app.fullscreen.folder == tmp / "data" / "William" / "original-3x3"
+said = app.testing.log.item(0).text()
+assert "William's Original 3×3: model trained on 1" in said and said.endswith("Look at the lit ring, press Enter."), said   # ~180, a few cleaned
+assert storage.DATA_DIR == tmp / "data"                                        # the person in use didn't change
+app.fullscreen.close()
+pump()
 
 fail = True                                                                    # a camera that can't open
 app.calibrate()

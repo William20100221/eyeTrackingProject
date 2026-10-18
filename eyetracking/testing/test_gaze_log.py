@@ -1,8 +1,9 @@
 """
 Self-check for the gaze-check samples (no webcam):  python -m eyetracking.testing.test_gaze_log
 
-Enter records a sample (where the dot is right now); each one gets an index
-written BEFORE its coordinates, on screen and in the csv saved on Esc. Space
+Enter records a sample (where the dot is right now) against the lit ring, then
+lights the next one; each sample gets an index written BEFORE its coordinates, on
+screen and in the csv saved on Esc. Space
 pauses. Nothing is recorded by itself.
 """
 import csv
@@ -33,8 +34,9 @@ key(window, Qt.Key.Key_Enter)                             # ...so sample 1 is (0
 window._tick()                                            # no Enter: nothing recorded
 window._tick()
 key(window, Qt.Key.Key_Return)                            # sample 2 at (0.5, 0.6)
-assert window.sample_lines() == ["#0000  x 0.100  y 0.200", "#0001  x 0.100  y 0.200",
-                                 "#0002  x 0.500  y 0.600"], window.sample_lines()
+assert window.sample_lines() == ["#0000  x 0.100  y 0.200  off 0.158", "#0001  x 0.100  y 0.200  off 0.230",
+                                 "#0002  x 0.500  y 0.600  off 0.550"], window.sample_lines()   # off = from the lit ring
+assert window._lit == 3 and [r[3:] for r in window.log] == [(0.05, 0.05), (0.275, 0.05), (0.5, 0.05)]   # ring by ring
 
 for _ in range(2):                                        # Space pauses, Space carries on
     key(window, Qt.Key.Key_Space)
@@ -44,5 +46,6 @@ for _ in range(2):                                        # Space pauses, Space 
 
 with tempfile.TemporaryDirectory() as folder:
     rows = list(csv.reader(open(window.save_log(Path(folder)))))
-assert rows[0] == ["index", "x", "y"] and rows[1] == ["0", "0.1000", "0.2000"] and len(rows) == 4, rows
+assert rows[0] == ["index", "x", "y", "target_x", "target_y"] and rows[1] == ["0", "0.1000", "0.2000", "0.0500", "0.0500"]
+assert len(rows) == 4, rows
 print("gaze samples ok")

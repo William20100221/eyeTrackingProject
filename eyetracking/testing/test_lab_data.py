@@ -105,14 +105,22 @@ except ValueError:
 old_branch = tmp / "calibrations" / "calibration_2026-01-02_000000.json"   # master's file in the shared data/
 old_branch.parent.mkdir()
 old_branch.write_text("{}")
-check = storage.save_gaze_check([(0, 0.05, 0.05), (1, 0.5, 0.52)], "original-3x3")
+check = storage.save_gaze_check([(0, 0.05, 0.05, 0.05, 0.05), (1, 0.5, 0.52, 0.5, 0.5)], "original-3x3")
 assert check.parent == tmp / "original-3x3" and check.name.startswith("gaze-check_original-3x3_20"), check
 assert storage.list_calibrations("original-3x3") == [broken]   # a gaze check beside them is not a calibration
 words = storage.gaze_check_lines(check)
-assert words[0].startswith("Gaze check with Original 3×3,") and "2 samples" in words[0], words[0]
-assert words[2] == "#0: 5% across, 5% down; nearest calibration dot (1, 1), 0% of the screen away", words
-assert words[3] == "#1: 50% across, 52% down; nearest calibration dot (2, 2), 2% of the screen away", words   # the 3x3's centre
-assert storage.list_gaze_checks() == [check]
+assert words[0].startswith("Gaze check of No person's Original 3×3 model,") and "2 samples, average error 1.0%" in words[0], words[0]
+assert words[2] == "#0: looking at dot (1, 1) of the 5x5 grid; the model said 5% across, 5% down, 0.0% of the screen away", words
+assert words[3] == "#1: looking at dot (3, 3) of the 5x5 grid; the model said 50% across, 52% down, 2.0% of the screen away", words
+assert storage.list_gaze_checks("original-3x3") == [check] and storage.list_gaze_checks("sweep") == []
+older = check.with_name("gaze-check_original-3x3_2026-01-01_000000.csv")      # from before the lit rings
+older.write_text("index,x,y\n0,0.3,0.26\n")
+assert storage.read_gaze_check(older) == [(0, 0.3, 0.26, 0.275, 0.275)]      # the nearest ring as its target
+results = {m: r for m, *r in storage.method_results()}                          # the comparison, per type
+calibs, checks, latest, mean = results["original-3x3"]
+assert checks == 2 and abs(latest - 0.01) < 1e-6 and mean > latest, results["original-3x3"]   # latest = the newest file
+assert results["sweep"][1:] == [0, None, None]
+older.unlink()
 rows = [("open", 0, 0.05, 0.06), ("open", 33, 0.07, 0.05), ("down", 66, 0.2, 0.21), ("closed", 99, 0.8, 0.85),
         ("closed", 132, 0.9, 0.88), ("wink_left", 165, 0.9, 0.1)]
 blink = storage.save_blink_scores(rows)
@@ -139,7 +147,8 @@ assert storage.use_person("Ann Lee") == tmp / "Ann Lee" and storage.list_calibra
 storage.ensure_layout()
 ann = storage.save_calibration(CalibrationRecording((), (), (sample(0.5, 0.5),)), "original-4x4")
 assert ann.parent == tmp / "Ann Lee" / "original-4x4", ann
-assert storage.save_gaze_check([(0, 0.5, 0.5)], "sweep").parent == tmp / "Ann Lee" / "sweep"
+assert storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "sweep").parent == tmp / "Ann Lee" / "sweep"
+assert storage.method_results(tmp / "Ann Lee")[3][2] == 1 and storage.method_results(tmp)[3][2] == 0   # per person
 assert storage.save_blink_scores(rows).parent == tmp / "Ann Lee" / "blink-test"
 assert storage.set_calibration_enabled(ann, False).parent == tmp / "Ann Lee" / "original-4x4" / "disabled"
 storage.use_person("Bo")

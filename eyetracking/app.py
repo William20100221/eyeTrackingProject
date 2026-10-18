@@ -31,7 +31,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.blink_scores import advice as blink_advice
-from eyetracking.core.calibration import GazeProfile, point_grid
+from eyetracking.core.calibration import GazeProfile
 from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, train
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
@@ -113,6 +113,7 @@ class App(QObject):
         for m in METHOD_BY_ID.values():
             self._train(m)
         self.testing.set_method(self.testing.method_id, announce=False)   # lists + "Saved as" path
+        self.testing.set_check(person=person)     # the gaze check tests the person in use, unless picked
         where = root.relative_to(storage.BASE_DIR.parent).as_posix()
         self.testing.say(f"Saving for {person} in {where}/." if person else f"Saving straight under {where}/.")
 
@@ -227,19 +228,27 @@ class App(QObject):
         self.testing.status.setText(self._model_status())
 
     def check(self) -> None:
-        method = self.method
-        model = self.models.get(method.id)
-        if not self.mouse and model is None:
-            self.testing.say(f"{method.name}: calibrate first.")
-            return
+        """The gaze check of the person and calibration type picked on its page: that person's
+        model of that type, trained from that person's files only."""
+        method = METHOD_BY_ID[self.testing.check_method]
+        person = self.testing.check_person
+        root = storage.person_root(person)
+        who = f"{person or 'No person'}'s {method.name}"
+        model = None
+        if not self.mouse:
+            model, n = train(method, load_all_calibrations(method.id, root), screen_geometry())
+            if model is None:
+                self.testing.say(f"{who}: no usable calibration yet. Calibrate first.")
+                return
+            self.testing.say(f"{who}: model trained on {n} samples. Look at the lit ring, press Enter.")
         if not self._use_camera("check"):
             return
 
         def get():
             return fake_point_from_mouse() if self.mouse else model.predict(self.tracker.read_features())
-        window = GazeWindow(get_point=get, targets=point_grid(method.grid), method_id=method.id)
+        window = GazeWindow(get_point=get, method_id=method.id, folder=storage.method_dir(method.id, root))
         window.logged.connect(lambda path: (self.testing.refresh(), self.testing.say(
-            f"{method.name}: gaze samples saved as {Path(path).name}. See Data > Gaze checks.")))
+            f"{who}: gaze check saved as {Path(path).name}. See Data > Gaze checks.")))
         self._open_fullscreen(window)
 
     def blink_test(self) -> None:

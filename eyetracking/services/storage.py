@@ -90,6 +90,18 @@ def use_person(name: str) -> Path:
 BLINK_DIR = DATA_DIR / BLINK
 
 
+def person_root(name: str) -> Path:
+    """A person's folder ('' = data/ itself)."""
+    name = person_name(name)
+    return BASE_DIR / name if name else BASE_DIR
+
+
+def person_of(path: Path) -> str:
+    """Whose file it is: the person folder above its method folder ('' = straight under data/)."""
+    root = _method_folder(path).parent
+    return "" if root == BASE_DIR else root.name
+
+
 def person_roots() -> list[tuple[str, Path]]:
     """Every place data can be: ("", data/) first, then each person A to Z with their folder."""
     return [("", BASE_DIR)] + [(name, BASE_DIR / name) for name in list_people()]
@@ -165,10 +177,11 @@ def list_disabled(method_id: str, root: Path | None = None) -> list[Path]:
     return sorted((method_dir(method_id, root) / "disabled").glob(f"{method_id}_*.json"), reverse=True)
 
 
-def load_all_calibrations(method_id: str) -> list[CalibrationRecording]:
-    """Every readable active calibration of a method, NEWEST FIRST. Unreadable files are skipped, with a message."""
+def load_all_calibrations(method_id: str, root: Path | None = None) -> list[CalibrationRecording]:
+    """Every readable active calibration of a method (of the person in use, or under `root`), NEWEST
+    FIRST. Unreadable files are skipped, with a message."""
     recordings = []
-    for path in list_calibrations(method_id):
+    for path in list_calibrations(method_id, root):
         try:
             recordings.append(load_calibration(path))
         except (OSError, ValueError, KeyError, TypeError) as e:   # damaged, hand-edited
@@ -300,51 +313,78 @@ def remove_calibration(path: Path) -> Path:
     return target
 
 
-# ---- gaze checks: the samples recorded with Enter, per method ------------------
-def save_gaze_check(samples: list[tuple[int, float, float]], method_id: str, folder: Path | None = None) -> Path:
-    """(index, x, y) rows -> <method>/gaze-check_<method>_<time>.csv. Returns the path."""
+# ---- gaze checks: one person's model of one calibration type, on the same rings -------
+CHECK_GRID = 5     # every type is checked on the 5x5 rings, one lit at a time: the same test for all
+Check = tuple[int, float, float, float, float]   # index, where the model said (x, y), the lit ring (x, y)
+
+
+def save_gaze_check(samples: list[Check], method_id: str, folder: Path | None = None) -> Path:
+    """(index, x, y, ring x, ring y) rows -> <method>/gaze-check_<method>_<time>.csv. Returns the path."""
     folder = folder or method_dir(method_id)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"gaze-check_{method_id}_{datetime.now():{STAMP}}.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["index", "x", "y"])
-        w.writerows((i, f"{x:.4f}", f"{y:.4f}") for i, x, y in samples)
+        w.writerow(["index", "x", "y", "target_x", "target_y"])
+        w.writerows((i, f"{x:.4f}", f"{y:.4f}", f"{tx:.4f}", f"{ty:.4f}") for i, x, y, tx, ty in samples)
     return path
 
 
-def list_gaze_checks() -> list[Path]:
-    """Every method's gaze checks, newest first."""
-    return sorted((p for m in METHOD_BY_ID for p in method_dir(m).glob("gaze-check_*.csv")), key=file_date, reverse=True)
+def list_gaze_checks(method_id: str, root: Path | None = None) -> list[Path]:
+    """One calibration type's gaze checks (of the person in use, or under `root`), newest first."""
+    return sorted(method_dir(method_id, root).glob("gaze-check_*.csv"), key=file_date, reverse=True)
 
 
-def _nearest_dot(x: float, y: float, grid: int) -> tuple[int, int, float]:
-    """(column, row) of the closest calibration dot of an n x n grid, counted from the
-    top left, and how far it is (as a fraction of the screen)."""
-    positions = grid_positions(grid)
-    col = min(range(len(positions)), key=lambda i: abs(positions[i] - x))
-    row = min(range(len(positions)), key=lambda i: abs(positions[i] - y))
-    return col + 1, row + 1, math.hypot(positions[col] - x, positions[row] - y)
+def read_gaze_check(path: Path) -> list[Check]:
+    """The rows of a gaze check. A file from before the lit rings (index, x, y only) gets the
+    nearest 5x5 ring as its target: an estimate, it can't tell where the eyes really were."""
+    positions = grid_positions(CHECK_GRID)
+    near = lambda v: min(positions, key=lambda p: abs(p - v))
+    with open(path, newline="") as f:
+        rows = list(csv.reader(f))[1:]
+    return [(int(r[0]), float(r[1]), float(r[2]), *((float(r[3]), float(r[4])) if len(r) >= 5
+                                                     else (near(float(r[1])), near(float(r[2])))))
+            for r in rows]
+
+
+def check_error(rows: list[Check]) -> float | None:
+    """The mean distance from where the model said to the lit ring, as a fraction of the screen."""
+    return sum(math.hypot(x - tx, y - ty) for _, x, y, tx, ty in rows) / len(rows) if rows else None
 
 
 def gaze_check_lines(path: Path) -> list[str]:
-    """A gaze check in words: one line per sample, with the nearest calibration dot and the distance."""
+    """A gaze check in words: whose model, which type, the average error, then each sample."""
     try:
-        with open(path, newline="") as f:
-            rows = [(int(i), float(x), float(y)) for i, x, y in list(csv.reader(f))[1:]]
-    except (OSError, ValueError) as e:
+        rows = read_gaze_check(path)
+    except (OSError, ValueError, IndexError) as e:
         return [f"Can't read {path.name} ({e})."]
     method = METHOD_BY_ID.get(method_of(path))
-    grid = method.grid if method else 5
-    near = [_nearest_dot(x, y, grid) for _, x, y in rows]
-    average = sum(d for _, _, d in near) / len(near) if near else 0.0
-    spacing = grid_positions(grid)[1] - grid_positions(grid)[0]
-    lines = [f"Gaze check with {method.name if method else method_of(path)}, {file_date(path):%d %b %Y, %H:%M}: "
-             f"{len(rows)} samples. If you were looking at the rings, the average distance to the nearest "
-             f"calibration dot is the error: {average:.0%} of the screen (the dots are {spacing:.1%} apart).", ""]
-    for (i, x, y), (col, row, d) in zip(rows, near):
-        lines.append(f"#{i}: {x:.0%} across, {y:.0%} down; nearest calibration dot ({col}, {row}), {d:.0%} of the screen away")
+    who = person_of(path) or "No person"
+    error = check_error(rows)
+    lines = [f"Gaze check of {who}'s {method.name if method else method_of(path)} model, {file_date(path):%d %b %Y, %H:%M}: "
+             f"{len(rows)} samples, average error {error or 0:.1%} of the screen (from where the model said to the "
+             "lit ring).", ""]
+    for i, x, y, tx, ty in rows:
+        lines.append(f"#{i}: looking at {describe_target(tx, ty, CHECK_GRID)}; the model said {x:.0%} across, "
+                     f"{y:.0%} down, {math.hypot(x - tx, y - ty):.1%} of the screen away")
     return lines
+
+
+def method_results(root: Path | None = None) -> list[tuple[str, int, int, float | None, float | None]]:
+    """For one person (or data/), per calibration type: (method id, calibrations, gaze checks,
+    the latest check's error, the mean error over every check) - the comparison of the methods."""
+    out = []
+    for m in METHOD_BY_ID:
+        errors = []
+        for path in list_gaze_checks(m, root):
+            try:
+                errors.append(check_error(read_gaze_check(path)))
+            except (OSError, ValueError, IndexError):
+                pass
+        errors = [e for e in errors if e is not None]
+        out.append((m, len(list_calibrations(m, root)), len(errors), errors[0] if errors else None,
+                    sum(errors) / len(errors) if errors else None))
+    return out
 
 
 # ---- blink scores: from the blink test ------------------------------------------

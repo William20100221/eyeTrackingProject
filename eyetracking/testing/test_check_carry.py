@@ -1,9 +1,9 @@
 """
 Self-check for the gaze check in the app (no webcam):  python -m eyetracking.testing.test_check_carry
 
-The check uses the chosen method's grid for its rings; the samples recorded with
-Enter are saved on Esc into that method's gaze-check folder, with the method in
-the file name, and the log says so.
+The check tests the type picked on its page, on the same 25 rings as every type; the
+samples recorded with Enter (with the lit ring) are saved on Esc into that type's
+folder, with the type in the file name, and the log says so.
 """
 import csv
 import os
@@ -31,10 +31,10 @@ points = iter([(0.2, 0.2), (0.6, 0.4), (0.62, 0.41)])
 appmod.fake_point_from_mouse = lambda: next(points)                         # where the "eyes" look
 
 app = appmod.App(mouse=True)
-app.testing.set_method("original-3x3")
+app.testing.set_check(method_id="original-3x3")
 app.check()
 win = app.fullscreen
-assert win._targets == point_grid(3) and win.method_id == "original-3x3"
+assert win._targets == point_grid(5) and win.method_id == "original-3x3"     # the same 25 rings for every type
 for _ in range(3):
     win._tick()
 QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
@@ -47,7 +47,8 @@ assert app.fullscreen is None
 saved = list((tmp / "original-3x3").glob("gaze-check_original-3x3_*.csv"))
 assert len(saved) == 1, saved
 rows = list(csv.reader(open(saved[0])))
-assert rows == [["index", "x", "y"], ["0", "0.6200", "0.4100"]], rows       # the Enter sample, saved
-assert "gaze samples saved as gaze-check_original-3x3_" in app.testing.status.text(), app.testing.status.text()
-assert app.testing.gaze_checks.files.item(0).text().endswith("  original-3x3"), app.testing.gaze_checks.files.item(0).text()
+assert rows == [["index", "x", "y", "target_x", "target_y"], ["0", "0.6200", "0.4100", "0.0500", "0.0500"]], rows
+assert "No person's Original 3×3: gaze check saved as gaze-check_original-3x3_" in app.testing.status.text(), app.testing.status.text()
+files = app.testing.gaze_checks.files
+assert files.item(0).text() == "Original 3×3" and files.item(1).data(0x0100) == str(saved[0])   # under its type
 print("check carry-on ok")
