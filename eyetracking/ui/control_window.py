@@ -44,7 +44,7 @@ from eyetracking.services.storage import (blink_score_lines, calibration_lines, 
                                           remove_samples)
 
 DEFAULTS = {
-    "seed": "#3D6CF6",
+    "seed": "#E5483B",          # the logo's red
     "theme": "system",          # system | light | dark
     "show_ball": True,
     "ball_on_top": True,
@@ -56,7 +56,7 @@ DEFAULTS = {
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
 }
 BALL_LOOKS = ["logo", "water", "image"]
-SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
+SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#E5483B", "#D32F2F", "#D81B60", "#7E57C2"]
 
 PAGE_OF_TAB = {0: 0, 1: 1, 3: 2}          # title-bar tab -> page in the stack (tab 2, Calibration, is full screen)
 TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
