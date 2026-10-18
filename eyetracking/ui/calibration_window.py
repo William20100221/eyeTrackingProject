@@ -4,7 +4,7 @@ Calibration page, full screen (PySide6), for every method in core/methods.py:
   Original 3x3 / 4x4 / 5x5   intro -> the dots, row by row -> done
   Sweep                      intro -> gliding dot (across, down) -> head step -> the 4x4 dots -> done
   Points, Line model         intro -> 14 still dots along a line -> head step -> the 4x4 dots -> done
-  Random 3x3 / 4x4 / 5x5      intro -> the dots, in a new random order each time -> done
+  Random <any of the above>   the same steps, the final dots in a new random order each time
 The "In order" types run their grid row by row (the same order for all of them).
 
 Only drawing and timing live here. What each step means is in core/calibration.py

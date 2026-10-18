@@ -12,9 +12,9 @@ A method says how the calibration runs (kind) and what learns from it (model):
          "points"  still dots along a line instead of the moving dot, the head step,
                    then the 4x4 grid
 The "In order" collection runs its grid row by row, the same order for all, so the order
-is not one more difference between them. The "Random order" collection is the Original
-method again with the dots shuffled (the eye can't anticipate the next dot), so
-Original NxN vs Random NxN measures what the order alone changes.
+is not one more difference between them. The "Random order" collection is every one of them again with
+the final dots shuffled (the eye can't anticipate the next dot), so each type vs its
+random twin measures what the order alone changes.
   model  "ridge"   a curve (squares + pairs, ridge) fitted on the raw features of the
                    dots: the Original model (core/gaze_model.py)
          "profile" the same curve, on eye numbers scaled by this user's own sweep +
@@ -27,7 +27,7 @@ files of different methods can be compared, and every file carries its method.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 from eyetracking.core.calibration import GazeProfile, training_set
@@ -86,17 +86,22 @@ METHODS = (
            about="The Points procedure, but the model is geometric: a 3D line from each eye through the screen "
                  "(the eyes converge at about 6 degrees), blended with the fitted line by a leave-one-dot-out check.",
            steps=("Look at each dot along a line across, then down the middle: 14 dots.", HEAD, GRID + " 16 dots.")),
-    Method("random-3x3", "Random 3×3", "grid", "ridge", 3, random_order=True,
-           about="The Original 3×3 with the 9 dots in random order, new for each calibration, so the eyes can't "
-                 "move to the next dot before it appears. Compare it with Original 3×3 to see what the order changes.",
-           steps=(GRID + " 9 dots in random order, about 25 seconds.",)),
-    Method("random-4x4", "Random 4×4", "grid", "ridge", 4, random_order=True,
-           about="The Original 4×4 with the 16 dots in random order, new for each calibration.",
-           steps=(GRID + " 16 dots in random order, about 40 seconds.",)),
-    Method("random-5x5", "Random 5×5", "grid", "ridge", 5, random_order=True,
-           about="The Original 5×5 with the 25 dots in random order, new for each calibration.",
-           steps=(GRID + " 25 dots in random order, about a minute.",)),
 )
+
+
+def randomised(m: Method) -> Method:
+    """The "Random order" twin of an in-order type: the same steps and model, its final dot grid
+    shuffled anew for each calibration (a sweep / line-dot step and the head step stay as they are)."""
+    first = "" if m.kind == "grid" else " Its first steps stay as they are; only the dots at the end are shuffled."
+    return replace(m, id="random-" + m.id.removeprefix("original-"), name="Random " + m.name.removeprefix("Original "),
+                   random_order=True, steps=m.steps[:-1] + (m.steps[-1].rstrip(".") + ", in random order.",),
+                   about=f"{m.name} with its {m.dots} dots in random order, new for each calibration, so the eyes "
+                         f"can't move to the next dot before it appears.{first} Compare it with {m.name} to see what "
+                         "the order changes.")
+
+
+# every in-order type gets a random twin, added after the six so saved choices (indexes) keep their type
+METHODS = METHODS + tuple(randomised(m) for m in METHODS)
 METHOD_BY_ID = {m.id: m for m in METHODS}
 DEFAULT_METHOD = "original-5x5"
 
@@ -153,7 +158,10 @@ def train(method: Method, recordings: Sequence[CalibrationRecording], screen: Sc
 
 
 if __name__ == "__main__":
-    assert [m.dots for m in METHODS[:3]] == [9, 16, 25] == [m.dots for m in METHODS[6:]] and METHOD_BY_ID[DEFAULT_METHOD].kind == "grid"
-    assert [m.random_order for m in METHODS] == [False] * 6 + [True] * 3
+    assert [m.dots for m in METHODS[:3]] == [9, 16, 25] and METHOD_BY_ID[DEFAULT_METHOD].kind == "grid"
+    assert [m.random_order for m in METHODS] == [False] * 6 + [True] * 6
+    assert all((a.kind, a.model, a.grid) == (b.kind, b.model, b.grid) for a, b in zip(METHODS[:6], METHODS[6:]))
+    assert [m.id for m in METHODS[6:]] == ["random-3x3", "random-4x4", "random-5x5", "random-sweep", "random-points",
+                                           "random-line-model"] and METHODS[9].name == "Random Sweep"
     assert {m.kind for m in METHODS} == {"grid", "sweep", "points"} and {m.model for m in METHODS} == {"ridge", "profile", "line"}
     print("\n".join(f"{m.id:<14} {m.kind:<7} {m.model:<8} {m.dots:>2} dots  {m.collection}" for m in METHODS))
