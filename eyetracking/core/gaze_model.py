@@ -11,7 +11,7 @@ Model: Ridge regression, a straight line (degree 1) by default since 18 Oct
 a straight line beats the degree-2 curve both inside a sitting (interior dots held
 out: 11.8% vs 13.5% of the screen) and on a new sitting (23.6% vs 26.5%); the curve
 bends away faster where the features drift. degree=2 is still there to compare.
-The ridge strength is chosen by leave-one-DOT-out: a dot's ~25 frames are
+The ridge strength is chosen with whole DOTS held out (5 folds): a dot's ~25 frames are
 near-copies, so leaving one FRAME out (RidgeCV's default) never really hides
 a dot and picks a strength that memorises the dots (bench: 27% -> 25% error
 on dots the model never saw). Block cross-validation, Roberts et al. 2017:
@@ -23,11 +23,12 @@ from typing import Sequence
 
 import numpy as np
 from sklearn.linear_model import Ridge
-from sklearn.model_selection import GridSearchCV, GroupKFold, LeaveOneGroupOut
+from sklearn.model_selection import GridSearchCV, GroupKFold
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
-ALPHAS = np.logspace(-3, 3, 13)      # ridge strengths tried
+ALPHAS = np.logspace(-3, 3, 7)       # ridge strengths tried (13 measured the same error for twice the time)
+DOT_FOLDS = 5                        # whole-dot folds in the strength search
 
 from eyetracking.core.models import CalibrationSample
 
@@ -47,8 +48,11 @@ def dot_groups(samples: list[CalibrationSample]) -> np.ndarray:
 
 
 def leave_dots_out(groups: np.ndarray):
-    """Every dot held out in turn (up to 25 dots), else 10 folds of whole dots."""
-    return LeaveOneGroupOut() if len(set(groups)) <= 25 else GroupKFold(10)
+    """Whole dots held out, DOT_FOLDS at a time (every dot in turn when there are fewer).
+    Leave-one-dot-out with 13 strengths gave the same error (27.3% vs 27.4% of the screen on
+    a new sitting, 102 pairs of real files, 18 Oct 2026) for 4x the training time (1.2 s vs
+    0.3 s per file), so the app trains with 5 folds and 7 strengths."""
+    return GroupKFold(min(DOT_FOLDS, len(set(groups))))
 
 
 class GazeModel:
@@ -77,7 +81,7 @@ class GazeModel:
         if kw and isinstance(self._regressor, Pipeline):
             kw = {f"{self._regressor.steps[-1][0]}__sample_weight": kw["sample_weight"]}
         if self._search:
-            # the strength that best predicts dots the fit never saw (one dot held out at a time)
+            # the strength that best predicts dots the fit never saw (whole dots held out)
             groups = dot_groups(samples)
             if len(set(groups)) >= 3:
                 search = GridSearchCV(self._regressor, {"ridge__alpha": ALPHAS}, cv=leave_dots_out(groups),

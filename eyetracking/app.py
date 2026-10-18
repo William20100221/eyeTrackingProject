@@ -14,10 +14,10 @@ The window (ui/control_window.py) has three tabs:
     Settings     theme, camera, person mode (whose folder the calibrations go into)
 
 Each type keeps its own model, trained from its own folder: data/<person>/<type>/
-(data/<type>/ with person mode off; services/storage.py). The app trains every type's
-model for the person in use at start, after a calibration, and after any change on the
-Data pages. A gaze check trains its own model on demand, for the person and type picked
-on its page, from that person's newest N calibrations only.
+(data/<type>/ with person mode off; services/storage.py). A model is trained when a gaze
+check (or a replay) needs it, from the picked person's newest N calibrations of that type,
+and kept until those files change (App.models): nothing trains at start, after a
+calibration or on the Data pages. Training is 0.3-1 s per model (core/gaze_model.py).
 
 What talks to what:
     camera -> tracker (services/tracker.py) -> 12 features per frame (core/features.py)
@@ -76,12 +76,11 @@ class App(QObject):
         self.camera_users: set[str] = set()
         self.camera = settings["camera"]
         self.fullscreen: QWidget | None = None     # the calibration / check / blink page while it runs
-        self.models: dict[str, TrainedModel] = {}  # one model per method, trained from its own folder
-        self.samples_used: dict[str, int] = {}
+        self.models: dict[tuple, tuple[TrainedModel | None, int]] = {}   # trained models by (type, folder, newest N, files)
         self.person = None                         # whose data: set by _use_person, from the settings
         self._use_person(settings)
         self.apply_settings({**settings, "camera": self.camera})
-        self._retrain(quiet=True)
+        self.testing.status.setText(self._model_status())
         self.control.show_last()
 
     @property
@@ -123,8 +122,6 @@ class App(QObject):
         self.person = person
         root = use_person(person)
         ensure_layout()                           # a new person / folders cut out: made empty
-        for m in METHOD_BY_ID.values():
-            self._train(m)
         self.testing.set_method(self.testing.method_id, announce=False)   # lists + "Saved as" path
         self.testing.set_check(person=person)     # the gaze check tests the person in use, unless picked
         where = root.relative_to(storage.BASE_DIR.parent).as_posix()
@@ -167,21 +164,19 @@ class App(QObject):
         finally:
             QApplication.restoreOverrideCursor()
 
-    # ---- the models: one per method ---------------------------------------
-    def _train(self, method: Method) -> None:
-        if self.mouse:
-            return
-        model, n = train(method, load_all_calibrations(method.id), screen_geometry())
-        self.samples_used[method.id] = n
-        if model is not None:
-            self.models[method.id] = model
-        else:
-            self.models.pop(method.id, None)
+    # ---- the models: trained when a check needs one, kept while its files stay the same -------
+    def _model(self, method: Method, root: Path, newest: int | None) -> tuple[TrainedModel | None, int]:
+        """A person's model of one type, trained on their newest `newest` calibrations (None: all),
+        or the one already trained on exactly those files. (model, samples used)."""
+        files = storage.list_calibrations(method.id, root)[:newest]
+        key = (method.id, str(root), newest, tuple((p.name, p.stat().st_mtime_ns) for p in files))
+        if key not in self.models:
+            self.models[key] = train(method, load_all_calibrations(method.id, root)[:newest], screen_geometry())
+        return self.models[key]
 
     def _retrain(self, quiet: bool = False) -> None:
-        """Calibrations changed (removed, disabled, enabled; any type, from the Data page): train every model again."""
-        for m in METHOD_BY_ID.values():
-            self._train(m)
+        """Calibrations changed (removed, disabled, enabled, cleared; from the Data page): the status
+        line follows; a model trains again by itself when a check asks for the changed files."""
         self.testing.status.setText(self._model_status())
         if not quiet:
             self.testing.say(self._model_status())
@@ -190,9 +185,10 @@ class App(QObject):
         m = self.method
         if self.mouse:
             return f"{m.name}: mouse mode, the mouse plays your eyes (nothing is saved)."
-        if m.id not in self.models:
+        n = storage.usable_calibrations(m.id)
+        if not n:
             return f"{m.name}: no calibration yet. Start one from Calibration."
-        return f"{m.name}: model trained on {self.samples_used[m.id]} samples, the newest calibration counting most."
+        return f"{m.name}: {n} usable calibration{'s' if n != 1 else ''}; the model trains when a gaze check starts."
 
     # ---- full-screen windows (they read the camera themselves) ----------
     def _open_fullscreen(self, window: QWidget) -> None:
@@ -237,11 +233,10 @@ class App(QObject):
                 self.testing.say(f"{method.name}: calibration didn't work ({e}). Try again.")
                 return
         path = save_calibration(rec, method.id, dots_from=borrowed.name if borrowed else None)   # saved RAW: the checks rerun on loading
-        self._train(method)
         note = f" Cleaned: {report.summary()}." if report.reasons else ""
         note += f" The dots were reused from {borrowed.name}." if borrowed else ""
         self.testing.say(f"{method.name}: calibrated with {len(report.kept.dots)} good dot samples, saved as "
-                         f"{path.name}. Model trained on {self.samples_used[method.id]} samples.{note}")
+                         f"{path.name}.{note}")
         self.testing.refresh()
         self.testing.status.setText(self._model_status())
 
@@ -258,7 +253,7 @@ class App(QObject):
             return
         model, count = None, self.testing.check_count             # the newest `count` calibrations train it
         if not self.mouse:
-            model, n = train(method, load_all_calibrations(method.id, root)[:count], screen_geometry())
+            model, n = self._model(method, root, count)
             if model is None:
                 self.testing.say(f"{who}: no usable calibration yet. Calibrate first.")
                 return
@@ -287,7 +282,7 @@ class App(QObject):
                 if recordings:
                     models[m], counts[m] = None, len(recordings)
                 continue
-            model, _ = train(METHOD_BY_ID[m], recordings, screen_geometry())
+            model, _ = self._model(METHOD_BY_ID[m], root, newest)
             if model is not None:
                 models[m], counts[m] = model, len(recordings)
         return models, counts

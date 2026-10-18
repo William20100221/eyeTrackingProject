@@ -9,6 +9,7 @@ Self-check (no webcam):  python -m eyetracking.testing.test_lab_data
 3. Gaze checks in their method's folder (nearest dot of THAT method's grid), blink scores in blink-test/;
    the other branches' folders are never read or moved
 4. Folders cut out come back empty; person mode puts the same folders under data/<name>/
+5. Clear data: one person's files (or everyone's) go to data/trash/<date>_<time>/, their empty folders come back
 """
 import os
 import tempfile
@@ -199,3 +200,15 @@ storage.ensure_layout()
 assert storage.list_people() == ["Ann Lee", "Bo"]
 assert storage.use_person("") == tmp and storage.list_calibrations("original-4x4") == [path]    # back to data/ itself
 print("lab data ok")
+
+# ---- 5. clear data: one person's, or everyone's, into one dated trash folder ----------
+one = CalibrationRecording((), (), (sample(0.5, 0.5),))
+storage.save_calibration(one, "original-3x3", tmp / "Ann" / "original-3x3" / "original-3x3_2026-10-18_150000.json")
+mine = storage.save_calibration(one, "original-3x3")
+assert "Ann" in storage.list_people()
+where = storage.clear_data("Ann")
+assert where.parent == tmp / "trash" and (where / "Ann" / "original-3x3" / "original-3x3_2026-10-18_150000.json").exists()
+assert "Ann" not in storage.list_people() and mine.exists()                     # Ann gone, the other files untouched
+where = storage.clear_data(None)
+assert not mine.exists() and (where / "data" / "original-3x3" / mine.name).exists()
+assert (tmp / "original-3x3").is_dir() and storage.list_calibrations("original-3x3") == []   # the empty folders are back

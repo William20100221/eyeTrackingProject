@@ -14,6 +14,7 @@ where it was. The window reopens on the page, Testing entry and type it was left
                                at once, or run the models over a recording
                   Blink test   what the blink score is, Start
       Data        Calibrations by person > type > date, in three columns (active /
+                                Clear data…: everything of one person, or of everyone, to data/trash/
                                non-active / not usable); double-click to read one in words and
                                remove samples, right-click to disable / enable / remove
                   Gaze checks  by person > type > date, each sample in words
@@ -713,6 +714,11 @@ class TestingPage(QWidget):
                      "train the models.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
+        self.clear_btn = button(f"{I_DELETE}  Clear data…", "outlined")   # everything of one person, or of everyone
+        self.clear_menu = QMenu(self.clear_btn)
+        self.clear_menu.aboutToShow.connect(self._fill_clear_menu)
+        self.clear_btn.setMenu(self.clear_menu)
+        mv.addWidget(self.clear_btn, 0, Qt.AlignLeft)
         cols = QHBoxLayout()
         cols.setSpacing(24)
         self.active_list = side_list(self.open_detail)
@@ -1079,6 +1085,24 @@ class TestingPage(QWidget):
                 self.main.setCurrentIndex(3)
             self.refresh()
             self.data_changed.emit()
+
+    def _fill_clear_menu(self):
+        self.clear_menu.clear()
+        for name, _ in storage.person_roots():
+            self.clear_menu.addAction(f"Clear {name or 'No person (data/)'}", lambda n=name: self.clear_data(n))
+        self.clear_menu.addAction("Clear everyone", lambda: self.clear_data(None))
+
+    def clear_data(self, person: str | None):
+        """Every calibration, gaze check, blink test and recording of one person (or of everyone)
+        moves into data/trash/<date>_<time>/ (move it back to undo)."""
+        who = "everyone" if person is None else (person or "No person (data/)")
+        if QMessageBox.question(self, "Clear data", f"Move all of {who}'s calibrations, gaze checks, blink tests "
+                                "and recordings to data/trash/? Move them back by hand to undo.") != QMessageBox.Yes:
+            return
+        where = storage.clear_data(person)
+        self.refresh()
+        self.data_changed.emit()
+        self.say(f"Cleared {who}'s data into {where.relative_to(storage.BASE_DIR.parent).as_posix()}/.")
 
     def _list_menu(self, lst: QListWidget, pos):
         item = lst.itemAt(pos)

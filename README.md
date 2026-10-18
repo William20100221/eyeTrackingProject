@@ -50,6 +50,8 @@ are, with the measurements: `docs/model_improvements.md`.
 - **Blink test:** your blink scores in six eye states, with the cut-off they suggest.
 - **Data:** calibrations (by person > type > date; active / non-active / not usable; readable in words,
   samples removable), gaze checks (by person > type > date), blink scores, and a log of this run.
+  **Clear data…** (Calibrations page) moves everything of one person, or of everyone, into
+  `data/trash/<date>_<time>/`; move it back to undo.
 
 ## Settings
 
@@ -68,6 +70,7 @@ data/<person>/<method>/disabled/                                kept, turned off
 data/<person>/<method>/trash/                                   removed files and the originals of edited ones
 data/<person>/blink-test/blink-scores_<date>_<time>.csv
 data/<person>/gaze-videos/gaze-video_<date>_<time>.mp4 + .json   record-mode gaze checks (the video of your face)
+data/trash/<date>_<time>/<person>/...                           everything cleared with Clear data…
 ```
 
 `<method>` is one of `original-3x3`, `original-4x4`, `original-5x5`, `sweep`, `points`, `line-model`,

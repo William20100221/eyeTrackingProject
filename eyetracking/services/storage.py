@@ -10,6 +10,7 @@ What the lab writes to disk, and reads back in words. By person, then by calibra
       <type>/trash/                                   removed files, and the originals of edited ones
       blink-test/blink-scores_<date>_<time>.csv       blink tests (they belong to no type)
       gaze-videos/gaze-video_<date>_<time>.mp4 + .json  record-mode gaze checks (services/recording.py)
+    data/trash/<date>_<time>/<person or data>/...      everything cleared with Data > Clear data (move back to undo)
 
 <type> is a method id from core/methods.py: original-3x3, original-4x4, original-5x5,
 sweep, points, line-model, and the random twins random-3x3 ... random-line-model. So a
@@ -133,6 +134,26 @@ def ensure_layout() -> list[Path]:
     for f in made:
         f.mkdir(parents=True)
     return made
+
+
+# ---- clearing: everything of one person (or of everyone) into one dated trash folder ----------
+def clear_data(person: str | None) -> Path:
+    """Move all of a person's recorded files ('' = the ones straight under data/, None = everyone's)
+    into data/trash/<date>_<time>/<person or data>/, folders kept, so a clear can be undone by moving
+    them back. The person in use gets their empty folders again. Returns the trash folder."""
+    stamp = BASE_DIR / "trash" / f"{datetime.now():{STAMP}}"
+    for name, root in person_roots():
+        if person is not None and name != person_name(person):
+            continue
+        target = stamp / (name or "data")
+        target.mkdir(parents=True, exist_ok=True)
+        for kind in KINDS:
+            if (root / kind).is_dir():
+                shutil.move(str(root / kind), str(target / kind))
+        if name and root.is_dir() and not any(root.iterdir()):
+            root.rmdir()
+    ensure_layout()
+    return stamp
 
 
 # ---- calibrations ---------------------------------------------------------------
