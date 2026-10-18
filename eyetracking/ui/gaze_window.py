@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid
 from eyetracking.core.line_model import ScreenGeometry
-from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, train
+from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, live_clock, train
 from eyetracking.services.storage import CHECK_GRID, Check, load_all_calibrations, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
@@ -268,9 +268,10 @@ def main() -> int:
             return 1
         print(f"{method.name}: trained on {n} samples")
         tracker = EyeTracker()             # asks which camera, in the console
+        track = model.tracker()            # the smoothed live point
 
         def get_point() -> tuple[float, float] | None:
-            return model.predict(tracker.read_features())
+            return track(tracker.read_features(), live_clock())
 
     window = GazeWindow.single(get_point, method.id)
     window.showFullScreen()   # full screen, like calibration: same 0..1 -> pixels

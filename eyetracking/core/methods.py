@@ -31,14 +31,16 @@ different types can be compared, and every file carries its type and grid size.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
-from typing import Sequence
+from typing import Callable, Sequence
 
 from eyetracking.core.calibration import GazeProfile, training_set
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.line_model import LineModel, ScreenGeometry
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from eyetracking.core.quality import check_recording
+from eyetracking.core.smoothing import GazeSmoother
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,19 @@ class TrainedModel:
             return self.inner.predict(features)
         except ValueError:                      # features of another size (an older file's)
             return None
+
+    def tracker(self) -> Callable[[Sequence[float] | None, float], tuple[float, float] | None]:
+        """A live predictor: predict() with the 1-euro filter on top (core/smoothing.py), so the
+        point is steady while the eyes rest and quick when they jump. Call it with every frame's
+        features and the frame's time in seconds; None (a blink) comes back as None and the
+        filter keeps its place. The replay of a recording uses the same, with the recorded times."""
+        smoother = GazeSmoother()
+        return lambda features, t: smoother.feed(self.predict(features), t)
+
+
+def live_clock() -> float:
+    """Seconds, for tracker(): the same clock for every frame of a session."""
+    return time.perf_counter()
 
 
 def plain_training_set(recordings: Sequence[CalibrationRecording], older_weight: float = 0.5

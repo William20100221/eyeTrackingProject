@@ -42,7 +42,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.blink_scores import advice as blink_advice
 from eyetracking.core.calibration import GazeProfile
-from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, train
+from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, live_clock, train
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
@@ -267,8 +267,10 @@ class App(QObject):
         if not self._use_camera("check"):
             return
 
+        track = None if self.mouse else model.tracker()   # the smoothed live point
+
         def get():
-            return fake_point_from_mouse() if self.mouse else model.predict(self.tracker.read_features())
+            return fake_point_from_mouse() if self.mouse else track(self.tracker.read_features(), live_clock())
         window = GazeWindow.single(get, method.id, storage.method_dir(method.id, root), count or None)
         window.logged.connect(lambda paths: self._checked(who, paths))
         self._open_fullscreen(window)
@@ -307,12 +309,14 @@ class App(QObject):
         self.testing.say(f"{who}: {len(models)} models ready ({', '.join(METHOD_BY_ID[m].name for m in models)}). "
                          "Look at the lit ring, press Enter.")
 
+        tracks = {} if self.mouse else {m: model.tracker() for m, model in models.items()}
+
         def get_all():
             if self.mouse:
                 point = fake_point_from_mouse()
                 return {m: point for m in models}
-            features = self.tracker.read_features()      # one frame, every model
-            return {m: model.predict(features) for m, model in models.items()}
+            features, t = self.tracker.read_features(), live_clock()      # one frame, every model
+            return {m: track(features, t) for m, track in tracks.items()}
         window = GazeWindow(get_all, {m: storage.method_dir(m, root) for m in models}, counts,
                             grid=storage.MULTI_GRID, show_dot=False, tag="multi")
         window.logged.connect(lambda paths: self._checked(who, paths))
@@ -352,7 +356,7 @@ class App(QObject):
                 self.testing.status.setText(f"Running {len(models)} models over the recording: {done:.0%}")
                 QApplication.processEvents()
             # ponytail: on the GUI thread (a minute's video takes ~30 s); a QThread if that annoys
-            logs = replay(meta, {m: model.predict for m, model in models.items()}, progress)
+            logs = replay(meta, {m: model.tracker() for m, model in models.items()}, progress)
         except Exception as e:                        # a damaged or moved recording
             self.testing.say(f"The recording couldn't be run ({e}).")
             return

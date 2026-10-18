@@ -8,8 +8,9 @@ model, now or in the future: the fairest comparison there is.
 
     Recorder        writes the frames the gaze window asks for, and the presses (index, time, lit ring)
     VideoFrames     reads a recording back as if it were the camera, frame times included
-    replay()        every frame through the tracker and the given models; at each press the
-                    latest prediction, held through blinks, like the live dot -> {type: samples}
+    replay()        every frame through the tracker and the given models (each a live
+                    predictor: (features, seconds) -> point, the 1-euro filter included, exactly
+                    what the live window uses); at each press the latest point -> {type: samples}
 
 The video is a recording of your face: it is kept only in that folder, and only when record
 mode is on. Delete it any time.
@@ -104,10 +105,11 @@ class VideoFrames:
 
 
 def replay_presses(stream: Iterable[tuple[int, Sequence[float] | None]], presses: list[dict],
-                   predictors: dict[str, Callable[[Sequence[float]], Point | None]]) -> dict[str, list[Check]]:
+                   predictors: dict[str, Callable[[Sequence[float] | None, float], Point | None]]) -> dict[str, list[Check]]:
     """(ms, features or None) frames in order + the presses -> per model, the samples a live
-    window would have recorded: at each press, the model's latest prediction, held through
-    blinks and lost faces like the live dot. A press before any prediction records nothing."""
+    window would have recorded: at each press, the model's latest point, held through blinks
+    and lost faces like the live dot. Each predictor is called with every frame (features or
+    None, seconds), as live. A press before any point records nothing."""
     held: dict[str, Point | None] = {name: None for name in predictors}
     logs: dict[str, list[Check]] = {name: [] for name in predictors}
     todo = sorted(presses, key=lambda p: p["t_ms"])
@@ -124,11 +126,10 @@ def replay_presses(stream: Iterable[tuple[int, Sequence[float] | None]], presses
 
     for ms, features in stream:
         take(ms)
-        if features is not None:
-            for name, predict in predictors.items():
-                point = predict(features)
-                if point is not None:
-                    held[name] = point
+        for name, predict in predictors.items():
+            point = predict(features, ms / 1000)
+            if point is not None:
+                held[name] = point
     take(math.inf)
     return logs
 
@@ -137,7 +138,7 @@ def read_recording(meta: Path) -> dict:
     return json.loads(Path(meta).read_text(encoding="utf-8"))
 
 
-def replay(meta: Path, predictors: dict[str, Callable[[Sequence[float]], Point | None]],
+def replay(meta: Path, predictors: dict[str, Callable[[Sequence[float] | None, float], Point | None]],
            progress: Callable[[float], None] | None = None) -> dict[str, list[Check]]:
     """Run models over a recording: every frame through the tracker (blink handling and all),
     the presses picking the latest prediction. `progress` gets 0..1 now and then."""

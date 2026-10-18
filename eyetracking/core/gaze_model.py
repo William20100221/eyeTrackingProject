@@ -7,25 +7,44 @@ measured in pixels, so those functions also need the screen size.
 
 Model: Ridge regression on degree-2 polynomial features: enough bend for
 the eye's non-linear mapping, few enough knobs for ~25 dots not to overfit.
+The ridge strength is chosen by leave-one-DOT-out: a dot's ~25 frames are
+near-copies, so leaving one FRAME out (RidgeCV's default) never really hides
+a dot and picks a strength that memorises the dots (bench: 27% -> 25% error
+on dots the model never saw). Block cross-validation, Roberts et al. 2017:
+https://doi.org/10.1111/ecog.02881
 """
 from __future__ import annotations
 
 from typing import Sequence
 
 import numpy as np
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import GridSearchCV, GroupKFold, LeaveOneGroupOut
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+
+ALPHAS = np.logspace(-3, 3, 13)      # ridge strengths tried
 
 from eyetracking.core.models import CalibrationSample
 
 
 def _xy(samples: list[CalibrationSample]) -> tuple[np.ndarray, np.ndarray]:
-    # X = the model INPUT: one row per sample, one column per feature (samples x 4 scaled eye numbers)
+    # X = the model INPUT: one row per sample, one column per feature
     X = np.array([s.features for s in samples])
     # y = the right ANSWERS: one row per sample, where the dot was (samples x 2)
     y = np.array([(s.target_x, s.target_y) for s in samples])
     return X, y
+
+
+def dot_groups(samples: list[CalibrationSample]) -> np.ndarray:
+    """Which dot each sample belongs to (0, 1, 2...): the blocks cross-validation holds out."""
+    dots = sorted({(s.target_x, s.target_y) for s in samples})
+    return np.array([dots.index((s.target_x, s.target_y)) for s in samples])
+
+
+def leave_dots_out(groups: np.ndarray):
+    """Every dot held out in turn (up to 25 dots), else 10 folds of whole dots."""
+    return LeaveOneGroupOut() if len(set(groups)) <= 25 else GroupKFold(10)
 
 
 class GazeModel:
@@ -35,12 +54,14 @@ class GazeModel:
         #                       (~0..1) and head angles don't drown each other
         #   PolynomialFeatures  adds squares and pairs (a^2, a*b) so the model
         #                       can fit a curve, not only a straight line
-        #   RidgeCV             linear regression that keeps the weights small
-        #                       (less overfitting); tries 13 strengths, keeps the best
+        #   Ridge               linear regression that keeps the weights small
+        #                       (less overfitting); the strength is chosen in fit()
+        #                       by leave-one-dot-out over 13 candidates
         # To compare: GazeModel(LinearRegression()) and check the numbers.
         # ponytail: one global poly+ridge; try per-axis models or a small MLP only once you have 100s of dots
         self._regressor = regressor if regressor is not None else make_pipeline(
-            StandardScaler(), PolynomialFeatures(2), RidgeCV(alphas=np.logspace(-3, 3, 13)))
+            StandardScaler(), PolynomialFeatures(2), Ridge())
+        self._search = regressor is None
         self._trained = False
 
     def fit(self, samples: list[CalibrationSample],
@@ -51,10 +72,26 @@ class GazeModel:
         kw = {} if sample_weight is None else {"sample_weight": np.asarray(sample_weight)}
         if kw and isinstance(self._regressor, Pipeline):
             kw = {f"{self._regressor.steps[-1][0]}__sample_weight": kw["sample_weight"]}
+        if self._search:
+            # the strength that best predicts dots the fit never saw (one dot held out at a time)
+            groups = dot_groups(samples)
+            if len(set(groups)) >= 3:
+                search = GridSearchCV(self._regressor, {"ridge__alpha": ALPHAS}, cv=leave_dots_out(groups),
+                                      scoring="neg_mean_squared_error")
+                search.fit(X, y, groups=groups, **kw)
+                self._regressor = search.best_estimator_
+                self._trained = True
+                return self
         # every sklearn model learns with .fit(); a 2-column y trains x and y together
         self._regressor.fit(X, y, **kw)
         self._trained = True
         return self   # so GazeModel().fit(samples) hands back the trained model
+
+    @property
+    def alpha(self) -> float | None:
+        """The ridge strength in use (None for a regressor of your own)."""
+        return float(self._regressor.steps[-1][1].alpha) if isinstance(self._regressor, Pipeline) \
+            and hasattr(self._regressor.steps[-1][1], "alpha") else None
 
     def predict(self, features: Sequence[float]) -> tuple[float, float]:
         # sklearn predicts a whole TABLE of rows at once, so one sample goes in
@@ -122,7 +159,9 @@ if __name__ == "__main__":
             f = np.array(f + [0, 0, 0, 0.5, 0.5, 1.0]) + rng.normal(0, 0.01, 10)
             samples.append(CalibrationSample(tuple(f), tx, ty))
     w, h = 1920, 1080
-    fit_err = mean_error_px(GazeModel().fit(samples), samples, w, h)
+    model = GazeModel().fit(samples)
+    fit_err = mean_error_px(model, samples, w, h)
+    assert model.alpha in ALPHAS
     errs = leave_one_dot_out(samples, w, h)
     inner = [e for (x, y), e in errs.items() if 0.1 < x < 0.9 and 0.1 < y < 0.9]
     print(f"train {fit_err:.0f}px, held-out interior dots {np.mean(inner):.0f}px")
