@@ -1,9 +1,9 @@
 """
-Self-check for issue #10 (no webcam):  python -m eyetracking.testing.test_check_carry
+Self-check for the gaze check in the app (no webcam):  python -m eyetracking.testing.test_check_carry
 
-After Esc in the gaze check, the app's gaze point carries on from the check's
-last point (no jump back to an old one), and the samples recorded with Enter
-are saved to the csv.
+The check uses the chosen method's grid for its rings; the samples recorded with
+Enter are saved on Esc into that method's gaze-check folder, with the method in
+the file name, and the log says so.
 """
 import csv
 import os
@@ -15,26 +15,26 @@ from PySide6.QtCore import QCoreApplication, QEvent, QSettings, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
+import eyetracking.services.storage as storage
 import eyetracking.ui.control_window as cw
+from eyetracking.core.calibration import point_grid
 
 tmp = Path(tempfile.mkdtemp())
 cw.QSettings = lambda *_: QSettings(str(tmp / "settings.ini"), QSettings.IniFormat)
+storage.DATA_DIR = storage.CALIB_DIR = storage.BLINK_DIR = tmp / "data"
+storage.GAZE_CHECK_DIR = tmp / "gaze_checks"
 import eyetracking.app as appmod
-import eyetracking.ui.gaze_window as gw
 
 qt = QApplication([])
 qt.setQuitOnLastWindowClosed(False)
-appmod.key_from_environment = lambda: ("claude", "sk-ant-test")
-real_save = gw.GazeWindow.save_log
-gw.GazeWindow.save_log = lambda self, folder=tmp: real_save(self, tmp)     # the csv goes to a temp folder
 points = iter([(0.2, 0.2), (0.6, 0.4), (0.62, 0.41)])
 appmod.fake_point_from_mouse = lambda: next(points)                         # where the "eyes" look
 
 app = appmod.App(mouse=True)
-app.timer.stop()
-app.smoothed = (0.9, 0.9)                                                   # an old point from before the check
+app.testing.set_method("original-3x3")
 app.check()
 win = app.fullscreen
+assert win._targets == point_grid(3) and win.method_id == "original-3x3"
 for _ in range(3):
     win._tick()
 QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
@@ -43,8 +43,11 @@ for _ in range(5):
     qt.processEvents()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
-assert app.fullscreen is None and app.smoothed == (0.62, 0.41), app.smoothed  # carries on from the check's point
-rows = list(csv.reader(open(next(tmp.glob("gaze_check_*.csv")))))
+assert app.fullscreen is None
+saved = list((tmp / "gaze_checks" / "original-3x3").glob("gaze-check_original-3x3_*.csv"))
+assert len(saved) == 1, saved
+rows = list(csv.reader(open(saved[0])))
 assert rows == [["index", "x", "y"], ["0", "0.6200", "0.4100"]], rows       # the Enter sample, saved
-assert "Gaze samples saved" in app.panel.said[-1]
+assert "gaze samples saved as gaze-check_original-3x3_" in app.testing.status.text(), app.testing.status.text()
+assert app.testing.gaze_checks.files.item(0).text().endswith("  original-3x3"), app.testing.gaze_checks.files.item(0).text()
 print("check carry-on ok")

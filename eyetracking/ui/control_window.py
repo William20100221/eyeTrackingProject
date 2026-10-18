@@ -1,11 +1,9 @@
-"""Study Assistant main window: direction 3 ("Toolbar") in PySide6.
+"""The calibration lab's main window: direction 3 ("Toolbar") in PySide6.
 
-Four tabs in the title bar: Chat, Testing, Calibration, Settings. Calibration (and
-check) pages fill the screen with no title bar or buttons, then the window goes
-back to the Chat tab. pick_camera() is the small camera popup used at first start.
-
-ChatPage looks like ChatGPT, but with a "Go Reading" button instead of an input
-bar: it closes the window; the floating ball stays on the whole time.
+Three tabs in the title bar: Testing, Calibration, Settings. The calibration,
+check and blink pages fill the screen with no title bar or buttons, then the
+window goes back to the Testing tab. pick_camera() is the small camera popup
+used at first start.
 
 Every colour comes from one seed colour through the Material 3 Fidelity
 scheme, in light and dark. Pick a colour in the side sheet and the whole
@@ -15,7 +13,6 @@ window re-themes live.
     python settings_window.py
 """
 import ctypes
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,32 +25,25 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
-from eyetracking.services.reading_ai import KNOWN_MODELS, PROVIDER_NAMES, default_model, list_models, provider_for_key
-from eyetracking.services.secret_store import protect, unprotect
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
-                                          gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
-                                          trash_file,
-                                          list_disabled, set_calibration_enabled,
-                                          list_readings, reading_messages, reading_title, remove_calibration,
-                                          remove_samples)
+                                          gaze_check_lines, list_blink_scores, list_calibrations, list_disabled,
+                                          list_gaze_checks, method_of, remove_calibration, remove_samples,
+                                          set_calibration_enabled, trash_file)
+from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS
 
 DEFAULTS = {
     "seed": "#3D6CF6",
     "theme": "system",          # system | light | dark
-    "show_ball": True,
-    "ball_on_top": True,
-    "hide_fullscreen": False,
-    "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 
-PAGE_OF_TAB = {0: 0, 1: 1, 3: 2}          # title-bar tab -> page in the stack (tab 2, Calibration, is full screen)
+PAGE_OF_TAB = {0: 0, 2: 1}                # title-bar tab -> page in the stack (tab 1, Calibration, is full screen)
 TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
 
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
@@ -484,34 +474,14 @@ def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
         lst.addItem(QListWidgetItem(empty))   # no path: clicking does nothing
 
 
-def message_widget(text: str, mine: bool) -> tuple[QWidget, QLabel]:
-    """One chat message: (the widget to add, its text label). Yours is a bubble pushed
-    to the right by a stretch (a row, so the wrapped text keeps its height); the
-    assistant's is plain text."""
-    text_label = QLabel(text, objectName="theirs")
-    text_label.setWordWrap(True)
-    text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    if not mine:
-        return text_label, text_label
-    bubble = QFrame(objectName="mine")
-    QVBoxLayout(bubble).addWidget(text_label)
-    bubble.setMaximumWidth(520)
-    row = QWidget()
-    rh = QHBoxLayout(row)
-    rh.setContentsMargins(0, 0, 0, 0)
-    rh.addStretch(1)
-    rh.addWidget(bubble)
-    return row, text_label
-
-
 class DataPage(QWidget):
     """One kind of recorded data: the files by date on the left, the chosen one in
     words on the right. Right-click a file to remove it (it moves to a trash folder
     beside it)."""
 
-    def __init__(self, title: str, hint: str, list_files, to_lines, empty: str):
+    def __init__(self, title: str, hint: str, list_files, to_lines, empty: str, name=None):
         super().__init__()
-        self._list, self._lines, self._empty = list_files, to_lines, empty
+        self._list, self._lines, self._empty, self._name = list_files, to_lines, empty, name
         h = QHBoxLayout(self)
         h.setContentsMargins(24, 20, 24, 24)
         h.setSpacing(24)
@@ -537,7 +507,7 @@ class DataPage(QWidget):
 
     def refresh(self):
         self.files.blockSignals(True)
-        fill_list(self.files, self._list(), self._empty)
+        fill_list(self.files, self._list(), self._empty, self._name)
         self.files.blockSignals(False)
         self.files.setCurrentRow(0)
         self._show(self.files.currentItem())
@@ -561,16 +531,18 @@ class DataPage(QWidget):
 # ---------------------------------------------------------------- testing page
 
 class TestingPage(QWidget):
-    """Testing tab. The sidebar picks a page on the right. Tests: what the sample text,
-    the gaze check and the blink test do, with the button that starts them. Data: the
-    calibrations (active / non-active / not usable), the gaze checks and the blink
-    scores, each by date and readable in words."""
+    """The lab's working page. The sidebar picks what the right side shows:
+    Calibration (the method chooser and its start button), the tests (gaze check,
+    blink test) and the data (the chosen method's calibrations, every gaze check,
+    the blink scores, the log of what happened)."""
 
-    command = Signal(str)          # a start button: "read" | "check" | "blink"
-    data_changed = Signal()        # samples or a file removed: the app retrains the gaze model
+    command = Signal(str)          # a start button: "calibrate" | "check" | "blink"
+    method_changed = Signal(str)   # another method chosen: its id
+    data_changed = Signal()        # samples or a file removed / disabled / enabled: the app retrains
 
-    def __init__(self):
+    def __init__(self, method_id: str = DEFAULT_METHOD):
         super().__init__()
+        self.method_id = method_id
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
@@ -581,8 +553,10 @@ class TestingPage(QWidget):
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
         self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
-        sections = [("Tests", [(I_READ, "Sample text"), (I_EYE, "Gaze check"), (I_BLINK, "Blink test")]),
-                    ("Data", [(I_LINES, "Calibrations"), (I_CHART, "Gaze checks"), (I_BLINK, "Blink scores")])]
+        sections = [("Calibrate", [(I_EYE, "Calibration")]),
+                    ("Tests", [(I_CHART, "Gaze check"), (I_BLINK, "Blink test")]),
+                    ("Data", [(I_LINES, "Calibrations"), (I_CHART, "Gaze checks"), (I_BLINK, "Blink scores"),
+                              (I_CHAT, "Log")])]
         i = 0
         for section, items in sections:
             sv.addWidget(label(section, "sideTitle"))
@@ -594,32 +568,28 @@ class TestingPage(QWidget):
                 i += 1
             sv.addSpacing(8)
         sv.addStretch(1)
+        self.status = label("", "rowsub")                # the latest word from the app (the model, the camera)
+        self.status.setWordWrap(True)
+        sv.addWidget(self.status)
         h.addWidget(side)
 
-        # 0-2: the tests (what they do + a start button); 3: calibrations; 4: gaze checks; 5: blink scores;
-        # 6: one calibration's detail (from 3)
+        # 0: calibration (the method chooser); 1-2: the tests; 3: calibrations; 4: gaze checks;
+        # 5: blink scores; 6: the log; 7: one calibration's detail (from 3)
         self.main = QStackedWidget()
+        self.main.addWidget(self._calibrate_page())
         self.main.addWidget(self._intro(
-            I_READ, "Sample text", "Read a short text while the tracker watches where you look.",
-            ["Each paragraph turns green once your eyes have rested on it long enough: about a tenth of a second per word.",
-             "Press Done, or stare at it, when you finish. The AI then summarises what you skipped and asks you about it, "
-             "in the Chat tab.",
-             "Open .txt loads a text of your own. Esc leaves without the AI part."],
-            "Open the sample text", "read"))
-        self.main.addWidget(self._intro(
-            I_EYE, "Gaze check", "A full-screen test of the gaze model: how accurate is it today?",
-            ["A green dot follows where the model thinks you look. The faint rings are the calibration dots: look at one "
-             "and see where the dot lands.",
-             "Press Enter to record a sample of where you are looking. Samples are numbered on screen (#index  x  y) and "
-             "saved to data/gaze_check_<time>.csv when you leave.",
-             "Space pauses. Esc saves and leaves. It needs a calibration first."],
+            I_CHART, "Gaze check", "A full-screen test of the chosen method's model: how accurate is it today?",
+            ["A green dot follows where the model thinks you look. The faint rings are the method's calibration "
+             "dots: look at one and see where the dot lands.",
+             "Press Enter to record a sample of where you are looking. Samples are numbered on screen (#index  x  y) "
+             "and saved under data/gaze_checks/<method>/ when you leave, with the method in the file name.",
+             "Space pauses. Esc saves and leaves. It needs a calibration of the chosen method first."],
             "Start the gaze check", "check"))
         self.main.addWidget(self._intro(
             I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off can be set from "
             "your own numbers instead of a guess.",
             ["A blink score is a number MediaPipe gives for each eye every frame: 0 = wide open, 1 = shut. The app uses "
-             "it to skip frames where the eyes are closing or closed: calibration doesn't record them, and the live gaze "
-             "holds its last point instead of jumping when the iris disappears behind the lid.",
+             "it to skip frames where the eyes are closing or closed, so calibration doesn't record them.",
              "Today the cut-off is a guess: 0.50 on both eyes. The test asks you to keep your eyes open, look down, "
              "squint, close them, and wink each eye, 6 seconds each after a 3-second countdown, and records the scores.",
              "The result is listed under Data > Blink scores, in words, with the cut-off it suggests. Space starts, "
@@ -629,10 +599,11 @@ class TestingPage(QWidget):
         mv = QVBoxLayout(lists)
         mv.setContentsMargins(24, 20, 24, 24)
         mv.setSpacing(8)
-        mv.addWidget(label("Calibrations", "sheetTitle"))
-        hint = label("Saved calibrations by date. Double-click one to read it in words. Right-click to disable it "
-                     "(it is kept, but stops training the gaze model), enable it again, or remove it. "
-                     "Only the active ones train the gaze model.", "sheetText")
+        self.lists_title = label("Calibrations", "sheetTitle")
+        mv.addWidget(self.lists_title)
+        hint = label("The chosen method's calibrations by date (data/calibrations/<method>/). Double-click one to read "
+                     "it in words. Right-click to disable it (kept, but it stops training the model), enable it again, "
+                     "or remove it. Only the active ones train the method's model.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
         cols = QHBoxLayout()
@@ -640,9 +611,9 @@ class TestingPage(QWidget):
         self.active_list = side_list(self.open_detail)
         self.disabled_list = side_list(self.open_detail)
         self.inactive_list = side_list(self.open_detail)
-        for title, sub, lst in [("Active", "Trains the gaze model", self.active_list),
+        for title, sub, lst in [("Active", "Trains the method's model", self.active_list),
                                 ("Non-active", "Works, but you turned it off", self.disabled_list),
-                                ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list)]:
+                                ("Not usable", "Another version, or the file can't be read", self.inactive_list)]:
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
             col = QVBoxLayout()
@@ -653,6 +624,27 @@ class TestingPage(QWidget):
             cols.addLayout(col, 1)
         mv.addLayout(cols, 1)
         self.main.addWidget(lists)
+        self.gaze_checks = DataPage(
+            "Gaze checks", "Every method's gaze checks (the method is in the name). Each sample with the nearest "
+            "calibration dot of that method's grid and how far off it was. Right-click a file to remove it.",
+            list_gaze_checks, gaze_check_lines, "No gaze check yet", name=method_of)
+        self.blink_scores = DataPage(
+            "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
+            "file to remove it.", list_blink_scores, blink_score_lines, "No blink test yet")
+        self.main.addWidget(self.gaze_checks)
+        self.main.addWidget(self.blink_scores)
+        log_page = QWidget()
+        lv = QVBoxLayout(log_page)
+        lv.setContentsMargins(24, 20, 24, 24)
+        lv.setSpacing(8)
+        lv.addWidget(label("Log", "sheetTitle"))
+        lv.addWidget(label("What happened this run, newest first: calibrations saved or rejected, models trained, "
+                           "files saved, the camera.", "sheetText"))
+        self.log = QListWidget(objectName="linesList")
+        self.log.setWordWrap(True)
+        self.log.setSelectionMode(QListWidget.NoSelection)
+        lv.addWidget(self.log, 1)
+        self.main.addWidget(log_page)
 
         detail = QWidget()                               # one calibration, every sample in words
         dv = QVBoxLayout(detail)
@@ -666,35 +658,83 @@ class TestingPage(QWidget):
         head.addWidget(self.detail_title, 1)
         dv.addLayout(head)
         hint = label("Select samples, or a dot's line for all of its samples, then Remove: the file is rewritten and "
-                     "the gaze model retrained. The untouched original stays in data/trash.", "sheetText")
+                     "the model retrained. The untouched original stays in the method's trash folder.", "sheetText")
         hint.setWordWrap(True)
         dv.addWidget(hint)
         self.detail = QListWidget(objectName="linesList")
         self.detail.setSelectionMode(QListWidget.ExtendedSelection)
-        self.detail.setWordWrap(True)                    # a sample's words are long
+        self.detail.setWordWrap(True)
         dv.addWidget(self.detail, 1)
         self.remove_btn = button(f"{I_DELETE}  Remove selected", "outlined")
         self.remove_btn.clicked.connect(self.remove_selected)
         dv.addWidget(self.remove_btn, 0, Qt.AlignLeft)
-        self.gaze_checks = DataPage(
-            "Gaze checks", "Each gaze check's samples (recorded with Enter), with the nearest calibration dot and how "
-            "far off it was. Right-click a file to remove it.", list_gaze_checks, gaze_check_lines, "No gaze check yet")
-        self.blink_scores = DataPage(
-            "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
-            "file to remove it.", list_blink_scores, blink_score_lines, "No blink test yet")
-        self.main.addWidget(self.gaze_checks)
-        self.main.addWidget(self.blink_scores)
         self.main.addWidget(detail)
         self.detail_path: Path | None = None
         h.addWidget(self.main, 1)
         self.side_nav.idClicked.connect(self.main.setCurrentIndex)
-        self.show_page(3)                                # Calibrations first: what the model learns from
+        self.set_method(method_id, announce=False)
+        self.show_page(0)
 
     def show_page(self, i: int):
-        """Open sidebar entry `i` (0-5; the calibration detail, 6, opens as its list)."""
-        i = 3 if i == 6 else max(0, min(i, 5))
+        """Open sidebar entry `i` (0-6; the calibration detail, 7, opens as its list)."""
+        i = 3 if i == 7 else max(0, min(i, 6))
         self.side_nav.button(i).setChecked(True)
         self.main.setCurrentIndex(i)
+
+    def say(self, text: str):
+        """A line from the app: the sidebar's status and the log (newest first)."""
+        self.status.setText(text)
+        self.log.insertItem(0, QListWidgetItem(f"{datetime.now():%H:%M:%S}   {text}"))
+
+    # ----- the method chooser
+
+    def _calibrate_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(24, 20, 24, 24)
+        v.setSpacing(12)
+        v.addWidget(label(f"{I_EYE}   Calibration", "sheetTitle"))
+        lead = label("Pick a method. Every method records the same 12 numbers per frame, so their files can be "
+                     "compared; each keeps its own model, trained from its own folder.", "lead")
+        lead.setWordWrap(True)
+        v.addWidget(lead)
+        chips = QWidget()
+        cl = QHBoxLayout(chips)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(8)
+        self.method_chips = QButtonGroup(self)
+        for i, m in enumerate(METHODS):
+            b = CheckButton(m.name, "chip")
+            self.method_chips.addButton(b, i)
+            cl.addWidget(b)
+        cl.addStretch(1)
+        self.method_chips.idClicked.connect(lambda i: self.set_method(METHODS[i].id))
+        v.addWidget(chips)
+        self.method_about = label("", "sheetText")
+        self.method_about.setWordWrap(True)
+        v.addWidget(self.method_about)
+        self.method_steps = label("", "sheetText")
+        self.method_steps.setWordWrap(True)
+        v.addWidget(self.method_steps)
+        go = button("Start the calibration", "filled")
+        go.clicked.connect(lambda: self.command.emit("calibrate"))
+        v.addSpacing(8)
+        v.addWidget(go, 0, Qt.AlignLeft)
+        v.addStretch(1)
+        return page
+
+    def set_method(self, method_id: str, announce: bool = True):
+        """Choose the method the calibration, the gaze check and the Calibrations list work with."""
+        m = METHOD_BY_ID[method_id]
+        self.method_id = method_id
+        self.method_chips.button(METHODS.index(m)).setChecked(True)
+        self.method_about.setText(m.about)
+        self.method_steps.setText("\n".join(f"{i + 1}.  {s}" for i, s in enumerate(m.steps))
+                                  + f"\n\nSaved as data/calibrations/{m.id}/{m.id}_<date>_<time>.json")
+        self.lists_title.setText(f"Calibrations · {m.name}")
+        self.refresh()
+        if announce:
+            self.method_changed.emit(method_id)
 
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
         """An instruction page: what the test does, then the button that starts it."""
@@ -714,10 +754,12 @@ class TestingPage(QWidget):
         v.addStretch(1)
         return page
 
+    # ----- the calibrations of the chosen method
+
     def open_detail(self, path: Path):
         """One calibration in words, in place of the lists."""
         self.detail_path = path
-        self.detail_title.setText(f"Calibration of {file_date(path):%d %b %Y, %H:%M}")
+        self.detail_title.setText(path.name)
         self.detail.clear()
         removable = False
         for text, index, dot in calibration_lines(path):
@@ -729,7 +771,7 @@ class TestingPage(QWidget):
             removable |= dot is not None
             self.detail.addItem(item)
         self.remove_btn.setVisible(removable)
-        self.main.setCurrentIndex(6)
+        self.main.setCurrentIndex(7)
 
     def remove_selected(self):
         chosen = set()
@@ -764,25 +806,24 @@ class TestingPage(QWidget):
         menu.exec(lst.mapToGlobal(pos))
 
     def set_enabled(self, path: Path, enabled: bool):
-        """Right-click > Disable / Enable: the file moves between data/ and data/disabled/; the model retrains."""
         set_calibration_enabled(path, enabled)
         self.refresh()
         self.data_changed.emit()
 
     def remove_file(self, path: Path):
-        """Right-click > Remove: the file moves to data/trash (move it back to undo); the model retrains."""
-        if QMessageBox.question(self, "Remove calibration", f"Move {path.name} to data/trash?\n"
-                                "The gaze model is retrained without it.") != QMessageBox.Yes:
+        """Right-click > Remove: the file moves to the method's trash folder (move it back to undo)."""
+        if QMessageBox.question(self, "Remove calibration", f"Move {path.name} to its trash folder?\n"
+                                "The model is retrained without it.") != QMessageBox.Yes:
             return
         remove_calibration(path)
         self.refresh()
         self.data_changed.emit()
 
     def refresh(self):
-        """Re-read data/ (new calibrations). Runs whenever the page shows."""
-        usable = {p: calibration_usable(p) for p in list_calibrations()}
+        """Re-read data/. Runs whenever the page shows, the method changes, or a file was saved."""
+        usable = {p: calibration_usable(p) for p in list_calibrations(self.method_id)}
         fill_list(self.active_list, [p for p, ok in usable.items() if ok], "None active: enable one, or calibrate")
-        fill_list(self.disabled_list, list_disabled(), "None")
+        fill_list(self.disabled_list, list_disabled(self.method_id), "None")
         fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
@@ -792,204 +833,20 @@ class TestingPage(QWidget):
         super().showEvent(e)
 
 
-# ---------------------------------------------------------------- chat page
-
-class ChatPage(QWidget):
-    """ChatGPT-style page. The app talks to it like the old chat panel:
-    reply(text) to speak, message_sent(str) for quiz answers."""
-
-    message_sent = Signal(str)     # a quiz answer (or "skip")
-    go_reading = Signal()          # the big button: close the window (the ball is still there)
-
-    def __init__(self):
-        super().__init__()
-        h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(0)
-
-        side = QFrame(objectName="side")
-        side.setFixedWidth(260)
-        sv = QVBoxLayout(side)
-        sv.setContentsMargins(12, 12, 12, 12)
-        sv.setSpacing(2)
-        sv.addWidget(label("Chats", "sideTitle"))
-        # the live chat first, then past readings (summary + quiz): one click shows it on the right
-        self.chat_list = QListWidget(objectName="sideList")
-        self.chat_list.currentItemChanged.connect(lambda it, _: self._show_chat(it))
-        sv.addWidget(self.chat_list, 1)
-        h.addWidget(side)
-        self.said: list[str] = []                # every message shown this run, newest last
-
-        col = QWidget()
-        self.v = v = QVBoxLayout(col)
-        v.setContentsMargins(24, 24, 24, 32)
-        v.setSpacing(16)
-        v.addStretch(1)                                  # 0: centres the hero while empty
-
-        self.scroll = QScrollArea()                      # 1: messages, once there are some
-        self.scroll.setWidgetResizable(True)
-        self.scroll.viewport().setAutoFillBackground(False)
-        host = QWidget(objectName="content")
-        self.msgs = QVBoxLayout(host)
-        self.msgs.setContentsMargins(0, 0, 8, 0)
-        self.msgs.setSpacing(20)
-        self.msgs.addStretch(1)
-        self.scroll.setWidget(host)
-        self.scroll.hide()
-        v.addWidget(self.scroll)
-
-        self.hero = QWidget()                            # 2: "What should we read?"
-        hv = QVBoxLayout(self.hero)
-        hv.setContentsMargins(0, 0, 0, 8)
-        title = label("What should we read?", "hero")
-        title.setAlignment(Qt.AlignCenter)
-        self.status = label("", "heroSub")              # the app puts the gaze model status here
-        self.status.setAlignment(Qt.AlignCenter)
-        self.status.setWordWrap(True)
-        hv.addWidget(title)
-        hv.addWidget(self.status)
-        v.addWidget(self.hero)
-
-        self.answer_box = QFrame(objectName="answerBox")   # 3: only while a quiz question waits
-        ah = QHBoxLayout(self.answer_box)
-        ah.setContentsMargins(20, 8, 8, 8)
-        self.answer = QLineEdit(objectName="answer", placeholderText="Type your answer, then Enter")
-        self.answer.returnPressed.connect(self._send_answer)
-        skip = button(f"{I_SKIP}  Skip", "text")
-        skip.clicked.connect(lambda: self._send("skip"))
-        ah.addWidget(self.answer, 1)
-        ah.addWidget(skip)
-        self.answer_box.hide()
-        v.addWidget(self.answer_box)
-
-        self.go = button(f"{I_READ}   Go Reading", "go")   # instead of an input bar
-        self.go.clicked.connect(self.go_reading)
-        self.model_btn = button("", "assist")            # which key and model answer, like Ollama's model picker
-        self.model_btn.setToolTip("The AI that writes summaries and marks quizzes")
-        self.model_btn.setMenu(QMenu(self.model_btn))
-        bottom = QHBoxLayout()                           # 4: the AI picker, then Go Reading
-        bottom.setSpacing(12)
-        bottom.addWidget(self.model_btn)
-        bottom.addWidget(self.go, 1)
-        v.addLayout(bottom)
-        v.addStretch(1)                                  # 5
-
-        self.archive = QScrollArea()                     # a past reading, read-only, in place of the live chat
-        self.archive.setWidgetResizable(True)
-        self.archive.viewport().setAutoFillBackground(False)
-        self.view = QStackedWidget()                     # 0: the live chat, 1: a past reading
-        self.view.setMaximumWidth(760)
-        self.view.addWidget(col)
-        self.view.addWidget(self.archive)
-        h.addStretch(1)
-        h.addWidget(self.view, 20)
-        h.addStretch(1)
-
-    def refresh(self):
-        """Re-read data/history (a reading is written once the AI answers). Runs whenever the page shows."""
-        current = self.chat_list.currentItem()
-        chosen = current.data(Qt.UserRole) if current else None
-        self.chat_list.blockSignals(True)
-        fill_list(self.chat_list, list_readings(), "", reading_title)
-        live = QListWidgetItem(f"{I_CHAT}   Today")           # the live chat: no path
-        self.chat_list.insertItem(0, live)
-        rows = [self.chat_list.item(i) for i in range(self.chat_list.count())]
-        self.chat_list.setCurrentItem(next((r for r in rows if r.data(Qt.UserRole) == chosen), live))
-        self.chat_list.blockSignals(False)
-        self._show_chat(self.chat_list.currentItem())
-
-    def _show_chat(self, item):
-        """One click in the sidebar: the live chat, or a past reading on the right."""
-        path = item.data(Qt.UserRole) if item else None
-        if not path:
-            self.view.setCurrentIndex(0)
-            return
-        path = Path(path)
-        host = QWidget(objectName="content")
-        col = QVBoxLayout(host)
-        col.setContentsMargins(24, 24, 32, 32)
-        col.setSpacing(20)
-        col.addWidget(label(reading_title(path), "sheetTitle"))
-        col.addWidget(label(f"{file_date(path):%d %b %Y, %H:%M}", "sheetText"))
-        for text, mine in reading_messages(path):
-            col.addWidget(message_widget(text, mine)[0])
-        col.addStretch(1)
-        self.archive.setWidget(host)                     # replaces (and frees) the previous one
-        self.view.setCurrentIndex(1)
-
-    def showEvent(self, e):
-        self.refresh()
-        super().showEvent(e)
-
-    def set_answering(self, on: bool):
-        """Swap Go Reading for the answer box while the quiz waits for an answer."""
-        self.answer_box.setVisible(on)
-        self.go.setVisible(not on)
-        if on:
-            self.answer.setFocus()
-
-    def _send_answer(self):
-        if self.answer.text().strip():
-            self._send(self.answer.text().strip())
-            self.answer.clear()
-
-    def _send(self, text: str):
-        self.said.append(text)
-        self.add_message(text, mine=True)
-        self.message_sent.emit(text)
-
-    def add_message(self, text: str, mine: bool) -> QLabel:
-        if not self.hero.isHidden():   # first message: hero out, messages fill (not isVisible: the window may be hidden)
-            self.hero.hide()
-            self.scroll.show()
-            self.v.setStretch(0, 0)
-            self.v.setStretch(1, 1)
-            self.v.setStretch(5, 0)
-        w, text_label = message_widget(text, mine)       # you: a bubble on the right; the assistant: plain text
-        self.msgs.insertWidget(self.msgs.count() - 1, w)
-        QTimer.singleShot(0, self._scroll_to_bottom)
-        return text_label
-
-    def _scroll_to_bottom(self):
-        bar = self.scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
-
-    def reply(self, text: str):
-        """Stream the assistant's text in, two characters a tick."""
-        self.said.append(text)
-        text_label = self.add_message("", mine=False)
-        state = {"i": 0}
-        timer = QTimer(self)
-
-        def tick():
-            state["i"] += 2
-            text_label.setText(text[:state["i"]])
-            self._scroll_to_bottom()
-            if state["i"] >= len(text):
-                timer.stop()
-                timer.deleteLater()
-
-        timer.timeout.connect(tick)
-        timer.start(18)
-
-
 # ---------------------------------------------------------------- window
 
 class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
     calibrate_requested = Signal()    # Calibration tab clicked
-    shown = Signal(bool)              # the window appeared / went away (the ball's eye follows it)
-    ai_changed = Signal()             # a key added / removed / renamed, or another key or model chosen
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
         self.setObjectName("root")
         self.setAttribute(Qt.WA_StyledBackground)
-        self.setWindowTitle("Study Assistant")
+        self.setWindowTitle("Calibration lab")
         self.resize(1100, 700)
         self.setMinimumSize(920, 560)
-        self.store = QSettings("StudyAssistant", "StudyAssistant")
-        self.extra_entries: list[dict] = []   # a key from the environment, Ollama: set by the app, not saved
+        self.store = QSettings("StudyAssistant", "CalibrationLab")
         self.seed = self.store.value("seed", DEFAULTS["seed"])
         self.c = make_scheme(self.seed, False)
 
@@ -998,9 +855,8 @@ class SettingsWindow(QWidget):
         root.setSpacing(0)
         self.titlebar = self._title_bar()
         root.addWidget(self.titlebar)
-        # pages: 0 = chat, 1 = testing, 2 = settings; a calibration / check page is added while it runs
-        self.chat = ChatPage()
-        self.testing = TestingPage()
+        # pages: 0 = testing, 1 = settings; a calibration / check / blink page is added while it runs
+        self.testing = TestingPage(self.store.value("method", DEFAULT_METHOD))
         self.settings_page = QWidget()
         sp = QVBoxLayout(self.settings_page)
         sp.setContentsMargins(0, 0, 0, 0)
@@ -1012,7 +868,6 @@ class SettingsWindow(QWidget):
         body.addWidget(self._sheet())
         sp.addLayout(body, 1)
         self.pages = QStackedWidget()
-        self.pages.addWidget(self.chat)
         self.pages.addWidget(self.testing)
         self.pages.addWidget(self.settings_page)
         root.addWidget(self.pages, 1)
@@ -1027,12 +882,10 @@ class SettingsWindow(QWidget):
         self._grip = G
 
         self.load(self.read_store())
-        self._migrate_single_key()
-        self.refresh_keys()
-        self.chat.model_btn.menu().aboutToShow.connect(self._fill_ai_menu)
-        # the window reopens where it was left (page, and the Testing entry); an AI answer still opens the chat
-        self.pages.currentChanged.connect(lambda i: i < 3 and self.store.setValue("last_page", i))
+        # the window reopens where it was left (page, Testing entry and method)
+        self.pages.currentChanged.connect(lambda i: i < 2 and self.store.setValue("last_page", i))
         self.testing.side_nav.idClicked.connect(lambda i: self.store.setValue("testing_page", i))
+        self.testing.method_changed.connect(lambda m: self.store.setValue("method", m))
         QGuiApplication.styleHints().colorSchemeChanged.connect(lambda _: self.apply_theme())
 
     # ----- layout pieces
@@ -1045,12 +898,11 @@ class SettingsWindow(QWidget):
         h.setSpacing(0)
         h.addWidget(AppMark())
         h.addSpacing(12)
-        h.addWidget(label("Study Assistant", "appname"))
+        h.addWidget(label("Calibration lab", "appname"))
         h.addStretch(1)
 
         self.nav = QButtonGroup(self)   # exclusive, so clicking the selected tab can't un-select it
-        for i, (glyph, name) in enumerate([(I_CHAT, "Chat"), (I_TESTING, "Testing"), (I_EYE, "Calibration"),
-                                           (I_SETTINGS, "Settings")]):
+        for i, (glyph, name) in enumerate([(I_TESTING, "Testing"), (I_EYE, "Calibration"), (I_SETTINGS, "Settings")]):
             b = QPushButton(glyph, objectName="settingsBtn")
             b.setCheckable(True)
             b.setToolTip(name)
@@ -1061,8 +913,8 @@ class SettingsWindow(QWidget):
             h.addWidget(b)
             h.addSpacing(4)
         self.nav.button(0).setChecked(True)
-        # Calibration (tab 2) runs full screen; the other tabs are pages in the stack
-        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 2
+        # Calibration (tab 1) runs full screen; the other tabs are pages in the stack
+        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 1
                                    else self.pages.setCurrentIndex(PAGE_OF_TAB[i]))
         h.addSpacing(4)
 
@@ -1130,63 +982,6 @@ class SettingsWindow(QWidget):
             self.row(I_PALETTE, "Theme colour", "Every colour in the app is made from this one", self.dot, self.hex_label, change),
         ])
 
-        self.switches = {k: Switch(t) for k, t in [("show_ball", "Show floating ball"),
-                                                   ("ball_on_top", "Keep it above other windows"),
-                                                   ("hide_fullscreen", "Hide during full-screen apps")]}
-        self.group("Floating ball", [
-            self.row(I_BALL, "Show floating ball", "Opens the assistant from any app", self.switches["show_ball"]),
-            self.row(I_LAYERS, "Keep it above other windows", "Turn off to let it hide behind full windows",
-                     self.switches["ball_on_top"]),
-            self.row(I_FULLSCREEN, "Hide during full-screen apps", "Games and videos stay clear",
-                     self.switches["hide_fullscreen"]),
-        ])
-
-        self.words = QSpinBox(minimum=50, maximum=500, singleStep=25, alignment=Qt.AlignRight)
-        self.words.setButtonSymbols(QSpinBox.NoButtons)
-        self.words.setAccessibleName("Summary length in words")
-        words = QWidget()
-        wl = QHBoxLayout(words)
-        wl.setContentsMargins(0, 0, 0, 0)
-        wl.setSpacing(8)
-        wl.addWidget(self.words)
-        wl.addWidget(label("words", "unit"))
-        self.key = QLineEdit(objectName="find", placeholderText="Paste a new key", echoMode=QLineEdit.Password)
-        self.key.setAccessibleName("New AI key")
-        self.key.returnPressed.connect(lambda: self.add_key(self.key.text()))
-        self.key_eye = self.key.addAction(QIcon(), QLineEdit.TrailingPosition)   # show / hide the key
-        self.key_eye.setToolTip("Show the key")
-        self.key_eye.triggered.connect(self._toggle_key)
-        add = button("Add", "outlined")
-        add.clicked.connect(lambda: self.add_key(self.key.text()))
-        manage = QWidget()                               # one block: the add row, then the keys by brand
-        mv = QVBoxLayout(manage)
-        mv.setContentsMargins(0, 0, 0, 0)
-        mv.setSpacing(0)
-        mv.addWidget(self.row(I_KEY, "Manage keys",
-                              "Paste a key from Claude (sk-ant-…), ChatGPT (sk-…) or Gemini (AIza…): it is filed under "
-                              "its brand as Key 1, Key 2…, so the key itself is never shown, and stored encrypted for "
-                              "your Windows login. Double-click a key to use it; right-click to pick its model, ask "
-                              "for its models again, rename or remove it.", self.key, add))
-        self.rows[-1] = (manage, self.rows[-1][1] + " keys api claude chatgpt openai gemini ollama local model")
-        self.keys_list = QListWidget(objectName="linesList")   # brand headings, each with its keys
-        self.keys_list.setSelectionMode(QListWidget.NoSelection)
-        self.keys_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.keys_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.keys_list.customContextMenuRequested.connect(self._key_menu)
-        self.keys_list.itemActivated.connect(lambda it: it.data(Qt.UserRole) and self.use_entry(it.data(Qt.UserRole)))
-        self.keys_note = label("", "rowsub")             # what the last add / refresh found; hidden when empty
-        self.keys_note.setWordWrap(True)
-        self.keys_note.hide()
-        below = QVBoxLayout()
-        below.setContentsMargins(52, 0, 16, 12)
-        below.setSpacing(4)
-        below.addWidget(self.keys_list)
-        below.addWidget(self.keys_note)
-        mv.addLayout(below)
-        self.group("AI", [
-            manage,
-            self.row(I_LINES, "Summary length", "About this many words", words),
-        ])
         self.camera_btn = button("", "assist")
         self.camera_menu = QMenu(self.camera_btn)
         self.camera_menu.aboutToShow.connect(self._fill_camera_menu)   # list cameras when opened
@@ -1299,233 +1094,15 @@ class SettingsWindow(QWidget):
     def read_store(self) -> dict:
         return {k: self.store.value(k, d, type=type(d)) for k, d in DEFAULTS.items()}
 
-    def _toggle_key(self):
-        shown = self.key.echoMode() == QLineEdit.Normal
-        self.key.setEchoMode(QLineEdit.Password if shown else QLineEdit.Normal)
-        self.key_eye.setToolTip("Show the key" if shown else "Hide the key")
-
-    # ----- AI keys: Key 1, Key 2...; the key itself is only ever stored encrypted (DPAPI)
-
-    def stored_keys(self) -> list[dict]:
-        """The saved keys: {id, number, name, provider, secret (encrypted), last4, model, models, added}."""
-        try:
-            keys = json.loads(self.store.value("ai_keys", "[]"))
-        except ValueError:
-            keys = []
-        return keys if isinstance(keys, list) else []
-
-    def _save_keys(self, keys: list[dict]):
-        self.store.setValue("ai_keys", json.dumps(keys))
-
-    def ai_entries(self) -> list[dict]:
-        """Every AI the app can use: the saved keys, then a key from the environment and Ollama, when present."""
-        return self.stored_keys() + self.extra_entries
-
-    def set_extra_entries(self, extras: list[dict]):
-        """The app's environment key / Ollama entries (not saved); their chosen model is remembered."""
-        chosen = json.loads(self.store.value("ai_extra_models", "{}"))
-        for e in extras:
-            if chosen.get(e["id"]) in [m[0] for m in e["models"]]:
-                e["model"] = chosen[e["id"]]
-        self.extra_entries = extras
-        self.refresh_keys()
-
-    def active_entry(self) -> dict | None:
-        entries = self.ai_entries()
-        want = self.store.value("ai_active", "")
-        return next((e for e in entries if e["id"] == want), entries[0] if entries else None)
-
-    def entry_secret(self, entry: dict) -> str:
-        return unprotect(entry["secret"]) if entry.get("secret") else entry.get("plain", "")
-
-    def _new_entry(self, key: str, provider: str, models: list, keys: list[dict]) -> dict:
-        number = max([k.get("number", 0) for k in keys] + [0]) + 1   # a removed key's number is not reused
-        return {"id": f"key{number}", "number": number, "name": f"Key {number}", "provider": provider,
-                "secret": protect(key), "last4": key[-4:], "models": [list(m) for m in models],
-                "model": default_model(provider, models), "added": datetime.now().isoformat(timespec="seconds")}
-
-    def _migrate_single_key(self):
-        """Before several keys, one key was saved as "api_key": it becomes Key 1."""
-        old = self.store.value("api_key", "")
-        if not old:
-            return
-        key = unprotect(old)
-        provider = provider_for_key(key)
-        keys = self.stored_keys()
-        if provider and not any(self.entry_secret(k) == key for k in keys):
-            self._save_keys(keys + [self._new_entry(key, provider, KNOWN_MODELS[provider], keys)])
-        self.store.remove("api_key")
-
-    def add_key(self, text: str) -> dict | None:
-        """A pasted key becomes the next "Key N" and is used at once. The prefix says the brand;
-        the provider is asked which models the key can use (that also shows the key works)."""
-        key = text.strip()
-        provider = provider_for_key(key)
-        if provider is None:
-            self._note("That doesn't look like a Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…) key.")
-            return None
-        keys = self.stored_keys()
-        same = next((k for k in keys if self.entry_secret(k) == key), None)
-        if same is not None:
-            self._note(f"That key is already saved, as {same['name']}.")
-            self.key.clear()
-            return same
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            models, error = list_models(provider, key)
-        finally:
-            QApplication.restoreOverrideCursor()
-        entry = self._new_entry(key, provider, models, keys)
-        self._save_keys(keys + [entry])
-        self.key.clear()
-        self._note(f"{entry['name']} added: {PROVIDER_NAMES[provider]}, {len(models)} model{'s' * (len(models) != 1)}."
-                               + (f" Couldn't ask {PROVIDER_NAMES[provider]} for this key's models ({error}), so "
-                                  "these are the usual ones." if error else ""))
-        self.use_entry(entry["id"])
-        return entry
-
-    def use_entry(self, entry_id: str, model: str | None = None):
-        """Answer with this key (and this model, if given) from now on."""
-        if model is not None:
-            keys = self.stored_keys()
-            if any(k["id"] == entry_id for k in keys):
-                self._save_keys([{**k, "model": model} if k["id"] == entry_id else k for k in keys])
-            else:
-                chosen = json.loads(self.store.value("ai_extra_models", "{}"))
-                self.store.setValue("ai_extra_models", json.dumps({**chosen, entry_id: model}))
-                for e in self.extra_entries:
-                    if e["id"] == entry_id:
-                        e["model"] = model
-        self.store.setValue("ai_active", entry_id)
-        self.refresh_keys()
-        self.ai_changed.emit()
-
-    def refresh_models(self, entry_id: str):
-        """Ask the provider again which models this key can use."""
-        entry = next(e for e in self.ai_entries() if e["id"] == entry_id)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            models, error = list_models(entry["provider"], self.entry_secret(entry))
-        finally:
-            QApplication.restoreOverrideCursor()
-        models = [list(m) for m in models]
-        keys = self.stored_keys()
-        if any(k["id"] == entry_id for k in keys):
-            self._save_keys([{**k, "models": models} if k["id"] == entry_id else k for k in keys])
-        else:
-            entry["models"] = models
-        self._note(f"{entry['name']}: {len(models)} models"
-                               + (f" (the usual ones: couldn't ask the provider, {error})." if error else "."))
-        self.refresh_keys()
-
-    def rename_key(self, entry_id: str):
-        keys = self.stored_keys()
-        entry = next(k for k in keys if k["id"] == entry_id)
-        name, ok = QInputDialog.getText(self, "Rename key", "Name:", text=entry["name"])
-        if ok and name.strip():
-            self._save_keys([{**k, "name": name.strip()} if k["id"] == entry_id else k for k in keys])
-            self.refresh_keys()
-            self.ai_changed.emit()
-
-    def remove_key(self, entry_id: str):
-        keys = self.stored_keys()
-        entry = next(k for k in keys if k["id"] == entry_id)
-        if QMessageBox.question(self, "Remove key", f"Remove {entry['name']} ({PROVIDER_NAMES[entry['provider']]}, "
-                                f"ending …{entry['last4']})? The app forgets it; the key itself keeps working "
-                                "on the provider's side.") != QMessageBox.Yes:
-            return
-        self._save_keys([k for k in keys if k["id"] != entry_id])
-        if self.store.value("ai_active", "") == entry_id:
-            self.store.setValue("ai_active", "")
-        self.refresh_keys()
-        self.ai_changed.emit()
-
-    def _key_menu(self, pos):
-        item = self.keys_list.itemAt(pos)
-        if item is None or not item.data(Qt.UserRole):
-            return
-        entry = next(e for e in self.ai_entries() if e["id"] == item.data(Qt.UserRole))
-        menu = QMenu(self.keys_list)
-        menu.addAction("Use this key", lambda: self.use_entry(entry["id"]))
-        self._model_menu(menu.addMenu("Model"), entry)
-        menu.addAction("Ask for its models again", lambda: self.refresh_models(entry["id"]))
-        if entry.get("secret"):                          # saved keys only: the environment key and Ollama aren't ours to edit
-            menu.addAction("Rename…", lambda: self.rename_key(entry["id"]))
-            menu.addAction(f"{I_DELETE}  Remove", lambda: self.remove_key(entry["id"]))
-        menu.exec(self.keys_list.mapToGlobal(pos))
-
-    def _model_menu(self, menu: QMenu, entry: dict):
-        active = self.active_entry()
-        for model_id, name in entry["models"] or [[entry["model"], entry["model"]]]:
-            act = menu.addAction(name, lambda _=False, m=model_id: self.use_entry(entry["id"], m))
-            act.setCheckable(True)
-            act.setChecked(active is not None and active["id"] == entry["id"] and model_id == entry["model"])
-
-    def _fill_ai_menu(self):
-        """The chat's picker: every key, each with its models; choosing one uses that key with that model."""
-        menu = self.chat.model_btn.menu()
-        menu.clear()
-        for brand in BRANDS:                             # grouped by brand, like Manage keys
-            mine = [e for e in self.ai_entries() if e["provider"] == brand]
-            if mine and menu.actions():
-                menu.addSeparator()
-            for entry in mine:
-                self._model_menu(menu.addMenu(f"{entry['name']}  ·  {PROVIDER_NAMES[brand]}"), entry)
-        if not self.ai_entries():
-            menu.addAction("No AI yet").setEnabled(False)
-        menu.addSeparator()
-        menu.addAction("Manage keys…", lambda: self.show_page(self.settings_page))
-
-    def _note(self, text: str):
-        self.keys_note.setText(text)
-        self.keys_note.setVisible(bool(text))
-
-    def refresh_keys(self):
-        """Manage keys: a heading per brand with its keys under it; and the chat's picker."""
-        active = self.active_entry()
-        entries = self.ai_entries()
-        self.keys_list.clear()
-        heading = QFont(self.keys_list.font())
-        heading.setBold(True)
-        for brand in BRANDS:
-            head = QListWidgetItem(PROVIDER_NAMES[brand])
-            head.setFont(heading)
-            head.setFlags(Qt.ItemIsEnabled)              # a heading: nothing to click
-            self.keys_list.addItem(head)
-            mine = [e for e in entries if e["provider"] == brand]
-            for e in mine:
-                on = active is not None and e["id"] == active["id"]
-                where = f"key ending …{e['last4']}" if e.get("last4") else "no key needed"
-                when = (f"added {datetime.fromisoformat(e['added']):%d %b %Y}" if e.get("added")
-                        else "from the environment" if e["id"] == "env" else "runs on this PC")
-                n = len(e["models"])
-                item = QListWidgetItem(f"    {'●' if on else '○'}  {e['name']}{'   (in use)' if on else ''}\n"
-                                       f"         {where} · model {model_label(e)} · {n} model{'s' * (n != 1)} · {when}")
-                item.setData(Qt.UserRole, e["id"])
-                self.keys_list.addItem(item)
-            if not mine:
-                empty = QListWidgetItem("    Not running: install Ollama (ollama.com), then start the app again"
-                                        if brand == "ollama" else "    No key yet")
-                empty.setFlags(Qt.ItemIsEnabled)
-                self.keys_list.addItem(empty)
-        self.keys_list.setFixedHeight(sum(self.keys_list.sizeHintForRow(i) for i in range(self.keys_list.count())) + 6)
-        self.chat.model_btn.setText(f"{I_SPARKLE}  {active['name']} · {model_label(active)}  {I_CHEVRON}" if active
-                                    else f"{I_SPARKLE}  No AI yet  {I_CHEVRON}")
-
     def load(self, values: dict):
-        for k, sw in self.switches.items():
-            sw.set_checked_now(values[k])
         self.set_camera(values["camera"])
-        self.words.setValue(values["summary_words"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
         self.seed_before_sheet = values["seed"]
         self.set_seed(values["seed"])
 
     def save(self):
-        values = {k: sw.isChecked() for k, sw in self.switches.items()}
-        values.update(seed=self.seed, theme=self.mode, summary_words=self.words.value(),
-                      camera=self.camera)
+        values = dict(seed=self.seed, theme=self.mode, camera=self.camera)
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)
@@ -1560,7 +1137,7 @@ class SettingsWindow(QWidget):
         was_visible, was_max = self._before_page or (False, False)
         self._before_page = None
         self.titlebar.show()
-        self.pages.setCurrentWidget(self.chat)    # results (e.g. calibration) land in the chat
+        self.pages.setCurrentWidget(self.testing)   # results land in the Testing page's log
         self.nav.button(0).setChecked(True)
         if not was_visible:
             self.hide()
@@ -1571,12 +1148,12 @@ class SettingsWindow(QWidget):
 
     def show_last(self):
         """Bring the window up where it was left: the same page, and the same Testing entry."""
-        page = self.pages.widget(max(0, min(self.store.value("last_page", 0, type=int), 2)))
-        self.testing.show_page(self.store.value("testing_page", 3, type=int))
+        page = self.pages.widget(max(0, min(self.store.value("last_page", 0, type=int), 1)))
+        self.testing.show_page(self.store.value("testing_page", 0, type=int))
         self.show_page(page)
 
     def show_page(self, page: QWidget):
-        """Bring the window up on `page` (self.chat, self.testing or self.settings_page)."""
+        """Bring the window up on `page` (self.testing or self.settings_page)."""
         self.pages.setCurrentWidget(page)
         self.nav.button(TAB_OF_PAGE[self.pages.currentIndex()]).setChecked(True)
         if not self.isVisible() or self.isMinimized():
@@ -1625,7 +1202,6 @@ class SettingsWindow(QWidget):
             pal.setColor(QPalette.PlaceholderText, QColor(c["onSurfaceVariant"]))
             edit.setPalette(pal)
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
-        self.key_eye.setIcon(glyph_icon(I_EYE, c["onSurfaceVariant"]))
         self._dwm(34, int(c["outlineVariant"][5:7] + c["outlineVariant"][3:5] + c["outlineVariant"][1:3], 16))
         self.update()
 
@@ -1652,11 +1228,6 @@ class SettingsWindow(QWidget):
     def showEvent(self, e):
         self._dwm(33, 2)    # Windows 11: round the corners of the frameless window
         super().showEvent(e)
-        self.shown.emit(True)
-
-    def hideEvent(self, e):
-        super().hideEvent(e)
-        self.shown.emit(False)
 
     def _dwm(self, attribute: int, value: int):
         """Set a DWM window attribute (33 = corner preference, 34 = border colour). No-op off Windows 11."""
@@ -1665,21 +1236,13 @@ class SettingsWindow(QWidget):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), attribute, ctypes.byref(v), 4)
 
 
-BRANDS = ("claude", "openai", "gemini", "ollama")   # the order brands are listed in
-
-
-def model_label(entry: dict) -> str:
-    """The display name of the model this key uses."""
-    return next((name for model_id, name in entry["models"] if model_id == entry["model"]), entry["model"])
-
-
 def is_dark(mode: str) -> bool:
     return mode == "dark" or (mode == "system" and QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
 
 
 def pick_camera(names: list[str], current: str = "") -> str | None:
     """Small popup: choose a webcam. Returns its name, or None if closed."""
-    store = QSettings("StudyAssistant", "StudyAssistant")
+    store = QSettings("StudyAssistant", "CalibrationLab")
     seed, mode = store.value("seed", DEFAULTS["seed"]), store.value("theme", DEFAULTS["theme"])
     dlg = QDialog(None, Qt.Dialog | Qt.WindowCloseButtonHint)
     dlg.setObjectName("root")
@@ -1708,47 +1271,13 @@ def pick_camera(names: list[str], current: str = "") -> str | None:
     return names[group.checkedId()]
 
 
-def pick_ai() -> str | None:
-    """First-run popup: paste an AI key. Returns it, or None (not now)."""
-    store = QSettings("StudyAssistant", "StudyAssistant")
-    seed, mode = store.value("seed", DEFAULTS["seed"]), store.value("theme", DEFAULTS["theme"])
-    dlg = QDialog(None, Qt.Dialog | Qt.WindowCloseButtonHint)
-    dlg.setObjectName("root")
-    dlg.setAttribute(Qt.WA_StyledBackground)
-    dlg.setWindowTitle("Choose an AI")
-    dlg.setStyleSheet(build_qss(make_scheme(seed, is_dark(mode))))
-    dlg.setFixedWidth(520)
-    v = QVBoxLayout(dlg)
-    v.setContentsMargins(24, 20, 24, 20)
-    v.setSpacing(12)
-    v.addWidget(label("Which AI should write your summaries?", "sheetTitle"))
-    hint = label("Paste a key from Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart "
-                 "and remembers it (Settings > AI > Keys; add more there). No key? Install Ollama from ollama.com and start the app "
-                 "again: it is free and runs on this PC.", "sheetText")
-    hint.setWordWrap(True)
-    v.addWidget(hint)
-    key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)
-    key.setAccessibleName("AI key")
-    v.addWidget(key)
-    actions = QHBoxLayout()
-    actions.addStretch(1)
-    later = button("Not now", "text")
-    later.clicked.connect(dlg.reject)
-    ok = button("Use this key", "filled")
-    ok.clicked.connect(dlg.accept)
-    actions.addWidget(later)
-    actions.addWidget(ok)
-    v.addLayout(actions)
-    return key.text().strip() or None if dlg.exec() == QDialog.Accepted else None
-
-
 def main():
     app = QApplication(sys.argv)
     font = QFont()
-    font.setFamilies(TEXT_FONTS)   # icon font last, so glyphs like the check mark work inside text
+    font.setFamilies(TEXT_FONTS)
     app.setFont(font)
-    win = SettingsWindow()
-    win.show()
+    w = SettingsWindow()
+    w.show()
     sys.exit(app.exec())
 
 

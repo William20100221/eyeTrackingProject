@@ -35,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+import math
+
 import numpy as np
 
 from eyetracking.core.features import EYE, HEAD, N_FEATURES
@@ -139,6 +141,35 @@ def sweep_points(n: int = 7, margin: float = 0.05) -> list[tuple[float, float]]:
     # ponytail: 7 per line (~35 s); fewer if calibration feels long, more if the range is noisy
     positions = [round(margin + (1 - 2 * margin) * i / (n - 1), 4) for i in range(n)]
     return [(p, 0.5) for p in positions] + [(0.5, p) for p in positions]
+
+
+# Step 1, the Sweep method: a dot glides edge to edge and the eyes follow it.
+SWEEP_MARGIN = 0.05      # same margin as the dot grid: the sweep covers what the dots cover
+SWEEP_SETTLE_MS = 1000   # dot waits at the start of each axis so the eyes can find it
+SWEEP_CROSS_MS = 2500    # one edge-to-edge crossing
+SWEEP_CROSSINGS = 4      # 4 crossings = there and back twice, per axis
+
+
+def sweep_axis_ms() -> float:
+    return SWEEP_SETTLE_MS + SWEEP_CROSS_MS * SWEEP_CROSSINGS
+
+
+def sweep_target(elapsed_ms: float) -> tuple[float, float, bool] | None:
+    """Where the sweep dot is after `elapsed_ms`: (x, y, record?), or None when
+    the sweep is over. Horizontal first (y = 0.5), then vertical (x = 0.5).
+    The dot slows down near the edges (cosine easing), so the eyes really
+    reach the far ends instead of turning back early."""
+    axis, t = divmod(elapsed_ms, sweep_axis_ms())
+    if axis >= 2:
+        return None
+    if t < SWEEP_SETTLE_MS:
+        along, record = 0.0, False                       # waiting at the start
+    else:
+        crossing, u = divmod(t - SWEEP_SETTLE_MS, SWEEP_CROSS_MS)
+        eased = (1 - math.cos(math.pi * u / SWEEP_CROSS_MS)) / 2   # 0 -> 1, slow at both ends
+        along, record = (eased if crossing % 2 == 0 else 1 - eased), True
+    pos = SWEEP_MARGIN + (1 - 2 * SWEEP_MARGIN) * along
+    return (pos, 0.5, record) if axis == 0 else (0.5, pos, record)
 
 
 # =====================================================================

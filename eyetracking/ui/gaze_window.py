@@ -1,14 +1,13 @@
 """
 Live gaze demo: a dot on a full-screen window where the model thinks you look.
 
-    python -m eyetracking.ui.gaze_window                    (all calibrations, newest weighted most)
-    python -m eyetracking.ui.gaze_window data/<file>.json   (just that one)
+    python -m eyetracking.ui.gaze_window sweep              (that method's calibrations, newest weighted most)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
-The faint rings are the calibration positions (5x5 grid). Look at one and see where
+The faint rings are the method's calibration dots. Look at one and see where
 the dot lands: a quick visual accuracy check. Press Enter to record a sample
 (where the dot is right now). Samples are listed as "#index  x  y" on screen
-and saved to data/gaze_checks/gaze_check_<time>.csv on Esc; nothing is saved without one.
+and saved to data/gaze_checks/<method>/ on Esc; nothing is saved without one.
 Space pauses.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
@@ -24,9 +23,10 @@ from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from eyetracking.core.calibration import point_grid, training_set
-from eyetracking.core.line_model import LineModel, ScreenGeometry
-from eyetracking.services.storage import load_all_calibrations, load_calibration, save_gaze_check
+from eyetracking.core.calibration import point_grid
+from eyetracking.core.line_model import ScreenGeometry
+from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, train
+from eyetracking.services.storage import load_all_calibrations, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
 TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
@@ -45,9 +45,11 @@ class GazeWindow(QWidget):
     def __init__(self,
                  get_point: Callable[[], tuple[float, float] | None],
                  targets: Sequence[tuple[float, float]] | None = None,
+                 method_id: str = "",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._get_point = get_point
+        self.method_id = method_id       # the csv goes into this method's folder, with the method in its name
         self.paused = False
         self._targets = list(targets or point_grid())
         self._point: tuple[float, float] | None = None   # last prediction, 0..1
@@ -105,8 +107,8 @@ class GazeWindow(QWidget):
             self.update()
 
     def save_log(self, folder: Path | None = None) -> Path:
-        """Every sample as index,x,y, to data/gaze_checks (or `folder`): to compare after a test."""
-        return save_gaze_check(self.log, folder)
+        """Every sample as index,x,y, to data/gaze_checks/<method>/ (or `folder`): to compare after a test."""
+        return save_gaze_check(self.log, self.method_id or "unknown", folder)
 
     def sample_lines(self) -> list[str]:
         """The latest samples, newest last: "#0042  x 0.430  y 0.610" (index first)."""
@@ -195,28 +197,22 @@ def screen_geometry() -> ScreenGeometry:
 def main() -> int:
     app = QApplication(sys.argv)
 
+    method = METHOD_BY_ID[next((a for a in sys.argv[1:] if a in METHOD_BY_ID), DEFAULT_METHOD)]
     if "--mouse" in sys.argv:
         tracker = None
         get_point = fake_point_from_mouse
     else:
-        # one file if given, otherwise every saved calibration, the newest weighted most
-        files = [a for a in sys.argv[1:] if not a.startswith("--")]
-        recordings = [load_calibration(Path(files[0]))] if files else load_all_calibrations()
-        samples, weights, _ = training_set(recordings, scaled=False)
-        if not samples:
-            print("No usable calibration yet: run calibrate first")
+        model, n = train(method, load_all_calibrations(method.id), screen_geometry())
+        if model is None:
+            print(f"No usable {method.name} calibration yet: calibrate first")
             return 1
-
-        model = LineModel(screen_geometry()).fit(samples, weights)
-        print(f"Trained on {len(samples)} samples (blend w = {model.w:.1f})")
+        print(f"{method.name}: trained on {n} samples")
         tracker = EyeTracker()             # asks which camera, in the console
 
         def get_point() -> tuple[float, float] | None:
-            # raw features -> the 3D line -> where it hits the screen
-            features = tracker.read_features()
-            return None if features is None else model.predict(features)
+            return model.predict(tracker.read_features())
 
-    window = GazeWindow(get_point=get_point)
+    window = GazeWindow(get_point=get_point, targets=point_grid(method.grid), method_id=method.id)
     window.showFullScreen()   # full screen, like calibration: same 0..1 -> pixels
     try:
         return app.exec()

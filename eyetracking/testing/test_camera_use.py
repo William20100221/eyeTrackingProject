@@ -2,9 +2,9 @@
 Self-check for issues #11 and #2 (no webcam):  python -m eyetracking.testing.test_camera_use
 
 The app starts without opening the camera (the window is up at once, issue #2);
-the camera opens when a feature needs the gaze and closes when the last one is
-done (issue #11): calibrate -> idle -> Go Reading -> idle. A camera that fails
-to open leaves the app running, with the reason in the chat.
+the camera opens when a full-screen page needs the gaze and closes when it is
+done (issue #11): calibrate -> idle -> blink test -> idle. A camera that fails
+to open leaves the app running, with the reason in the log.
 """
 import os
 import tempfile
@@ -14,9 +14,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QSettings
 from PySide6.QtWidgets import QApplication
 
+import eyetracking.services.storage as storage
 import eyetracking.ui.control_window as cw
 
-cw.QSettings = lambda *_: QSettings(str(Path(tempfile.mkdtemp()) / "settings.ini"), QSettings.IniFormat)
+tmp = Path(tempfile.mkdtemp())
+cw.QSettings = lambda *_: QSettings(str(tmp / "settings.ini"), QSettings.IniFormat)
+storage.DATA_DIR = storage.CALIB_DIR = storage.GAZE_CHECK_DIR = storage.BLINK_DIR = tmp / "data"   # never the real data/
 import eyetracking.app as appmod
 
 qt = QApplication([])
@@ -46,10 +49,7 @@ fail = False
 appmod.EyeTracker = FakeTracker
 appmod.camera_names = lambda: ["Cam A"]
 appmod.pick_camera = lambda names, current="": names[0]
-appmod.save_reading = lambda path, record: None
-appmod.key_from_environment = lambda: ("claude", "sk-ant-test")
 app = appmod.App(mouse=False)
-app.timer.stop()
 
 
 def pump():
@@ -59,21 +59,23 @@ def pump():
 
 
 assert log == [] and app.tracker is None and app.control.isVisible(), log      # start: window up, camera off
+assert app.models == {} and "no calibration yet" in app.testing.status.text()
 app.calibrate()                                                                # calibration: on
 assert log == ["open"] and app.camera_users == {"calibration"}
+assert app.fullscreen.method is app.method and app.control.pages.currentWidget() is app.fullscreen
 app.fullscreen.close()
 pump()
 assert log == ["open", "close"] and app.tracker is None                        # done: off
-app.tick()                                                                     # idle: no frames read
-app.go_reading()
-app.ball_clicked()                                                             # the ball's eyes open: on
-assert log[-1] == "open" and app.camera_users == {"screen"}
-app.ball_clicked()                                                             # eyes closed: off
+app.check()                                                                    # no model yet: refused, camera stays off
+assert log[-1] == "close" and "calibrate first" in app.testing.status.text()
+app.blink_test()                                                               # the blink test: on
+assert log[-1] == "open" and app.camera_users == {"blink"}
+app.fullscreen.close()
+pump()
 assert log[-1] == "close" and app.tracker is None and not app.camera_users
 
 fail = True                                                                    # a camera that can't open
-app.go_reading()
-app.ball_clicked()
-assert app.tracker is None and not app.camera_users and not app.ball.locked
-assert "didn't start" in app.panel.said[-1], app.panel.said[-1]
+app.calibrate()
+assert app.tracker is None and not app.camera_users and app.fullscreen is None
+assert "didn't start" in app.testing.status.text() and "didn't start" in app.testing.log.item(0).text()
 print("camera use ok:", log)

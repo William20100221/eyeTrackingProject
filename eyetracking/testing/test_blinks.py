@@ -5,12 +5,10 @@ Self-check for blink handling (no webcam):  python -m eyetracking.testing.test_b
    of reopening; a rise that never becomes a blink (looking down) is let
    through again after 200 ms
 2. CalibrationSession drops the frames just BEFORE a blink
-3. A whole calibration with frequent blinks: every dot still gets enough
-   good frames, and no closing-lid frame is saved
-4. The app holds the gaze point during a blink instead of freezing/jumping
+3. A whole calibration (Sweep, the longest method) with frequent blinks: every dot still
+   gets enough good frames, and no closing-lid frame is saved
 """
 import os
-import types
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
@@ -56,9 +54,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 import eyetracking.core.calibration as cal
 import eyetracking.ui.calibration_window as cw
-if hasattr(cal, "SWEEP_CROSS_MS"):                        # branches with the moving sweep
-    cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 100, 250    # speed it up
-    cal.SWEEP_AXIS_MS = cal.SWEEP_SETTLE_MS + cal.SWEEP_CROSS_MS * cal.SWEEP_CROSSINGS
+from eyetracking.core.methods import METHOD_BY_ID
+cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 100, 250        # speed up the moving sweep
 cal.HEAD_SETTLE_MS, cal.HEAD_MOVE_MIN_MS, cal.HEAD_MOVE_MAX_MS = 100, 100, 300   # the fake head never moves: max it is
 cw.SETTLE_MS, cw.COLLECT_MS, cw.DOT_SAMPLES, cw.MAX_COLLECT_MS, cw.TICK_MS = 50, 300, 10, 2000, 10
 
@@ -71,8 +68,8 @@ def get_features():
     k = n[0] % 12
     if k >= 8:
         return None                                       # blink (tracker gives None)
-    return (-1.0 if k >= 6 else 1.0,) + (0.5,) * 9        # 6, 7 = lids closing
-win = cw.CalibrationWindow(get_features=get_features)
+    return (-1.0 if k >= 6 else 1.0,) + (0.5,) * 11       # 6, 7 = lids closing
+win = cw.CalibrationWindow(METHOD_BY_ID["sweep"], get_features=get_features)
 out = []
 win.finished.connect(lambda rec: (out.append(rec), qt.quit()))
 win.resize(800, 600); win.show(); win.start()
@@ -87,19 +84,4 @@ print(f"3. calibration: {len(counts)} dots, fewest samples {min(counts.values())
       f"(need {cw.DOT_SAMPLES}); closing-lid frames saved: {closing}")
 assert len(counts) == 25 and min(counts.values()) >= cw.DOT_SAMPLES and closing == 0
 
-# ---- 4. app holds the point through a blink --------------------------------
-import eyetracking.app as appmod
-fed = []
-feats = iter([(0.2, 0.2), None, None, None])               # one prediction, then a blink
-app = types.SimpleNamespace(
-    mouse=False, smoothed=None, reading=None,
-    clock=types.SimpleNamespace(restart=lambda: 33),
-    tracker=types.SimpleNamespace(read_features=lambda: next(feats), face_found=True),
-    ball=types.SimpleNamespace(set_tracking_state=lambda f: None, look_at=lambda p: None), reader=None,
-    dwell=types.SimpleNamespace(feed=lambda p: fed.append((p.x(), p.y()))),
-    predict=lambda f: f)
-for _ in range(4):
-    appmod.App.tick(app)
-assert len(fed) == 4 and len(set(fed)) == 1, fed           # same point fed through the blink
-print("4. app: point held through the blink:", fed[0], "x", len(fed))
 print("ok")

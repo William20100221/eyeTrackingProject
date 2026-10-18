@@ -1,8 +1,9 @@
 """
 Entry point:  python main.py
 
-Starts the whole app (eyetracking/app.py): floating ball + chat panel,
-with calibrate / check / read commands. Add --mouse to try it without a camera.
+Starts the calibration lab (eyetracking/app.py): one window with every
+calibration method, the gaze check, the blink test and their data.
+Add --mouse to try it without a camera.
 """
 import sys
 

@@ -1,31 +1,51 @@
-## Eye-Tracking Reading Assistant
+## Eye-Tracking Calibration Lab
 
-Read on your computer and find out what you missed. Using only your webcam, the app tracks which paragraphs you actually read. An AI then summarises the parts you skipped and quizzes you on them.
+The calibration and testing side of the webcam eye-tracking project, on its own: every
+calibration method in one window, each with its own data folder and its own model, so
+they can be run and compared under the same conditions. No reading tracker, AI or
+floating ball on this branch (see `master` and the `new-calibrate-*` branches for those).
 
 ## Install Requirements
 
-This project is built with Mediapipe, OpenCV, scikit-learn and PySide6 (Qt) which all requires to be installed
+Mediapipe, OpenCV, scikit-learn, PySide6 (Qt) and materialyoucolor (`uv sync`).
 
-## Features
+## Run
 
-- **Reading tracker:** paragraphs turn green as you read them
-- **Catch-up summary:** a short summary of everything you skipped
-- **Quiz:** questions about what you missed, with a score and feedback on each answer
-- **Hands-free buttons:** look at a button for a moment to click it
-- **Floating assistant:** a small ball on the edge of your screen opens the chat panel, wherever you are
+```
+python main.py            # the camera chosen in Settings (a popup asks on first start)
+python main.py --mouse    # no camera: the mouse plays your eyes, nothing is saved
+```
 
-## Installation
+## Methods
 
-Installation instructions are coming soon. The app isn't ready for download yet, but setup steps will be added here once it is.
+| Method | What you do | Model |
+|---|---|---|
+| Original 3×3 / 4×4 / 5×5 | look at each dot, row by row | ridge curve on the raw features |
+| Sweep | follow a gliding dot across and down, the head step, then 25 dots | ridge curve on eye numbers scaled by your own range |
+| Points | 14 still dots along a line, the head step, 25 dots in random order | the same scaled curve |
+| Line model | the Points procedure | a 3D line from each eye through the screen, blended with the curve |
 
-## How to use it
+Every method records the same 12 numbers per frame, so their files can be compared.
 
-1. **Calibrate:** follow a few dots with your eyes so the app learns how your eyes move.
-2. **Read:** open a text and read it as you normally would.
-3. **Catch up:** when you're done, get a summary of what you skipped and answer a short quiz.
+## Testing tab
+
+- **Calibration:** pick a method, read what it does, start it (Space starts, Space pauses, Esc leaves).
+- **Gaze check:** a dot where the chosen method's model thinks you look, rings on its calibration dots; Enter records a sample.
+- **Blink test:** your blink scores in six eye states, with the cut-off they suggest.
+- **Data:** the chosen method's calibrations (active / non-active / not usable, each readable in words, samples removable),
+  every gaze check, the blink scores, and a log of what happened.
+
+## Where the data goes
+
+```
+data/calibrations/<method>/<method>_<date>_<time>.json      trains that method's model
+data/calibrations/<method>/disabled/                         kept, turned off
+data/calibrations/<method>/trash/                            removed files and the originals of edited ones
+data/calibrations/older-versions/                            files from before the lab (not used)
+data/gaze_checks/<method>/gaze-check_<method>_<date>_<time>.csv
+data/blink_scores/blink-scores_<date>_<time>.csv
+```
 
 ## Privacy
 
-- Your calibration data stays on your computer.
-- No camera images are saved or sent anywhere.
-- Only the text you read is sent to the AI.
+- Everything stays on your computer; no camera images are saved or sent anywhere.
