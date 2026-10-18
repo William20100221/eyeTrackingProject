@@ -812,6 +812,19 @@ class TestingPage(QWidget):
         self.check_chips.idClicked.connect(lambda i: self.set_check(method_id=METHODS[i].id))
         pick.addStretch(1)
         v.addLayout(pick)
+        use = QHBoxLayout()
+        use.setSpacing(8)
+        use.addWidget(label("Calibrations to use", "rowtitle"))
+        self.check_count, self.check_most = 0, 0                  # use the newest check_count of check_most
+        self.check_count_btn = button("", "assist")
+        self.check_count_menu = QMenu(self.check_count_btn)
+        self.check_count_menu.aboutToShow.connect(self._fill_check_count_menu)
+        self.check_count_btn.setMenu(self.check_count_menu)
+        use.addWidget(self.check_count_btn)
+        self.check_count_note = label("", "rowsub")
+        use.addWidget(self.check_count_note)
+        use.addStretch(1)
+        v.addLayout(use)
         self.check_results = label("", "sheetText")              # the comparison: every type, this person
         self.check_results.setTextFormat(Qt.RichText)
         v.addWidget(self.check_results)
@@ -829,17 +842,37 @@ class TestingPage(QWidget):
         v.addStretch(1)
         return page
 
+    def set_check_count(self, n: int):
+        """Use the newest n calibrations (0 only when there's none: shown as None)."""
+        self.check_count = n
+        self.check_count_btn.setText(f"{n}{' (all)' if n == self.check_most else ''}  {I_CHEVRON}" if n else "None")
+        self.check_count_btn.setEnabled(n > 0)
+
+    def _fill_check_count_menu(self):
+        self.check_count_menu.clear()
+        for n in range(1, self.check_most + 1):
+            self.check_count_menu.addAction(f"{n}{' (all)' if n == self.check_most else ''}",
+                                            lambda n=n: self.set_check_count(n))
+
     def _fill_check_person_menu(self):
         self.check_person_menu.clear()
         for name, _ in storage.person_roots():
             self.check_person_menu.addAction(name or "No person (data/)", lambda n=name: self.set_check(person=n))
 
     def set_check(self, person: str | None = None, method_id: str | None = None):
-        """Whose model and which calibration type the gaze check tests; the comparison follows the person."""
+        """Whose model and which calibration type the gaze check tests; the comparison follows the person.
+        How many calibrations it uses goes back to all of them when the person or type changes."""
+        changed = (person is not None and person != self.check_person) or \
+                  (method_id is not None and method_id != self.check_method)
         if person is not None:
             self.check_person = person
         if method_id is not None:
             self.check_method = method_id
+        most = storage.usable_calibrations(self.check_method, storage.person_root(self.check_person))
+        keep = self.check_count
+        self.check_most = most
+        self.set_check_count(most if changed or keep == 0 or keep > most else keep)   # a choice is kept while it fits
+        self.check_count_note.setText(f"of {most}, the newest first" if most else "no usable calibration of this type yet")
         self.check_person_btn.setText(f"{self.check_person or 'No person (data/)'}  {I_CHEVRON}")
         self.check_chips.button([m.id for m in METHODS].index(self.check_method)).setChecked(True)
         pct = lambda e: "–" if e is None else f"{e:.1%}"

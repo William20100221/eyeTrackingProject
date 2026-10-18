@@ -86,10 +86,26 @@ frames = lambda t: [CalibrationSample(features_for(ScreenGeometry(27.7, 18.9), t
 storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(3) for s in frames(t))), "original-3x3",
                          tmp / "data" / "William" / "original-3x3" / "original-3x3_2026-10-18_120000.json")
 app.testing.set_check(person="William", method_id="original-3x3")
+page = app.testing
+assert (page.check_count, page.check_most) == (1, 1) and page.check_count_btn.isEnabled()   # most = what's recorded
+storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(3) for s in frames(t))), "original-3x3",
+                         tmp / "data" / "William" / "original-3x3" / "original-3x3_2026-10-18_130000.json")
+app.testing.refresh()
+assert (page.check_count, page.check_most) == (1, 2)                             # a choice is kept while it fits
+page._fill_check_count_menu()
+assert [a.text() for a in page.check_count_menu.actions()] == ["1", "2 (all)"]   # 1 up to what's recorded
+page.check_count_menu.actions()[1].trigger()
+assert page.check_count == 2 and page.check_count_btn.text().startswith("2 (all)")
+app.testing.set_check(method_id="original-4x4")                                 # none of this type: None
+assert page.check_count_btn.text() == "None" and not page.check_count_btn.isEnabled() and page.check_most == 0
+app.testing.set_check(method_id="original-3x3")                                 # another type: back to all of them
+assert page.check_count == 2
+page.set_check_count(1)
 app.check()
 assert app.fullscreen.method_id == "original-3x3" and app.fullscreen.folder == tmp / "data" / "William" / "original-3x3"
+assert app.fullscreen.calibrations == 1
 said = app.testing.log.item(0).text()
-assert "William's Original 3×3: model trained on 1" in said and said.endswith("Look at the lit ring, press Enter."), said   # ~180, a few cleaned
+assert "William's Original 3×3: model trained on " in said and "from the newest 1 calibration." in said, said
 assert storage.DATA_DIR == tmp / "data"                                        # the person in use didn't change
 app.fullscreen.close()
 pump()

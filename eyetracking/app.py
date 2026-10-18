@@ -234,19 +234,21 @@ class App(QObject):
         person = self.testing.check_person
         root = storage.person_root(person)
         who = f"{person or 'No person'}'s {method.name}"
-        model = None
+        model, count = None, self.testing.check_count             # the newest `count` calibrations train it
         if not self.mouse:
-            model, n = train(method, load_all_calibrations(method.id, root), screen_geometry())
+            model, n = train(method, load_all_calibrations(method.id, root)[:count], screen_geometry())
             if model is None:
                 self.testing.say(f"{who}: no usable calibration yet. Calibrate first.")
                 return
-            self.testing.say(f"{who}: model trained on {n} samples. Look at the lit ring, press Enter.")
+            self.testing.say(f"{who}: model trained on {n} samples from the newest {count} "
+                             f"calibration{'s' if count != 1 else ''}. Look at the lit ring, press Enter.")
         if not self._use_camera("check"):
             return
 
         def get():
             return fake_point_from_mouse() if self.mouse else model.predict(self.tracker.read_features())
         window = GazeWindow(get_point=get, method_id=method.id, folder=storage.method_dir(method.id, root))
+        window.calibrations = count or None
         window.logged.connect(lambda path: (self.testing.refresh(), self.testing.say(
             f"{who}: gaze check saved as {Path(path).name}. See Data > Gaze checks.")))
         self._open_fullscreen(window)

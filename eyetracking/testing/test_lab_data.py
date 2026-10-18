@@ -121,6 +121,11 @@ calibs, checks, latest, mean = results["original-3x3"]
 assert checks == 2 and abs(latest - 0.01) < 1e-6 and mean > latest, results["original-3x3"]   # latest = the newest file
 assert results["sweep"][1:] == [0, None, None]
 older.unlink()
+two = storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "original-3x3", calibrations=2)
+assert two.name.startswith("gaze-check_original-3x3_2-calibrations_20") and storage.file_date(two).year >= 2026, two.name
+assert storage.check_calibrations(two) == 2 and storage.check_calibrations(check) is None
+assert "model (trained on the newest 2 calibrations)," in storage.gaze_check_lines(two)[0]
+two.unlink()
 rows = [("open", 0, 0.05, 0.06), ("open", 33, 0.07, 0.05), ("down", 66, 0.2, 0.21), ("closed", 99, 0.8, 0.85),
         ("closed", 132, 0.9, 0.88), ("wink_left", 165, 0.9, 0.1)]
 blink = storage.save_blink_scores(rows)

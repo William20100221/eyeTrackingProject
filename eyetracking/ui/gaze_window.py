@@ -53,6 +53,7 @@ class GazeWindow(QWidget):
         self._get_point = get_point
         self.method_id = method_id       # the csv goes into this method's folder, with the method in its name
         self.folder = folder             # ...of this person (None: the person in use)
+        self.calibrations: int | None = None   # how many calibrations trained the model: goes in the file name
         self._lit = 0                    # the ring to look at now: Enter records it and lights the next
         self.paused = False
         self._targets = list(targets or point_grid())
@@ -114,7 +115,7 @@ class GazeWindow(QWidget):
 
     def save_log(self, folder: Path | None = None) -> Path:
         """Every sample as index,x,y, to the method's folder (or `folder`): to compare after a test."""
-        return save_gaze_check(self.log, self.method_id or "unknown", folder or self.folder)
+        return save_gaze_check(self.log, self.method_id or "unknown", folder or self.folder, self.calibrations)
 
     def sample_lines(self) -> list[str]:
         """The latest samples, newest last: "#0042  x 0.430  y 0.610  off 0.032" (index first; off = from the ring)."""

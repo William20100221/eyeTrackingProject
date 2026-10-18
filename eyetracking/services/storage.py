@@ -318,11 +318,14 @@ CHECK_GRID = 5     # every type is checked on the 5x5 rings, one lit at a time: 
 Check = tuple[int, float, float, float, float]   # index, where the model said (x, y), the lit ring (x, y)
 
 
-def save_gaze_check(samples: list[Check], method_id: str, folder: Path | None = None) -> Path:
-    """(index, x, y, ring x, ring y) rows -> <method>/gaze-check_<method>_<time>.csv. Returns the path."""
+def save_gaze_check(samples: list[Check], method_id: str, folder: Path | None = None,
+                    calibrations: int | None = None) -> Path:
+    """(index, x, y, ring x, ring y) rows -> <method>/gaze-check_<method>[_<n>-calibrations]_<time>.csv,
+    n = how many calibrations trained the model. Returns the path."""
     folder = folder or method_dir(method_id)
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"gaze-check_{method_id}_{datetime.now():{STAMP}}.csv"
+    used = f"_{calibrations}-calibrations" if calibrations else ""
+    path = folder / f"gaze-check_{method_id}{used}_{datetime.now():{STAMP}}.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["index", "x", "y", "target_x", "target_y"])
@@ -347,6 +350,17 @@ def read_gaze_check(path: Path) -> list[Check]:
             for r in rows]
 
 
+def check_calibrations(path: Path) -> int | None:
+    """How many calibrations trained the model a gaze check tested (from its name; None if not recorded)."""
+    found = re.search(r"_(\d+)-calibrations_", path.name)
+    return int(found.group(1)) if found else None
+
+
+def usable_calibrations(method_id: str, root: Path | None = None) -> int:
+    """How many of a type's active calibrations can train a model: the most a gaze check can use."""
+    return sum(calibration_usable(p) for p in list_calibrations(method_id, root))
+
+
 def check_error(rows: list[Check]) -> float | None:
     """The mean distance from where the model said to the lit ring, as a fraction of the screen."""
     return sum(math.hypot(x - tx, y - ty) for _, x, y, tx, ty in rows) / len(rows) if rows else None
@@ -361,9 +375,11 @@ def gaze_check_lines(path: Path) -> list[str]:
     method = METHOD_BY_ID.get(method_of(path))
     who = person_of(path) or "No person"
     error = check_error(rows)
-    lines = [f"Gaze check of {who}'s {method.name if method else method_of(path)} model, {file_date(path):%d %b %Y, %H:%M}: "
-             f"{len(rows)} samples, average error {error or 0:.1%} of the screen (from where the model said to the "
-             "lit ring).", ""]
+    used = check_calibrations(path)
+    trained = f" (trained on the newest {used} calibration{'s' if used != 1 else ''})" if used else ""
+    lines = [f"Gaze check of {who}'s {method.name if method else method_of(path)} model{trained}, "
+             f"{file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples, average error {error or 0:.1%} of the screen "
+             "(from where the model said to the lit ring).", ""]
     for i, x, y, tx, ty in rows:
         lines.append(f"#{i}: looking at {describe_target(tx, ty, CHECK_GRID)}; the model said {x:.0%} across, "
                      f"{y:.0%} down, {math.hypot(x - tx, y - ty):.1%} of the screen away")
