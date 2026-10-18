@@ -45,7 +45,10 @@ for m in METHODS:
     rec = run(m)
     dots = list(dict.fromkeys(targets(rec.dots)))                                 # in the order they came
     assert len(dots) == m.dots and set(dots) == set(cal.point_grid(m.grid)), (m.id, len(dots))
-    assert dots == cal.point_grid(m.grid), m.id                                     # every type: row by row
+    if m.random_order:                                                              # the Random collection: shuffled
+        assert dots != cal.point_grid(m.grid), m.id                                 # (9! orders: equal by chance ~never)
+    else:
+        assert dots == cal.point_grid(m.grid), m.id                                 # In order: row by row
     assert m.grid == (4 if m.kind != "grid" else m.grid), m.id                       # Sweep / Points / Line: 4x4
     if m.kind == "grid":
         assert rec.sweep == () and rec.head == (), m.id                             # the dots, nothing else

@@ -24,6 +24,7 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is sav
 | Sweep | follow a gliding dot across and down, the head step, then 16 dots (4×4) | ridge curve on eye numbers scaled by your own range |
 | Points | 14 still dots along a line, the head step, 16 dots (4×4) | the same scaled curve |
 | Line model | the Points procedure | a 3D line from each eye through the screen, blended with the curve |
+| Random 3×3 / 4×4 / 5×5 | the Original dots, in a new random order each time | ridge curve on the raw features |
 
 Every method records the same 12 numbers per frame, so their files can be compared.
 
@@ -48,7 +49,8 @@ data/<person>/<method>/trash/                                   removed files an
 data/<person>/blink-test/blink-scores_<date>_<time>.csv
 ```
 
-`<method>` is one of `original-3x3`, `original-4x4`, `original-5x5`, `sweep`, `points`, `line-model`.
+`<method>` is one of `original-3x3`, `original-4x4`, `original-5x5`, `sweep`, `points`, `line-model`,
+`random-3x3`, `random-4x4`, `random-5x5`.
 The other branches' folders in `data/` (`calibrations/`, `gaze_checks/`, `blink_scores/`, `history/`) are left alone.
 
 ## Privacy

@@ -456,6 +456,30 @@ class Grip(QWidget):
 
 # ---------------------------------------------------------------- dated file lists
 
+def method_picker(group: QButtonGroup) -> QWidget:
+    """The calibration types as chips, one row per collection ("In order", "Random order"), each
+    labelled. A chip's id in `group` is its index in METHODS."""
+    box = QWidget()
+    grid = QGridLayout(box)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(8)
+    grid.setVerticalSpacing(8)
+    rows = list(dict.fromkeys(m.collection for m in METHODS))
+    for r, collection in enumerate(rows):
+        grid.addWidget(label(collection, "rowsub"), r, 0)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        for i, m in enumerate(METHODS):
+            if m.collection == collection:
+                b = CheckButton(m.name, "chip")
+                group.addButton(b, i)
+                row.addWidget(b)
+        row.addStretch(1)
+        grid.addLayout(row, r, 1)
+    grid.setColumnStretch(1, 1)
+    return box
+
+
 def side_list(on_open) -> QListWidget:
     """A list of dated files; double-click (or Enter) calls on_open(path)."""
     lst = QListWidget(objectName="sideList")
@@ -629,7 +653,13 @@ class TestingPage(QWidget):
         self.main.addWidget(self._calibrate_page())
         self.check_person = ""                   # whose model the check tests (the app sets the person in use)
         self.check_method = method_id                                     # ...and which calibration type
-        self.main.addWidget(self._check_page())
+        check = QScrollArea()                     # nine types + the table: taller than a small window
+        check.setWidget(self._check_page())
+        check.setWidgetResizable(True)
+        check.setFrameShape(QFrame.NoFrame)
+        check.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        check.viewport().setAutoFillBackground(False)
+        self.main.addWidget(check)
         self.main.addWidget(self._intro(
             I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off can be set from "
             "your own numbers instead of a guess.",
@@ -744,18 +774,9 @@ class TestingPage(QWidget):
                      "compared; each keeps its own model, trained from its own folder.", "lead")
         lead.setWordWrap(True)
         v.addWidget(lead)
-        chips = QWidget()
-        cl = QHBoxLayout(chips)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.setSpacing(8)
         self.method_chips = QButtonGroup(self)
-        for i, m in enumerate(METHODS):
-            b = CheckButton(m.name, "chip")
-            self.method_chips.addButton(b, i)
-            cl.addWidget(b)
-        cl.addStretch(1)
+        v.addWidget(method_picker(self.method_chips))
         self.method_chips.idClicked.connect(lambda i: self.set_method(METHODS[i].id))
-        v.addWidget(chips)
         self.method_about = label("", "sheetText")
         self.method_about.setWordWrap(True)
         v.addWidget(self.method_about)
@@ -802,16 +823,12 @@ class TestingPage(QWidget):
         self.check_person_menu.aboutToShow.connect(self._fill_check_person_menu)
         self.check_person_btn.setMenu(self.check_person_menu)
         pick.addWidget(self.check_person_btn)
-        pick.addSpacing(16)
-        pick.addWidget(label("Calibration type", "rowtitle"))
-        self.check_chips = QButtonGroup(self)
-        for i, m in enumerate(METHODS):
-            b = CheckButton(m.name, "chip")
-            self.check_chips.addButton(b, i)
-            pick.addWidget(b)
-        self.check_chips.idClicked.connect(lambda i: self.set_check(method_id=METHODS[i].id))
         pick.addStretch(1)
         v.addLayout(pick)
+        v.addWidget(label("Calibration type", "rowtitle"))
+        self.check_chips = QButtonGroup(self)
+        v.addWidget(method_picker(self.check_chips))
+        self.check_chips.idClicked.connect(lambda i: self.set_check(method_id=METHODS[i].id))
         use = QHBoxLayout()
         use.setSpacing(8)
         use.addWidget(label("Calibrations to use", "rowtitle"))

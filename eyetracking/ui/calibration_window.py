@@ -4,7 +4,8 @@ Calibration page, full screen (PySide6), for every method in core/methods.py:
   Original 3x3 / 4x4 / 5x5   intro -> the dots, row by row -> done
   Sweep                      intro -> gliding dot (across, down) -> head step -> the 4x4 dots -> done
   Points, Line model         intro -> 14 still dots along a line -> head step -> the 4x4 dots -> done
-Every grid runs row by row (the same order for every type).
+  Random 3x3 / 4x4 / 5x5      intro -> the dots, in a new random order each time -> done
+The "In order" types run their grid row by row (the same order for all of them).
 
 Only drawing and timing live here. What each step means is in core/calibration.py
 (the dot bookkeeping, the sweep motion, the head step with its gauge, the
@@ -21,6 +22,7 @@ fractions 0..1 (x across, y down), so they work on any screen size.
 """
 from __future__ import annotations
 
+import random
 import sys
 from typing import Callable, Sequence
 
@@ -52,7 +54,8 @@ class CalibrationWindow(QWidget):
         super().__init__(parent)
         self.method = method
         self._get_features = get_features
-        self._session = CalibrationSession(point_grid(method.grid))   # row by row, like every type
+        grid = point_grid(method.grid)                                 # row by row...
+        self._session = CalibrationSession(random.sample(grid, len(grid)) if method.random_order else grid)   # ...or shuffled
         # steps 1-2 also go through a CalibrationSession, for its blink handling
         # (frames just before a blink are dropped): one long "dot" for the sweep and the head step
         self._line = CalibrationSession(sweep_points()) if method.kind == "points" else None
