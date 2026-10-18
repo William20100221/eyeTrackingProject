@@ -57,12 +57,14 @@ def file_date(path: Path) -> datetime:
     return datetime.strptime(path.stem[-17:], STAMP)
 
 
+def _method_folder(path: Path) -> Path:
+    """The method folder a file sits in (a disabled / trash file: the folder above)."""
+    return path.parent.parent if path.parent.name in ("disabled", "trash") else path.parent
+
+
 def method_of(path: Path) -> str:
-    """The method a file belongs to: its folder (a disabled / trash file: the folder above)."""
-    folder = path.parent
-    if folder.name in ("disabled", "trash"):
-        folder = folder.parent
-    return folder.name
+    """The method a file belongs to: its folder's name."""
+    return _method_folder(path).name
 
 
 # ---- person mode: each person's files in their own folder -----------------------
@@ -88,6 +90,11 @@ def use_person(name: str) -> Path:
 BLINK_DIR = DATA_DIR / BLINK
 
 
+def person_roots() -> list[tuple[str, Path]]:
+    """Every place data can be: ("", data/) first, then each person A to Z with their folder."""
+    return [("", BASE_DIR)] + [(name, BASE_DIR / name) for name in list_people()]
+
+
 def list_people() -> list[str]:
     """The people with a folder in data/ (a folder holding method or blink-test folders), A to Z."""
     if not BASE_DIR.is_dir():
@@ -109,9 +116,9 @@ def ensure_layout() -> list[Path]:
 
 
 # ---- calibrations ---------------------------------------------------------------
-def method_dir(method_id: str) -> Path:
-    """A method's folder: its calibrations and its gaze checks."""
-    return DATA_DIR / method_id
+def method_dir(method_id: str, root: Path | None = None) -> Path:
+    """A method's folder: its calibrations and its gaze checks (of the person in use, or under `root`)."""
+    return (root or DATA_DIR) / method_id
 
 
 def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | None = None) -> Path:
@@ -148,14 +155,14 @@ def _load(path: Path) -> tuple[CalibrationRecording, int]:
     return CalibrationRecording(*parts), int(data.get("grid", 5))
 
 
-def list_calibrations(method_id: str) -> list[Path]:
+def list_calibrations(method_id: str, root: Path | None = None) -> list[Path]:
     """A method's active calibrations (the ones its model learns from), newest first."""
-    return sorted(method_dir(method_id).glob(f"{method_id}_*.json"), reverse=True)
+    return sorted(method_dir(method_id, root).glob(f"{method_id}_*.json"), reverse=True)
 
 
-def list_disabled(method_id: str) -> list[Path]:
+def list_disabled(method_id: str, root: Path | None = None) -> list[Path]:
     """A method's calibrations the user turned off, newest first."""
-    return sorted((method_dir(method_id) / "disabled").glob(f"{method_id}_*.json"), reverse=True)
+    return sorted((method_dir(method_id, root) / "disabled").glob(f"{method_id}_*.json"), reverse=True)
 
 
 def load_all_calibrations(method_id: str) -> list[CalibrationRecording]:
@@ -182,7 +189,7 @@ def set_calibration_enabled(path: Path, enabled: bool) -> Path:
     """Move a calibration between its method's folder (trains the model) and that
     folder's disabled/ (kept, doesn't). Training only reads the method's folder, so a
     disabled file is left out without any check in the training code. Returns the new path."""
-    folder = method_dir(method_of(path))
+    folder = _method_folder(path)
     if not enabled:
         folder = folder / "disabled"
     folder.mkdir(parents=True, exist_ok=True)
@@ -252,7 +259,7 @@ def calibration_text(path: Path) -> str:
 
 # ---- removing: the untouched original always stays in the method's trash/ -------
 def _trash_dir(path: Path) -> Path:
-    return method_dir(method_of(path)) / "trash"
+    return _method_folder(path) / "trash"
 
 
 def keep_original(path: Path) -> None:

@@ -477,6 +477,24 @@ def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
         lst.addItem(QListWidgetItem(empty))   # no path: clicking does nothing
 
 
+def fill_grouped(lst: QListWidget, groups: list[tuple[str, list[Path]]], empty: str):
+    """Dated files under headings (a person each): a heading can't be clicked or opened."""
+    lst.clear()
+    for heading, paths in groups:
+        item = QListWidgetItem(heading)
+        item.setFlags(Qt.NoItemFlags)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        lst.addItem(item)
+        for path in paths:
+            row = QListWidgetItem(f"{file_date(path):%d %b %Y   %H:%M}")
+            row.setData(Qt.UserRole, str(path))
+            lst.addItem(row)
+    if not groups and empty:
+        lst.addItem(QListWidgetItem(empty))
+
+
 class DataPage(QWidget):
     """One kind of recorded data: the files by date on the left, the chosen one in
     words on the right. Right-click a file to remove it (it moves to a trash folder
@@ -604,9 +622,10 @@ class TestingPage(QWidget):
         mv.setSpacing(8)
         self.lists_title = label("Calibrations", "sheetTitle")
         mv.addWidget(self.lists_title)
-        hint = label("The chosen method's calibrations by date (its folder: data/<person>/<method>/). Double-click one to read "
-                     "it in words. Right-click to disable it (kept, but it stops training the model), enable it again, "
-                     "or remove it. Only the active ones train the method's model.", "sheetText")
+        hint = label("The chosen method's calibrations by person, then by date (data/<person>/<method>/). Double-click one "
+                     "to read it in words. Right-click to disable it (kept, but it stops training the model), enable it "
+                     "again, or remove it. The person in use (Settings > Person mode) is the one whose active files train "
+                     "the model.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
         cols = QHBoxLayout()
@@ -825,10 +844,22 @@ class TestingPage(QWidget):
 
     def refresh(self):
         """Re-read data/. Runs whenever the page shows, the method changes, or a file was saved."""
-        usable = {p: calibration_usable(p) for p in list_calibrations(self.method_id)}
-        fill_list(self.active_list, [p for p, ok in usable.items() if ok], "None active: enable one, or calibrate")
-        fill_list(self.disabled_list, list_disabled(self.method_id), "None")
-        fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
+        roots = storage.person_roots()
+        cols: tuple[list, list, list] = ([], [], [])          # active, non-active, not usable: (person, files)
+        for name, root in roots:
+            usable = {p: calibration_usable(p) for p in list_calibrations(self.method_id, root)}
+            heading = (name or "No person (data/)") + ("   · in use" if root == storage.DATA_DIR else "")
+            files = ([p for p, ok in usable.items() if ok], list_disabled(self.method_id, root),
+                     [p for p, ok in usable.items() if not ok])
+            for col, paths in zip(cols, files):
+                if paths:
+                    col.append((heading, paths))
+        for lst, groups, empty in zip((self.active_list, self.disabled_list, self.inactive_list), cols,
+                                      ("None active: enable one, or calibrate", "None", "None")):
+            if len(roots) > 1:                                  # people exist: a heading per person
+                fill_grouped(lst, groups, empty)
+            else:
+                fill_list(lst, groups[0][1] if groups else [], empty)
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
 

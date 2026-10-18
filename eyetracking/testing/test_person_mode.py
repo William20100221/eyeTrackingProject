@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
 import eyetracking.services.storage as storage
@@ -41,14 +41,24 @@ w.set_person("Ann")                                              # Settings: per
 w.person_switch.setChecked(True)
 w.save()
 assert storage.DATA_DIR == tmp / "data" / "Ann" and (tmp / "data" / "Ann" / "sweep").is_dir()
-assert page.active_list.item(0).data(0x0100) is None             # Ann has nothing yet: data/ files not shown
+texts = lambda lst: [lst.item(i).text() for i in range(lst.count())]
+assert texts(page.active_list) == ["No person (data/)", texts(page.active_list)[1]]   # sorted by person: data/'s file
+assert page.active_list.item(1).data(0x0100) == str(mine) and page.active_list.item(0).flags() == Qt.NoItemFlags  # a heading: inert
+ann = storage.save_calibration(rec, "original-3x3")              # Ann's first calibration
+page.refresh()
+assert texts(page.active_list)[0] == "No person (data/)" and texts(page.active_list)[2] == "Ann   · in use", texts(page.active_list)
+assert page.active_list.item(3).data(0x0100) == str(ann)
+assert storage.set_calibration_enabled(mine, False).parent == tmp / "data" / "original-3x3" / "disabled"   # in ITS folder
+page.refresh()
+assert texts(page.disabled_list)[0] == "No person (data/)" and texts(page.active_list)[0] == "Ann   · in use"
+storage.set_calibration_enabled(storage.list_disabled("original-3x3", tmp / "data")[0], True)
 assert "Saved as data/Ann/original-3x3/" in page.method_steps.text()
 assert page.status.text() == "Saving for Ann in data/Ann/.", page.status.text()
 assert storage.list_people() == ["Ann"]
 
 w.person_switch.setChecked(False)                                # mode off: back to data/, the name is kept
 w.save()
-assert storage.DATA_DIR == tmp / "data" and page.active_list.item(0).data(0x0100) == str(mine)
+assert storage.DATA_DIR == tmp / "data" and texts(page.active_list)[0] == "No person (data/)   · in use"
 assert w.person == "Ann" and page.status.text() == "Saving straight under data/."
 
 w.person_switch.setChecked(True)
