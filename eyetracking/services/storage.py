@@ -69,7 +69,7 @@ def ensure_layout() -> list[Path]:
     folders = [BLINK_DIR] + [d / m for m in METHOD_BY_ID for d in (CALIB_DIR, GAZE_CHECK_DIR)]
     made = [f for f in folders if not f.is_dir()]
     for f in made:
-        f.mkdir(parents=True)
+        f.mkdir(parents=True, exist_ok=True)      # a test may point two kinds at one folder
     return made
 
 
