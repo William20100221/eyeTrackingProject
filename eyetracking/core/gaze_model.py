@@ -5,8 +5,12 @@ input gazing features -> output gazing coordinates on screen
 Screen positions are fractions 0..1, the same as calibration. Errors are
 measured in pixels, so those functions also need the screen size.
 
-Model: Ridge regression on degree-2 polynomial features: enough bend for
-the eye's non-linear mapping, few enough knobs for ~25 dots not to overfit.
+Model: Ridge regression, a straight line (degree 1) by default since 18 Oct
+2026, on the 6 eye features turned back to the calibration's posture
+(core/head_correction.py). Measured on 14 real calibrations (testing/bench_final.py):
+a straight line beats the degree-2 curve both inside a sitting (interior dots held
+out: 11.8% vs 13.5% of the screen) and on a new sitting (23.6% vs 26.5%); the curve
+bends away faster where the features drift. degree=2 is still there to compare.
 The ridge strength is chosen by leave-one-DOT-out: a dot's ~25 frames are
 near-copies, so leaving one FRAME out (RidgeCV's default) never really hides
 a dot and picks a strength that memorises the dots (bench: 27% -> 25% error
@@ -48,19 +52,19 @@ def leave_dots_out(groups: np.ndarray):
 
 
 class GazeModel:
-    def __init__(self, regressor=None) -> None:
+    def __init__(self, regressor=None, degree: int = 1) -> None:
         # any sklearn regressor works here. The default is 3 steps in a row:
         #   StandardScaler      every feature on the same scale, so iris ratios
         #                       (~0..1) and head angles don't drown each other
-        #   PolynomialFeatures  adds squares and pairs (a^2, a*b) so the model
-        #                       can fit a curve, not only a straight line
+        #   PolynomialFeatures  degree 2 adds squares and pairs (a^2, a*b) so the
+        #                       model can fit a curve; degree 1 = a straight line
         #   Ridge               linear regression that keeps the weights small
         #                       (less overfitting); the strength is chosen in fit()
         #                       by leave-one-dot-out over 13 candidates
         # To compare: GazeModel(LinearRegression()) and check the numbers.
         # ponytail: one global poly+ridge; try per-axis models or a small MLP only once you have 100s of dots
         self._regressor = regressor if regressor is not None else make_pipeline(
-            StandardScaler(), PolynomialFeatures(2), Ridge())
+            StandardScaler(), PolynomialFeatures(degree, include_bias=False), Ridge())
         self._search = regressor is None
         self._trained = False
 
@@ -159,10 +163,10 @@ if __name__ == "__main__":
             f = np.array(f + [0, 0, 0, 0.5, 0.5, 1.0]) + rng.normal(0, 0.01, 10)
             samples.append(CalibrationSample(tuple(f), tx, ty))
     w, h = 1920, 1080
-    model = GazeModel().fit(samples)
+    model = GazeModel(degree=2).fit(samples)             # the fake map is a curve: degree 2 fits it
     fit_err = mean_error_px(model, samples, w, h)
     assert model.alpha in ALPHAS
-    errs = leave_one_dot_out(samples, w, h)
+    errs = leave_one_dot_out(samples, w, h, make_model=lambda: GazeModel(degree=2))
     inner = [e for (x, y), e in errs.items() if 0.1 < x < 0.9 and 0.1 < y < 0.9]
     print(f"train {fit_err:.0f}px, held-out interior dots {np.mean(inner):.0f}px")
     assert fit_err < 30 and np.mean(inner) < 40
@@ -173,8 +177,8 @@ if __name__ == "__main__":
     old = [CalibrationSample(tuple(np.array(s.features) + shift), s.target_x, s.target_y)
            for s in samples]
     both, weights = samples + old, [1.0] * len(samples) + [0.5] * len(old)
-    plain = mean_error_px(GazeModel().fit(both), samples, w, h)
-    weighted = mean_error_px(GazeModel().fit(both, weights), samples, w, h)
+    plain = mean_error_px(GazeModel(degree=2).fit(both), samples, w, h)
+    weighted = mean_error_px(GazeModel(degree=2).fit(both, weights), samples, w, h)
     print(f"today's error: equal weights {plain:.0f}px, newest weighted {weighted:.0f}px")
     assert weighted < plain
     print("ok")

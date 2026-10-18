@@ -20,14 +20,16 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is sav
 
 | Method | What you do | Model |
 |---|---|---|
-| Original 3×3 / 4×4 / 5×5 | look at each dot, row by row | ridge curve on the raw features |
-| Sweep | follow a gliding dot across and down, the head step, then 16 dots (4×4) | ridge curve on eye numbers scaled by your own range |
-| Points | 14 still dots along a line, the head step, 16 dots (4×4) | the same scaled curve |
-| Line model | the Points procedure | a 3D line from each eye through the screen, blended with the curve |
+| Original 3×3 / 4×4 / 5×5 | look at each dot, row by row | a straight-line fit (ridge) on the 6 eye features, each frame first turned back to the calibration's posture with the built-in head-rotation matrix |
+| Sweep | follow a gliding dot across and down, the head step, then 16 dots (4×4) | the same fit, the head-rotation matrix measured by your own head step |
+| Points | 14 still dots along a line, the head step, 16 dots (4×4) | the same as Sweep |
+| Line model | the Points procedure | a 3D line from each eye through the screen, blended with the fitted line |
 | Random 3×3 / 4×4 / 5×5 / Sweep / Points / Line model | each type above, its final dots in a new random order each time | the same as its in-order type |
 
 Every type records the same 12 numbers per frame, so their files can be compared. Sweep, Points and
-Line model end on a 4×4 grid on this branch, the same 16 dots as Original 4×4.
+Line model end on a 4×4 grid on this branch, the same 16 dots as Original 4×4. The live point goes
+through a 1€ filter (steady while the eyes rest, quick when they jump). Why the models are what they
+are, with the measurements: `docs/model_improvements.md`.
 
 ## Testing tab
 

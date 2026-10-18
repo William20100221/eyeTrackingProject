@@ -88,13 +88,14 @@ def recording(m) -> CalibrationRecording:
 for m in METHODS:
     model, n = train(m, [recording(m)], screen)
     assert isinstance(model, TrainedModel) and n >= 0.8 * m.dots * 25, (m.id, n)
-    assert (model.profile is not None) == (m.model == "profile"), m.id
+    assert (model.k_source == "its own head step") == (m.model == "profile") and (model.K is None) == (m.model == "line"), m.id
     err = np.mean([np.hypot(*(np.array(model.predict(s.features)) - (s.target_x, s.target_y)))
                    for s in recording(m).dots[::7]])
-    # the simulated person's vertical eye RATIO is a weak signal (features_for: corners, no iris height), and
-    # the profile models use the 4 ratios only, so they land near 15% there; ridge / line also see iris-down
-    assert err < (0.2 if m.model == "profile" else 0.08), (m.id, err)
-    assert model.predict(None) is None                                              # a blink
+    # the regressions are a straight line on the 6 eye features, with the head turn taken out by a matrix
+    # measured on REAL people; the simulated person (features_for) is a different eye, so allow 20% here
+    # (the real-data numbers are in docs/model_improvements.md); the geometric line model fits its own sim best
+    assert err < (0.08 if m.model == "line" else 0.2), (m.id, err)
+    assert model.predict(None) is None and model.predict((0.5,) * 10) is None       # a blink; an older file's 10 features
     print(f"2. {m.id:<13} {m.model:<8} {n} samples, mean error {err:.1%} of the screen")
 assert train(METHODS[0], [], screen) == (None, 0)
 print("methods ok")

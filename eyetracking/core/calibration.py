@@ -271,6 +271,10 @@ HEAD_RIDGE = 0.01        # small ridge in the head fit: a head number that hardl
 
 @dataclass(frozen=True, eq=False)
 class GazeProfile:
+    """Since 18 Oct 2026 the models no longer train on these scaled numbers (the head is
+    taken out by core/head_correction.py instead: the range scaling measured no help on a new
+    sitting, see docs/model_improvements.md). from_recording() still validates the sweep and
+    head steps, and training_set(scaled=False) still feeds the line model."""
     eye_min: np.ndarray   # (4,) eye numbers when looking at the left/top edge...
     eye_max: np.ndarray   # (4,) ...and at the right/bottom edge (after head correction)
     head_ref: np.ndarray  # (6,) the head position the correction is measured from

@@ -11,12 +11,15 @@ A type says how the calibration runs (kind) and what learns from it (model):
          "sweep"   a dot glides edge to edge (the eye range), the head step, then the 4x4 grid
          "points"  still dots along a line instead of the moving dot, the head step,
                    then the 4x4 grid
-  model  "ridge"   a curve (squares + pairs, ridge) fitted on the raw features of the
-                   dots: the Original model (core/gaze_model.py)
-         "profile" the same curve, on eye numbers scaled by this user's own sweep +
-                   head step (GazeProfile, core/calibration.py)
+  model  "ridge"   a straight-line fit (ridge) on the 6 eye features of the dots, each
+                   frame first turned back to the calibration's posture with the default
+                   head-rotation matrix (core/head_correction.py, core/gaze_model.py)
+         "profile" the same, with the matrix measured by this calibration's own head step
          "line"    a 3D line from each eye through the screen (vergence 6 degrees),
                    blended with the fitted line (core/line_model.py)
+Until 18 Oct 2026 "ridge" was a degree-2 curve on all 12 raw features and "profile" the
+curve on eye numbers scaled by the sweep; both fell apart on the next sitting (bench_*.py:
+2800% and 437% of the screen), see docs/model_improvements.md.
 
 Two collections of six:
   In order      Original 3x3 / 4x4 / 5x5, Sweep, Points, Line model: the final grid row by
@@ -35,8 +38,11 @@ import time
 from dataclasses import dataclass, replace
 from typing import Callable, Sequence
 
-from eyetracking.core.calibration import GazeProfile, training_set
+import numpy as np
+
+from eyetracking.core.calibration import training_set
 from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.head_correction import DEFAULT_K, corrected, fit_k, reference_angles
 from eyetracking.core.line_model import LineModel, ScreenGeometry
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from eyetracking.core.quality import check_recording
@@ -68,21 +74,22 @@ HEAD = "Keep looking at the centre dot and move your head as far as the bar asks
 
 METHODS = (
     Method("original-3x3", "Original 3×3", "grid", "ridge", 3,
-           about="The plain method on a 3×3 grid: 9 dots row by row, then a curve is fitted on their raw features. "
-                 "The quickest, but 9 dots can only fit a rough curve.",
+           about="The plain method on a 3×3 grid: 9 dots row by row, then a straight-line fit on the eye features. "
+                 "The quickest, but 9 dots can only fit roughly.",
            steps=(GRID + " 9 dots, about 25 seconds.",)),
     Method("original-4x4", "Original 4×4", "grid", "ridge", 4,
            about="The plain method on a 4×4 grid: 16 dots row by row. A middle ground between speed and fit.",
            steps=(GRID + " 16 dots, about 40 seconds.",)),
     Method("original-5x5", "Original 5×5", "grid", "ridge", 5,
-           about="The original method: 25 dots row by row, then a curve (squares and pairs, ridge) is fitted on "
-                 "their raw features. The baseline every other method is compared with.",
+           about="The original method: 25 dots row by row, then a straight-line fit (ridge) on the 6 eye features, "
+                 "each frame turned back to the calibration's posture with the built-in head-rotation matrix. "
+                 "The baseline every other method is compared with.",
            steps=(GRID + " 25 dots, about a minute.",)),
     # ponytail: Sweep / Points / Line model use a 4x4 grid on this branch only (5x5 on their own branches)
     Method("sweep", "Sweep", "sweep", "profile", 4,
-           about="Three steps: a dot glides edge to edge while you follow it (your eye range), the head step (how "
-                 "the head shifts the eye numbers), then 16 dots. The curve is fitted on eye numbers scaled by "
-                 "your own range, so sessions from different seats land on the same scale.",
+           about="Three steps: a dot glides edge to edge while you follow it (your eye range, a check), the head "
+                 "step (how YOUR head turn shifts the eye numbers: it replaces the built-in matrix), then 16 dots "
+                 "for the same straight-line fit as the Original.",
            steps=("Follow the gliding dot with your eyes, head still: across, then down.", HEAD, GRID + " 16 dots.")),
     Method("points", "Points", "points", "profile", 4,
            about="Like Sweep, but with still dots along the line instead of a moving dot (the eye rests on each, so "
@@ -113,20 +120,22 @@ DEFAULT_METHOD = "original-5x5"
 
 
 class TrainedModel:
-    """Answers predict(features) for one method: the fitted model, plus the profile
-    that scales live frames first (profile methods)."""
+    """Answers predict(features) for one method: the fitted regression on the 6 eye features
+    turned back to the calibration's posture (K, ref: core/head_correction.py), or the line
+    model on the raw features (K is None)."""
 
-    def __init__(self, method: Method, inner, profile: GazeProfile | None = None) -> None:
-        self.method, self.inner, self.profile = method, inner, profile
+    def __init__(self, method: Method, inner, K: np.ndarray | None = None, ref: np.ndarray | None = None,
+                 k_source: str = "") -> None:
+        self.method, self.inner, self.K, self.ref, self.k_source = method, inner, K, ref, k_source
 
     def predict(self, features: Sequence[float] | None) -> tuple[float, float] | None:
         if features is None:
             return None
-        if self.profile is not None:
-            features = self.profile.scale(features)
         try:
+            if self.K is not None:
+                features = corrected(features, self.K, self.ref)
             return self.inner.predict(features)
-        except ValueError:                      # features of another size (an older file's)
+        except (ValueError, IndexError):        # features of another size (an older file's)
             return None
 
     def tracker(self) -> Callable[[Sequence[float] | None, float], tuple[float, float] | None]:
@@ -143,37 +152,39 @@ def live_clock() -> float:
     return time.perf_counter()
 
 
-def plain_training_set(recordings: Sequence[CalibrationRecording], older_weight: float = 0.5
-                       ) -> tuple[list[CalibrationSample], list[float]]:
-    """Recordings, NEWEST FIRST -> the dots' raw features (cleaned by the quality
-    check) and a weight per sample: the newest recording 1.0, older ones `older_weight`."""
-    samples: list[CalibrationSample] = []
-    weights: list[float] = []
+def kept_recordings(recordings: Sequence[CalibrationRecording]) -> list[CalibrationRecording]:
+    """The recordings that pass the quality check, cleaned, newest first."""
+    kept = []
     for rec in recordings:
         report = check_recording(rec)
-        if not report.ok:
+        if report.ok:
+            kept.append(report.kept)
+        else:
             print(f"Skipping a calibration: {report.summary()}")
-            continue
-        w = older_weight if samples else 1.0
-        samples += list(report.kept.dots)
-        weights += [w] * len(report.kept.dots)
-    return samples, weights
+    return kept
 
 
-def train(method: Method, recordings: Sequence[CalibrationRecording], screen: ScreenGeometry | None = None
-          ) -> tuple[TrainedModel | None, int]:
-    """Fit the method's model on its recordings (newest first). (model, how many samples)."""
-    profile = None
-    if method.model == "ridge":
-        samples, weights = plain_training_set(recordings)
-    elif method.model == "profile":
-        samples, weights, profile = training_set(recordings, scaled=True)
-    else:
+def train(method: Method, recordings: Sequence[CalibrationRecording], screen: ScreenGeometry | None = None,
+          older_weight: float = 0.5) -> tuple[TrainedModel | None, int]:
+    """Fit the method's model on its recordings (newest first; the newest weighs 1.0, older ones
+    `older_weight`). (model, how many samples). The regression models see every frame turned back
+    to the NEWEST recording's posture, so older sittings add dots without adding their head pose."""
+    if method.model == "line":
         samples, weights, _ = training_set(recordings, scaled=False)
-    if not samples:
+        if not samples:
+            return None, 0
+        return TrainedModel(method, LineModel(screen).fit(samples, weights)), len(samples)
+    kept = kept_recordings(recordings)
+    if not kept:
         return None, 0
-    inner = LineModel(screen).fit(samples, weights) if method.model == "line" else GazeModel().fit(samples, weights)
-    return TrainedModel(method, inner, profile), len(samples)
+    newest = kept[0]
+    K, source = (fit_k(newest.head), "its own head step") if method.model == "profile" else (None, "")
+    if K is None:
+        K, source = DEFAULT_K, "the default"
+    ref = reference_angles(newest.dots)
+    samples = [CalibrationSample(corrected(s.features, K, ref), s.target_x, s.target_y) for rec in kept for s in rec.dots]
+    weights = [1.0 if i == 0 else older_weight for i, rec in enumerate(kept) for _ in rec.dots]
+    return TrainedModel(method, GazeModel().fit(samples, weights), K, ref, source), len(samples)
 
 
 if __name__ == "__main__":
