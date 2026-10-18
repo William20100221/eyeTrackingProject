@@ -6,7 +6,7 @@ Checkpoint: live gaze predictions printed in the console (no window yet).
 
 Trains on the saved calibrations (newest weighted most), then for every camera frame:
 
-    camera -> MediaPipe -> 10 features -> model -> (x, y) on screen
+    camera -> MediaPipe -> 10 features -> model (the head turn taken out) -> 1-euro filter -> (x, y)
 
 x and y are fractions of the screen (0 = left/top, 1 = right/bottom), the
 same as the calibration dots. Look at different parts of the screen and
@@ -18,6 +18,7 @@ from pathlib import Path
 
 from eyetracking.core.features import N_FEATURES
 from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
 
@@ -44,6 +45,7 @@ def main() -> None:
     # train on the saved features. Live features come from the SAME function
     # (EyeTracker.read_features), so the model sees the same kind of numbers
     model = GazeModel().fit(samples, weights)
+    smoother = GazeSmoother()               # the 1-euro filter on the live point, as in the app
     print(f"Trained on {len(samples)} samples. Look around the screen; Ctrl+C to stop.\n")
 
     with EyeTracker() as tracker:           # asks which camera, in the console
@@ -57,7 +59,7 @@ def main() -> None:
                     skipped += 1
                     point = None
                 else:
-                    point = model.predict(features)
+                    point = smoother.feed(model.predict(features))
 
                 now = time.perf_counter()
                 if now - last_print >= PRINT_EVERY_S:

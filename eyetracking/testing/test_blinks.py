@@ -42,10 +42,11 @@ print("1. tracker: blink", blink, "| looking down", down)
 from PySide6.QtWidgets import QApplication
 qt = QApplication.instance() or QApplication([])
 import eyetracking.app as appmod
+from eyetracking.core.smoothing import GazeSmoother
 fed = []
 feats = iter([(0.2, 0.2), None, None, None])               # one prediction, then a blink
 app = types.SimpleNamespace(
-    mouse=False, smoothed=None, reading=None, reader=None,
+    mouse=False, smoothed=None, smoother=GazeSmoother(), reading=None, reader=None,
     clock=types.SimpleNamespace(restart=lambda: 33),
     tracker=types.SimpleNamespace(read_features=lambda: next(feats), face_found=True),
     ball=types.SimpleNamespace(set_tracking_state=lambda f: None, look_at=lambda p: None),
