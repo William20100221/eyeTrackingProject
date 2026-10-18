@@ -51,7 +51,22 @@ key(window, Qt.Key.Key_Space)                                  # paused...
 left = []
 window.cancelled.connect(lambda: left.append(True))
 key(window, Qt.Key.Key_Escape)                                 # ...and Esc still leaves
-assert left and not window._timer.isActive()
+assert left and not window._timer.isActive()                   # nothing collected yet: no question asked
+
+window = CalibrationWindow(METHOD_BY_ID["original-3x3"], get_features=lambda: (0.5,) * N_FEATURES)
+key(window, Qt.Key.Key_Space)
+for _ in range(6):                                             # 6 frames on the first dot: 3 kept, 3 held back for blinks
+    window._session.add_sample((0.5,) * N_FEATURES)
+asked, answer, left = [], [False], []
+window.confirm_leave = lambda n: (asked.append(n), answer[0])[1]
+window.cancelled.connect(lambda: left.append(True))
+key(window, Qt.Key.Key_Escape)                                 # samples collected: are you sure?
+assert asked == [3] and not left and window.paused and not window._timer.isActive()   # No: stays, paused
+key(window, Qt.Key.Key_Space)
+assert not window.paused                                       # Space carries on as usual
+answer[0] = True
+key(window, Qt.Key.Key_Escape)                                 # Yes: leaves, nothing saved
+assert asked == [3, 3] and left and not window._timer.isActive()
 
 # ---- 2. data per method ----------------------------------------------------
 assert describe_target(*point_grid(3)[1], 3) == "dot (2, 1) of the 3x3 grid"      # 2nd dot = column 2, row 1

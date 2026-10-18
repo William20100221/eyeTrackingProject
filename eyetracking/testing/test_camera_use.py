@@ -109,6 +109,12 @@ assert "William's Original 3×3: model trained on " in said and "from the newest
 assert storage.DATA_DIR == tmp / "data"                                        # the person in use didn't change
 app.fullscreen.close()
 pump()
+storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(3) for s in frames(t))), "original-3x3",
+                         tmp / "data" / "William" / "original-3x3" / "original-3x3_2026-10-18_140000.json")   # made outside
+assert page.check_most == 2                                     # not seen yet...
+from PySide6.QtWidgets import QPushButton
+next(b for b in page.findChildren(QPushButton) if b.text().endswith("Refresh")).click()
+assert page.check_most == 3 and page.check_count == 1            # ...until Refresh; the choice of 1 is kept
 
 fail = True                                                                    # a camera that can't open
 app.calibrate()

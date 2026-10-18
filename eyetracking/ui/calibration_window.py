@@ -16,7 +16,7 @@ recording through services/storage.py, in the method's own folder.
     python -m eyetracking.ui.calibration_window original-3x3 --mouse
 
 Space starts, Space again pauses / carries on (as often as you like), Esc
-leaves at any time. In the head-still steps a frame whose head turned more than
+leaves at any time (once samples are collected it asks first: they aren't saved). In the head-still steps a frame whose head turned more than
 3 degrees from the dot's first frame is left out. Screen positions are stored as
 fractions 0..1 (x across, y down), so they work on any screen size.
 """
@@ -28,7 +28,7 @@ from typing import Callable, Sequence
 
 from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from eyetracking.core.calibration import CalibrationSession, HeadStep, HeadStill, point_grid, sweep_points, sweep_target
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, Method
@@ -93,11 +93,30 @@ class CalibrationWindow(QWidget):
             elif self._phase != "done":
                 self.toggle_pause()
         elif event.key() == Qt.Key.Key_Escape:
+            n = self.collected()
+            if n and self._phase != "done":       # samples would be lost: ask first, paused meanwhile
+                if not self.paused:
+                    self.toggle_pause()
+                if not self.confirm_leave(n):
+                    return                        # stays paused: Space carries on
             self._timer.stop()
             self.cancelled.emit()
             self.close()
         else:
             super().keyPressEvent(event)
+
+    def collected(self) -> int:
+        """How many samples this calibration has kept so far (every step)."""
+        return sum(len(s.samples()) for s in (self._sweep, self._line, self._head, self._session) if s)
+
+    def confirm_leave(self, n: int) -> bool:
+        """Esc with samples collected: are you sure? Nothing is saved if you leave."""
+        box = QMessageBox(QMessageBox.Icon.Question, "Leave the calibration?",
+                          f"{n} samples have been collected. If you leave now they won't be saved.\n\n"
+                          "Leave anyway?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+        box.setDefaultButton(QMessageBox.StandardButton.No)   # Enter / a second Esc keeps you in
+        box.setCursor(Qt.CursorShape.ArrowCursor)              # the page hides the mouse; the box needs it
+        return box.exec() == QMessageBox.StandardButton.Yes
 
     def toggle_pause(self) -> None:
         self.paused = not self.paused

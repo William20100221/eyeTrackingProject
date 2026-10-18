@@ -841,6 +841,10 @@ class TestingPage(QWidget):
         self.check_count_note = label("", "rowsub")
         use.addWidget(self.check_count_note)
         use.addStretch(1)
+        fresh = button(f"{I_RESET}  Refresh", "text")             # re-read data/: files added, moved or removed outside
+        fresh.setToolTip("Read the data folder again: the people, the calibrations and the results")
+        fresh.clicked.connect(self.refresh)
+        use.addWidget(fresh)
         v.addLayout(use)
         self.check_results = label("", "sheetText")              # the comparison: every type, this person
         self.check_results.setTextFormat(Qt.RichText)
