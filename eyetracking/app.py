@@ -7,7 +7,8 @@ to find out which method gives the most accurate gaze model for each person.
 
 The window (ui/control_window.py) has three tabs:
     Testing      Calibration: pick one of the 12 types (core/methods.py) and start it
-                 Gaze check: pick a person, a type and how many calibrations, start the check
+                 Gaze check: pick a person, a type and how many calibrations, start the check;
+                 or every type at once (6x6 rings); or record the camera and run the models later
                  Blink test, and the data: calibrations, gaze checks, blink scores, the log
     Calibration  starts the chosen type full screen
     Settings     theme, camera, person mode (whose folder the calibrations go into)
@@ -23,6 +24,9 @@ What talks to what:
       -> CalibrationWindow(type) -> recording -> quality check -> saved -> models retrained
       -> GazeWindow: the picked person's model of the picked type says where you look;
          one of 16 rings (4x4) is lit, Enter records the point against it -> error per sample
+         (every model at once on 36 rings; or in record mode the video + the presses, replayed
+         through the tracker and the models afterwards: services/recording.py)
+      Sweep / Points / Line model can reuse the person's Original / Random 4x4 as their dots
       -> BlinkWindow: blink scores in six eye states
 The camera is on only while one of those full-screen windows runs.
 """
@@ -42,8 +46,9 @@ from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, train
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
-from eyetracking.services.storage import (ensure_layout, load_all_calibrations, save_blink_scores, save_calibration,
-                                          use_person)
+from eyetracking.services.recording import Recorder, replay
+from eyetracking.services.storage import (ensure_layout, load_all_calibrations, load_calibration, save_blink_scores,
+                                          save_calibration, save_gaze_check, use_person)
 from eyetracking.services import storage
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
@@ -60,7 +65,9 @@ class App(QObject):
         self.testing = self.control.testing
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
-        self.testing.command.connect(lambda c: {"calibrate": self.calibrate, "check": self.check, "blink": self.blink_test}[c]())
+        self.testing.command.connect(lambda c: {"calibrate": self.calibrate, "check": self.check, "check-all": self.check_all,
+                                                "blink": self.blink_test}[c]())
+        self.testing.replay_requested.connect(lambda p: self._replay(Path(p)))
         self.testing.method_changed.connect(lambda _: self.testing.status.setText(self._model_status()))
         self.testing.data_changed.connect(self._retrain)
         settings = self.control.read_store()
@@ -203,11 +210,15 @@ class App(QObject):
             return
         method = self.method
         get = fake_features_from_mouse if self.mouse else self.tracker.read_features
-        window = CalibrationWindow(method, get)
-        window.finished.connect(lambda rec: self._calibrated(window, method, rec))
+        # Sweep / Points / Line model: the final dots reused from the person's 4x4 calibration (the switch)
+        borrowed = storage.dots_source(method) if self.testing.reuse_dots else None
+        window = CalibrationWindow(method, get, dots=load_calibration(borrowed).dots if borrowed else None,
+                                   dots_from=borrowed.name if borrowed else "")
+        window.finished.connect(lambda rec: self._calibrated(window, method, rec, borrowed))
         self._open_fullscreen(window)
 
-    def _calibrated(self, window: CalibrationWindow, method: Method, rec: CalibrationRecording) -> None:
+    def _calibrated(self, window: CalibrationWindow, method: Method, rec: CalibrationRecording,
+                    borrowed: Path | None = None) -> None:
         QTimer.singleShot(800, window.close)      # show "done" briefly
         if self.mouse:
             self.testing.say(f"{method.name}: mouse mode, calibration not saved.")
@@ -225,21 +236,26 @@ class App(QObject):
             except ValueError as e:
                 self.testing.say(f"{method.name}: calibration didn't work ({e}). Try again.")
                 return
-        path = save_calibration(rec, method.id)   # saved RAW: the checks rerun on loading
+        path = save_calibration(rec, method.id, dots_from=borrowed.name if borrowed else None)   # saved RAW: the checks rerun on loading
         self._train(method)
         note = f" Cleaned: {report.summary()}." if report.reasons else ""
+        note += f" The dots were reused from {borrowed.name}." if borrowed else ""
         self.testing.say(f"{method.name}: calibrated with {len(report.kept.dots)} good dot samples, saved as "
                          f"{path.name}. Model trained on {self.samples_used[method.id]} samples.{note}")
         self.testing.refresh()
         self.testing.status.setText(self._model_status())
 
+    # ---- the gaze check: one model, every model, or a recording ----------------
     def check(self) -> None:
         """The gaze check of the person and calibration type picked on its page: that person's
-        model of that type, trained from that person's files only."""
+        model of that type, trained from that person's files only (the newest N)."""
         method = METHOD_BY_ID[self.testing.check_method]
         person = self.testing.check_person
         root = storage.person_root(person)
         who = f"{person or 'No person'}'s {method.name}"
+        if self.testing.record_mode:
+            self._record_check(storage.CHECK_GRID, [method.id])
+            return
         model, count = None, self.testing.check_count             # the newest `count` calibrations train it
         if not self.mouse:
             model, n = train(method, load_all_calibrations(method.id, root)[:count], screen_geometry())
@@ -253,11 +269,105 @@ class App(QObject):
 
         def get():
             return fake_point_from_mouse() if self.mouse else model.predict(self.tracker.read_features())
-        window = GazeWindow(get_point=get, method_id=method.id, folder=storage.method_dir(method.id, root))
-        window.calibrations = count or None
-        window.logged.connect(lambda path: (self.testing.refresh(), self.testing.say(
-            f"{who}: gaze check saved as {Path(path).name}. See Data > Gaze checks.")))
+        window = GazeWindow.single(get, method.id, storage.method_dir(method.id, root), count or None)
+        window.logged.connect(lambda paths: self._checked(who, paths))
         self._open_fullscreen(window)
+
+    def _models_for(self, root: Path, types: list[str] | None) -> tuple[dict, dict[str, int]]:
+        """A person's models of `types` (None: every type), each trained on their newest N
+        calibrations (N = the page's choice; as many as a type has). (models, calibrations used)."""
+        newest = self.testing.check_count or None
+        models, counts = {}, {}
+        for m in types or list(METHOD_BY_ID):
+            recordings = load_all_calibrations(m, root)[:newest]
+            if self.mouse:                               # no models in mouse mode: the mouse plays each type that has data
+                if recordings:
+                    models[m], counts[m] = None, len(recordings)
+                continue
+            model, _ = train(METHOD_BY_ID[m], recordings, screen_geometry())
+            if model is not None:
+                models[m], counts[m] = model, len(recordings)
+        return models, counts
+
+    def check_all(self) -> None:
+        """Every type the person has calibrations for, at once, from the same camera frames: one
+        file per type, on the 6x6 rings. No dot: it would show one model only."""
+        person = self.testing.check_person
+        root, who = storage.person_root(person), person or "No person"
+        if self.testing.record_mode:
+            self._record_check(storage.MULTI_GRID, None)
+            return
+        models, counts = self._models_for(root, None)
+        if not models:
+            self.testing.say(f"{who}: no usable calibration of any type yet. Calibrate first.")
+            return
+        if not self._use_camera("check"):
+            return
+        self.testing.say(f"{who}: {len(models)} models ready ({', '.join(METHOD_BY_ID[m].name for m in models)}). "
+                         "Look at the lit ring, press Enter.")
+
+        def get_all():
+            if self.mouse:
+                point = fake_point_from_mouse()
+                return {m: point for m in models}
+            features = self.tracker.read_features()      # one frame, every model
+            return {m: model.predict(features) for m, model in models.items()}
+        window = GazeWindow(get_all, {m: storage.method_dir(m, root) for m in models}, counts,
+                            grid=storage.MULTI_GRID, show_dot=False, tag="multi")
+        window.logged.connect(lambda paths: self._checked(who, paths))
+        self._open_fullscreen(window)
+
+    def _record_check(self, grid: int, types: list[str] | None) -> None:
+        """Record mode: the camera is recorded with the presses; on Esc the models run over it."""
+        person = self.testing.check_person
+        who = person or "No person"
+        if self.mouse:
+            self.testing.say("Record mode needs the camera (not --mouse).")
+            return
+        if not self._use_camera("check"):
+            return
+        recorder = Recorder(self.tracker.camera, storage.person_root(person) / storage.VIDEOS, grid)
+        window = GazeWindow(lambda: (recorder.frame(), {})[1], {}, grid=grid, show_dot=False, recorder=recorder)
+        # the models run once the full-screen page has closed (it takes a while: a wait cursor and a count)
+        window.recorded.connect(lambda meta: QTimer.singleShot(0, lambda: self._replay(meta, types)))
+        self.testing.say(f"{who}: recording the camera. Look at the lit ring, press Enter; Esc stops and runs the models.")
+        self._open_fullscreen(window)
+
+    def _replay(self, meta: Path, types: list[str] | None = None) -> None:
+        """Run the person's models of `types` (None: every type) over a recording, as if they had
+        been live: one gaze check per type, named after the recording."""
+        person = self.testing.check_person
+        root, who = storage.person_root(person), person or "No person"
+        if self.mouse:
+            self.testing.say("Running a recording needs the models (not --mouse).")
+            return
+        models, counts = self._models_for(root, types)
+        if not models:
+            self.testing.say(f"{who}: no usable calibration to run over the recording. Calibrate first.")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            def progress(done: float) -> None:
+                self.testing.status.setText(f"Running {len(models)} models over the recording: {done:.0%}")
+                QApplication.processEvents()
+            # ponytail: on the GUI thread (a minute's video takes ~30 s); a QThread if that annoys
+            logs = replay(meta, {m: model.predict for m, model in models.items()}, progress)
+        except Exception as e:                        # a damaged or moved recording
+            self.testing.say(f"The recording couldn't be run ({e}).")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        stamp = meta.stem[-17:]
+        paths = [save_gaze_check(log, m, storage.method_dir(m, root), counts[m], f"video-{stamp}")
+                 for m, log in logs.items() if log]
+        if paths:
+            self._checked(who, paths)
+        else:
+            self.testing.say(f"{who}: no face was found in the recording, nothing to save.")
+
+    def _checked(self, who: str, paths: list[Path]) -> None:
+        self.testing.refresh()
+        self.testing.say(f"{who}: gaze check saved as {', '.join(p.name for p in paths)}. See Data > Gaze checks.")
 
     def blink_test(self) -> None:
         if not self._use_camera("blink"):

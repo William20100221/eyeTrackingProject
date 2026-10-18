@@ -10,8 +10,11 @@ import os
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QCoreApplication, QEvent, QSettings
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 import eyetracking.services.storage as storage
@@ -28,8 +31,14 @@ qt.setQuitOnLastWindowClosed(False)
 log = []
 
 
+class FakeCamera:
+    def read_bgr(self):
+        return np.zeros((48, 64, 3), dtype=np.uint8)          # a black frame (no face)
+
+
 class FakeTracker:
     face_found = True
+    camera = FakeCamera()
 
     def __init__(self, index):
         if fail:
@@ -76,7 +85,6 @@ pump()
 assert log[-1] == "close" and app.tracker is None and not app.camera_users
 
 # a gaze check of ANOTHER person's 3x3 (not the person in use): trained from that person's files only
-import numpy as np
 from eyetracking.core.calibration import point_grid
 from eyetracking.core.line_model import ScreenGeometry, features_for
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
@@ -102,8 +110,8 @@ app.testing.set_check(method_id="original-3x3")                                 
 assert page.check_count == 2
 page.set_check_count(1)
 app.check()
-assert app.fullscreen.method_id == "original-3x3" and app.fullscreen.folder == tmp / "data" / "William" / "original-3x3"
-assert app.fullscreen.calibrations == 1
+assert app.fullscreen.names == ["original-3x3"] and app.fullscreen.folders == {"original-3x3": tmp / "data" / "William" / "original-3x3"}
+assert app.fullscreen.calibrations == {"original-3x3": 1} and app.fullscreen.show_dot
 said = app.testing.log.item(0).text()
 assert "William's Original 3×3: model trained on " in said and "from the newest 1 calibration." in said, said
 assert storage.DATA_DIR == tmp / "data"                                        # the person in use didn't change
@@ -115,6 +123,44 @@ assert page.check_most == 2                                     # not seen yet..
 from PySide6.QtWidgets import QPushButton
 next(b for b in page.findChildren(QPushButton) if b.text().endswith("Refresh")).click()
 assert page.check_most == 3 and page.check_count == 1            # ...until Refresh; the choice of 1 is kept
+
+# the multiple-model check: every type William has (one), 6x6 rings, no dot, from the same frames
+app.check_all()
+win = app.fullscreen
+assert win.names == ["original-3x3"] and win.grid == 6 and not win.show_dot and win.tag == "multi"
+assert win.calibrations == {"original-3x3": 1} and win.folders["original-3x3"] == tmp / "data" / "William" / "original-3x3"
+win.close()
+pump()
+
+# record mode: the camera is recorded with the presses; Esc runs the models over the video
+page.record_switch.setChecked(True)
+app.check()
+win = app.fullscreen
+assert win.recorder is not None and win.names == [] and win.grid == 4
+for _ in range(3):
+    win._tick()                                                      # three frames written
+QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
+assert win.recorder.presses[0]["target_x"] == 0.05 and len(win.recorder.frames_ms) == 3
+QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+pump()
+videos = tmp / "data" / "William" / "gaze-videos"
+assert len(list(videos.glob("gaze-video_*.json"))) == 1 and len(list(videos.glob("gaze-video_*.mp4"))) + len(list(videos.glob("gaze-video_*.avi"))) == 1
+assert "no face was found in the recording" in app.testing.status.text(), app.testing.status.text()   # black frames: the real tracker ran
+assert page.recordings_btn.text().startswith("Recordings (1)")
+page.record_switch.setChecked(False)
+
+# Sweep with the dots reused from the person in use's newest Original 4x4
+storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(4) for s in frames(t))), "original-4x4")
+app.testing.set_method("sweep")
+assert app.testing.reuse_row.isVisibleTo(app.testing) and app.testing.reuse_dots and "reused from the newest one" in app.testing.reuse_note.text()
+app.calibrate()
+assert app.fullscreen._borrowed is not None and len(app.fullscreen._borrowed) == 16 * 20 and app.fullscreen._dots_from.startswith("original-4x4_")
+app.fullscreen.close()
+pump()
+app.testing.set_method("random-sweep")                                           # a random twin wants Random 4x4
+assert not app.testing.reuse_switch.isEnabled() and "No Random 4×4" in app.testing.reuse_note.text()
+app.testing.set_method("original-3x3")
+assert not app.testing.reuse_row.isVisibleTo(app.testing)
 
 fail = True                                                                    # a camera that can't open
 app.calibrate()

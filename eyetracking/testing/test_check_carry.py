@@ -34,7 +34,7 @@ app = appmod.App(mouse=True)
 app.testing.set_check(method_id="original-3x3")
 app.check()
 win = app.fullscreen
-assert win._targets == point_grid(4) and win.method_id == "original-3x3"     # the same 16 rings for every type
+assert win._targets == point_grid(4) and win.names == ["original-3x3"]      # the same 16 rings for every type
 for _ in range(3):
     win._tick()
 QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))

@@ -9,6 +9,7 @@ What the lab writes to disk, and reads back in words. By person, then by calibra
       <type>/disabled/                                calibrations kept, but turned off by the user
       <type>/trash/                                   removed files, and the originals of edited ones
       blink-test/blink-scores_<date>_<time>.csv       blink tests (they belong to no type)
+      gaze-videos/gaze-video_<date>_<time>.mp4 + .json  record-mode gaze checks (services/recording.py)
 
 <type> is a method id from core/methods.py: original-3x3, original-4x4, original-5x5,
 sweep, points, line-model, and the random twins random-3x3 ... random-line-model. So a
@@ -48,7 +49,8 @@ from path import DATA_DIR
 STAMP = "%Y-%m-%d_%H%M%S"                   # the date-time part of every file name
 BASE_DIR = DATA_DIR                         # data/ itself; use_person() moves DATA_DIR into data/<person>/
 BLINK = "blink-test"                        # the blink tests' folder, beside the method folders
-KINDS = (*METHOD_BY_ID, BLINK)              # the folders in a person's folder (or in data/ with person mode off)
+VIDEOS = "gaze-videos"                      # record-mode recordings of the gaze check
+KINDS = (*METHOD_BY_ID, BLINK, VIDEOS)      # the folders in a person's folder (or in data/ with person mode off)
 # never a person: the lab's own folders, and the other branches' folders in the shared data/
 RESERVED = {k.lower() for k in KINDS} | {"calibrations", "gaze_checks", "blink_scores", "history", "people",
                                          "disabled", "trash", "older-versions"}
@@ -139,9 +141,11 @@ def method_dir(method_id: str, root: Path | None = None) -> Path:
     return (root or DATA_DIR) / method_id
 
 
-def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | None = None) -> Path:
+def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | None = None,
+                     dots_from: str | None = None) -> Path:
     """Write one calibration to its method's folder (or `path`). Returns the path.
-    Nothing is written without dot samples."""
+    Nothing is written without dot samples. `dots_from`: the file the dots were reused
+    from (a Sweep / Points / Line model calibration that skipped its own dots)."""
     if not rec.dots:
         raise ValueError("no dot samples: nothing worth saving")
     now = datetime.now()
@@ -150,6 +154,8 @@ def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | Non
     path.parent.mkdir(parents=True, exist_ok=True)
     grid = METHOD_BY_ID[method_id].grid if method_id in METHOD_BY_ID else 5
     data = {"format": FORMAT, "method": method_id, "grid": grid, "saved_at": now.isoformat(timespec="seconds")}
+    if dots_from:
+        data["dots_from"] = dots_from
     data |= {part: [asdict(s) for s in getattr(rec, part)] for part in PARTS}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -161,8 +167,8 @@ def load_calibration(path: Path) -> CalibrationRecording:
     return _load(path)[0]
 
 
-def _load(path: Path) -> tuple[CalibrationRecording, int]:
-    """(the recording, its grid size)."""
+def _load(path: Path) -> tuple[CalibrationRecording, int, str | None]:
+    """(the recording, its grid size, the file its dots were reused from or None)."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict) or data.get("format") != FORMAT:
@@ -170,7 +176,7 @@ def _load(path: Path) -> tuple[CalibrationRecording, int]:
     # JSON has no tuples: features come back as a list, so turn it back
     parts = [tuple(CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
                    for s in data[part]) for part in PARTS]
-    return CalibrationRecording(*parts), int(data.get("grid", 5))
+    return CalibrationRecording(*parts), int(data.get("grid", 5)), data.get("dots_from")
 
 
 def list_calibrations(method_id: str, root: Path | None = None) -> list[Path]:
@@ -193,6 +199,16 @@ def load_all_calibrations(method_id: str, root: Path | None = None) -> list[Cali
         except (OSError, ValueError, KeyError, TypeError) as e:   # damaged, hand-edited
             print(f"Skipping {path.name}: {e}")
     return recordings
+
+
+def dots_source(method, root: Path | None = None) -> Path | None:
+    """The newest usable 4x4 calibration a Sweep / Points / Line model calibration can take its
+    dots from: Original 4x4 for an in-order type, Random 4x4 for a random twin. None if there
+    is none (or the type does its own dots anyway)."""
+    if method.kind == "grid":
+        return None
+    source = "random-4x4" if method.random_order else "original-4x4"
+    return next((p for p in list_calibrations(source, root) if calibration_usable(p)), None)
 
 
 def calibration_usable(path: Path) -> bool:
@@ -240,11 +256,12 @@ def calibration_lines(path: Path) -> list[tuple[str, int | None, str | None]]:
     index (as remove_samples counts them) and its dot; a dot's summary line carries
     the dot only (= all of its samples); headings carry neither."""
     try:
-        rec, grid = _load(path)
+        rec, grid, dots_from = _load(path)
     except (OSError, ValueError, KeyError, TypeError) as e:
         return [(f"Can't show this file: it was saved by a different version ({e}).", None, None)]
     method = METHOD_BY_ID.get(method_of(path))
-    lines = [(f"{method.name if method else method_of(path)}, {file_date(path):%d %b %Y, %H:%M}", None, None)]
+    lines = [(f"{method.name if method else method_of(path)}, {file_date(path):%d %b %Y, %H:%M}"
+              + (f" (the dots reused from {dots_from})" if dots_from else ""), None, None)]
     n = 0
     for part in PARTS:
         samples = getattr(rec, part)
@@ -293,7 +310,7 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
     """Drop the samples numbered `indexes` (as calibration_lines counts them) and
     rewrite the file in its own format. Returns how many were dropped."""
     keep_original(path)
-    rec = load_calibration(path)
+    rec, _, dots_from = _load(path)
     n, kept = 0, {}
     for part in PARTS:
         kept[part] = []
@@ -302,7 +319,7 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
                 kept[part].append(s)
             n += 1
     if kept["dots"]:
-        save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), method_of(path), path)
+        save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), method_of(path), path, dots_from)
     else:
         remove_calibration(path)        # no dots left: the file goes too
     return n - sum(len(v) for v in kept.values())
@@ -321,17 +338,19 @@ def remove_calibration(path: Path) -> Path:
 
 # ---- gaze checks: one person's model of one calibration type, on the same rings -------
 CHECK_GRID = 4     # every type is checked on the 4x4 rings (16), one lit at a time: the same test for all
+MULTI_GRID = 6     # the multiple-model check: every model at once, on 6x6 rings (36)
 Check = tuple[int, float, float, float, float]   # index, where the model said (x, y), the lit ring (x, y)
 
 
 def save_gaze_check(samples: list[Check], method_id: str, folder: Path | None = None,
-                    calibrations: int | None = None) -> Path:
-    """(index, x, y, ring x, ring y) rows -> <method>/gaze-check_<method>[_<n>-calibrations]_<time>.csv,
-    n = how many calibrations trained the model. Returns the path."""
+                    calibrations: int | None = None, tag: str = "") -> Path:
+    """(index, x, y, ring x, ring y) rows -> <method>/gaze-check_<method>[_<tag>][_<n>-calibrations]_<time>.csv,
+    n = how many calibrations trained the model; tag = "multi" (every model at once) or
+    "video-<recording time>" (run over a recording). Returns the path."""
     folder = folder or method_dir(method_id)
     folder.mkdir(parents=True, exist_ok=True)
     used = f"_{calibrations}-calibrations" if calibrations else ""
-    path = folder / f"gaze-check_{method_id}{used}_{datetime.now():{STAMP}}.csv"
+    path = folder / f"gaze-check_{method_id}{'_' + tag if tag else ''}{used}_{datetime.now():{STAMP}}.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["index", "x", "y", "target_x", "target_y"])
@@ -367,6 +386,22 @@ def usable_calibrations(method_id: str, root: Path | None = None) -> int:
     return sum(calibration_usable(p) for p in list_calibrations(method_id, root))
 
 
+def check_grid(rows: list[Check]) -> int:
+    """Which rings a gaze check used (4x4, 6x6 ...), from its targets: every one on that grid."""
+    for n in (CHECK_GRID, MULTI_GRID, 5, 3):
+        if rows and all(tx in grid_positions(n) and ty in grid_positions(n) for _, _, _, tx, ty in rows):
+            return n
+    return CHECK_GRID
+
+
+def check_source(path: Path) -> str:
+    """How a gaze check was made, in words: "", "with every model at once" or "from the recording of <time>"."""
+    if "_multi_" in path.name:
+        return " with every model at once"
+    found = re.search(r"_video-(\d{4}-\d{2}-\d{2}_\d{6})_", path.name)
+    return f" from the recording of {datetime.strptime(found.group(1), STAMP):%d %b %Y, %H:%M}" if found else ""
+
+
 def check_error(rows: list[Check]) -> float | None:
     """The mean distance from where the model said to the lit ring, as a fraction of the screen."""
     return sum(math.hypot(x - tx, y - ty) for _, x, y, tx, ty in rows) / len(rows) if rows else None
@@ -383,11 +418,12 @@ def gaze_check_lines(path: Path) -> list[str]:
     error = check_error(rows)
     used = check_calibrations(path)
     trained = f" (trained on the newest {used} calibration{'s' if used != 1 else ''})" if used else ""
-    lines = [f"Gaze check of {who}'s {method.name if method else method_of(path)} model{trained}, "
-             f"{file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples, average error {error or 0:.1%} of the screen "
-             "(from where the model said to the lit ring).", ""]
+    grid = check_grid(rows)
+    lines = [f"Gaze check of {who}'s {method.name if method else method_of(path)} model{trained}{check_source(path)}, "
+             f"{file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples on {grid}x{grid} rings, average error "
+             f"{error or 0:.1%} of the screen (from where the model said to the lit ring).", ""]
     for i, x, y, tx, ty in rows:
-        lines.append(f"#{i}: looking at {describe_target(tx, ty, CHECK_GRID)}; the model said {x:.0%} across, "
+        lines.append(f"#{i}: looking at {describe_target(tx, ty, grid)}; the model said {x:.0%} across, "
                      f"{y:.0%} down, {math.hypot(x - tx, y - ty):.1%} of the screen away")
     return lines
 
@@ -407,6 +443,20 @@ def method_results(root: Path | None = None) -> list[tuple[str, int, int, float 
         out.append((m, len(list_calibrations(m, root)), len(errors), errors[0] if errors else None,
                     sum(errors) / len(errors) if errors else None))
     return out
+
+
+# ---- recordings: record-mode gaze checks (the video + the presses) --------------
+def list_recordings(root: Path | None = None) -> list[Path]:
+    """A person's recordings (their json), newest first."""
+    return sorted(((root or DATA_DIR) / VIDEOS).glob("gaze-video_*.json"), key=file_date, reverse=True)
+
+
+def recording_label(path: Path) -> str:
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        return f"{file_date(path):%d %b %Y, %H:%M}: {len(meta['presses'])} samples on {meta['grid']}x{meta['grid']} rings"
+    except (OSError, ValueError, KeyError):
+        return f"{file_date(path):%d %b %Y, %H:%M}: can't read"
 
 
 # ---- blink scores: from the blink test ------------------------------------------

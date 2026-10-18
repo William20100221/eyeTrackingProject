@@ -49,10 +49,12 @@ class FaceLandmarker:
             self._detector = None
 
 
-    def detect(self, rgb_frame: np.ndarray) -> FrameResult:
+    def detect(self, rgb_frame: np.ndarray, timestamp_ms: int | None = None) -> FrameResult:
         # ONE timestamp per frame: MediaPipe needs it to go up on every call,
-        # and the FrameResult should carry the same time MediaPipe saw
-        timestamp_ms = self.get_last_timestamp()
+        # and the FrameResult should carry the same time MediaPipe saw.
+        # A recording being replayed passes the time its frame was taken.
+        if timestamp_ms is None:
+            timestamp_ms = self.get_last_timestamp()
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         raw = self._detector.detect_for_video(mp_image, timestamp_ms)
 

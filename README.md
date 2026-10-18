@@ -38,6 +38,13 @@ Line model end on a 4×4 grid on this branch, the same 16 dots as Original 4×4.
   *N*; *None* when there are none). 16 rings (4×4), one lit at a time: look at it, press Enter. Each
   sample's error is its distance to the lit ring. A table compares every type's latest and mean error
   for that person; **Refresh** re-reads the data folder.
+  - **Multiple model gaze check:** every type the person has calibrations for at once, predicting from
+    the same camera frames, on 36 rings (6×6), no dot; one file per type.
+  - **Record mode** (switch at the top): the webcam is recorded with the moment of each Enter instead of
+    predicting live; afterwards the models are run over the recording as if live, and **Recordings**
+    runs any model (even a later one) over an old recording.
+- **Calibration, Sweep / Points / Line model:** a switch reuses the person's newest Original 4×4
+  (Random 4×4 for the random twins) as the final 16 dots, so only the first steps are recorded.
 - **Blink test:** your blink scores in six eye states, with the cut-off they suggest.
 - **Data:** calibrations (by person > type > date; active / non-active / not usable; readable in words,
   samples removable), gaze checks (by person > type > date), blink scores, and a log of this run.
@@ -58,6 +65,7 @@ data/<person>/<method>/gaze-check_<method>_<date>_<time>.csv   a gaze check of t
 data/<person>/<method>/disabled/                                kept, turned off
 data/<person>/<method>/trash/                                   removed files and the originals of edited ones
 data/<person>/blink-test/blink-scores_<date>_<time>.csv
+data/<person>/gaze-videos/gaze-video_<date>_<time>.mp4 + .json   record-mode gaze checks (the video of your face)
 ```
 
 `<method>` is one of `original-3x3`, `original-4x4`, `original-5x5`, `sweep`, `points`, `line-model`,
@@ -66,4 +74,6 @@ The other branches' folders in `data/` (`calibrations/`, `gaze_checks/`, `blink_
 
 ## Privacy
 
-- Everything stays on your computer; no camera images are saved or sent anywhere.
+- Everything stays on your computer; nothing is sent anywhere.
+- No camera images are saved, except in the gaze check's **record mode**, which you turn on yourself:
+  the video goes in `data/<person>/gaze-videos/` and you can delete it any time.

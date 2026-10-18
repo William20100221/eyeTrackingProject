@@ -17,7 +17,7 @@ import eyetracking.core.calibration as cal
 import eyetracking.ui.calibration_window as cw
 from eyetracking.core.features import N_FEATURES
 from eyetracking.core.line_model import ScreenGeometry, features_for
-from eyetracking.core.methods import METHODS, TrainedModel, train
+from eyetracking.core.methods import METHOD_BY_ID, METHODS, TrainedModel, train
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 
 cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 50, 200                                 # speed everything up
@@ -27,8 +27,8 @@ qt = QApplication.instance() or QApplication([])
 
 
 # ---- 1. each window's recording ------------------------------------------------
-def run(method) -> CalibrationRecording:
-    win = cw.CalibrationWindow(method, get_features=lambda: (0.5,) * N_FEATURES)
+def run(method, **kw) -> CalibrationRecording:
+    win = cw.CalibrationWindow(method, get_features=lambda: (0.5,) * N_FEATURES, **kw)
     out = []
     win.finished.connect(lambda rec: (out.append(rec), qt.quit()))
     win.resize(400, 300)
@@ -59,6 +59,12 @@ for m in METHODS:
         else:
             assert set(targets(rec.sweep)) == set(cal.sweep_points()), m.id         # the 14 line dots
     print(f"1. {m.id:<13} {len(rec.sweep):>4} step-1 frames  {len(rec.head):>3} head frames  {len(dots)} dots")
+
+# Sweep with the dots reused from a 4x4 calibration: the window ends after the head step
+borrowed = tuple(CalibrationSample((0.4,) * N_FEATURES, x, y) for x, y in cal.point_grid(4))
+rec = run(METHOD_BY_ID["sweep"], dots=borrowed, dots_from="original-4x4_2026-10-18_170000.json")
+assert rec.dots == borrowed and rec.head and len(set(targets(rec.sweep))) > 50
+print("1. sweep with the dots reused: the sweep and head steps only")
 
 # ---- 2. training per model kind --------------------------------------------------
 rng = np.random.default_rng(1)

@@ -42,12 +42,14 @@ OPEN_LEVEL_RATE = 0.05    # how fast the open-eye level follows slow changes (e.
 
 
 class EyeTracker:
-    def __init__(self, camera_index: int | None = None) -> None:
+    def __init__(self, camera_index: int | None = None, source=None) -> None:
+        """`source`: anything with read_rgb() / release() in place of the camera, e.g. a
+        recording being replayed (services/recording.py: its frames carry their times)."""
         self.face_found = False              # set by read_features(); a blink still counts as a face
         self._open_level: float | None = None   # the user's normal blink score with eyes open
         self._onset_ms: int | None = None    # when the lids started closing (blink coming)
         self._blink_ms: int | None = None    # last frame that was a full blink
-        self._camera = Camera(camera_index)  # None = ask in the console
+        self._camera = source if source is not None else Camera(camera_index)   # None = ask in the console
         try:
             self._landmarker = FaceLandmarker()
         except Exception:
@@ -60,10 +62,15 @@ class EyeTracker:
         if frame is None:
             return None
         try:
-            return self._landmarker.detect(frame)
+            return self._landmarker.detect(frame, getattr(self._camera, "timestamp_ms", None))
         except Exception as e:                   # one bad frame mustn't kill the app: skip it
             print(f"Skipped a frame: {e}")
             return None
+
+    @property
+    def camera(self):
+        """The frame source: the Camera (or a recording), for a recorder that needs raw frames."""
+        return self._camera
 
     def read_features(self) -> tuple[float, ...] | None:
         """Features for one frame, or None if this frame should be skipped:

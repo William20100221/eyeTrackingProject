@@ -110,6 +110,17 @@ assert storage.remove_samples(path, {0}) == 1 and "1 sample," in storage.calibra
 assert (storage.method_dir("original-3x3") / "trash" / path.name).exists()
 storage.remove_calibration(path)
 assert storage.list_calibrations("original-3x3") == [broken] and not path.exists()
+# Sweep with its dots reused from an Original 4x4: remembered in the file, shown in words, kept through an edit
+assert storage.dots_source(METHOD_BY_ID["sweep"]) is None and storage.dots_source(METHOD_BY_ID["original-4x4"]) is None
+four = storage.save_calibration(CalibrationRecording((), (), (sample(*point_grid(4)[0]),)), "original-4x4")
+assert storage.dots_source(METHOD_BY_ID["sweep"]) == four and storage.dots_source(METHOD_BY_ID["random-sweep"]) is None
+reused = storage.save_calibration(CalibrationRecording((sample(0.05, 0.5),) * 2, (sample(0.5, 0.5),), (sample(0.5, 0.5),) * 2),
+                                  "sweep", dots_from=four.name)
+assert f"(the dots reused from {four.name})" in storage.calibration_text(reused)
+storage.remove_samples(reused, {0})
+assert f"(the dots reused from {four.name})" in storage.calibration_text(reused)
+reused.unlink()
+four.unlink()
 try:                                                            # an empty calibration is never written
     storage.save_calibration(CalibrationRecording((), (), ()), "sweep")
     raise AssertionError("an empty calibration was saved")
@@ -124,7 +135,7 @@ check = storage.save_gaze_check([(0, 0.05, 0.05, 0.05, 0.05), (1, 0.35, 0.37, 0.
 assert check.parent == tmp / "original-3x3" and check.name.startswith("gaze-check_original-3x3_20"), check
 assert storage.list_calibrations("original-3x3") == [broken]   # a gaze check beside them is not a calibration
 words = storage.gaze_check_lines(check)
-assert words[0].startswith("Gaze check of No person's Original 3×3 model,") and "2 samples, average error 1.0%" in words[0], words[0]
+assert words[0].startswith("Gaze check of No person's Original 3×3 model,") and "2 samples on 4x4 rings, average error 1.0%" in words[0], words[0]
 assert words[2] == "#0: looking at dot (1, 1) of the 4x4 grid; the model said 5% across, 5% down, 0.0% of the screen away", words
 assert words[3] == "#1: looking at dot (2, 2) of the 4x4 grid; the model said 35% across, 37% down, 2.0% of the screen away", words
 assert storage.list_gaze_checks("original-3x3") == [check] and storage.list_gaze_checks("sweep") == []
@@ -141,6 +152,16 @@ assert two.name.startswith("gaze-check_original-3x3_2-calibrations_20") and stor
 assert storage.check_calibrations(two) == 2 and storage.check_calibrations(check) is None
 assert "model (trained on the newest 2 calibrations)," in storage.gaze_check_lines(two)[0]
 two.unlink()
+six = storage.save_gaze_check([(0, 0.5, 0.5, 0.05, 0.05), (1, 0.3, 0.3, 0.23, 0.23)], "sweep", tag="multi")
+assert six.name.startswith("gaze-check_sweep_multi_20") and storage.check_calibrations(six) is None, six.name
+assert storage.check_grid(storage.read_gaze_check(six)) == 6                   # 0.23 is a 6x6 ring, not a 4x4 one
+words = storage.gaze_check_lines(six)
+assert "model with every model at once," in words[0] and "2 samples on 6x6 rings" in words[0], words[0]
+assert words[3].startswith("#1: looking at dot (2, 2) of the 6x6 grid;"), words[3]
+video = storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "sweep", calibrations=1, tag="video-2026-10-18_173000")
+assert storage.check_calibrations(video) == 1 and "from the recording of 18 Oct 2026, 17:30," in storage.gaze_check_lines(video)[0]
+six.unlink()
+video.unlink()
 rows = [("open", 0, 0.05, 0.06), ("open", 33, 0.07, 0.05), ("down", 66, 0.2, 0.21), ("closed", 99, 0.8, 0.85),
         ("closed", 132, 0.9, 0.88), ("wink_left", 165, 0.9, 0.1)]
 blink = storage.save_blink_scores(rows)
@@ -152,8 +173,9 @@ assert storage.trash_file(blink) == storage.BLINK_DIR / "trash" / blink.name and
 # ---- 4. folders cut out (another person's data kept elsewhere) come back empty ----
 import shutil
 assert storage.list_calibrations("sweep") == [] and storage.list_disabled("sweep") == []   # listing a missing folder: nothing
+missing = {k for k in storage.KINDS if not (tmp / k).is_dir()}          # the folders no test above has made yet
 made = storage.ensure_layout()
-assert {f.name for f in made} == set(storage.KINDS) - {"original-3x3", "original-5x5", "blink-test"} and storage.ensure_layout() == []
+assert {f.name for f in made} == missing and "sweep" not in missing and storage.ensure_layout() == []
 shutil.rmtree(tmp / "points")                                   # one method's folder cut away
 assert storage.ensure_layout() == [tmp / "points"]
 shutil.rmtree(tmp / "original-4x4")

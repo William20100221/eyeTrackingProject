@@ -6,10 +6,12 @@ where it was. The window reopens on the page, Testing entry and type it was left
 
     Testing     a sidebar of pages:
       Calibrate   Calibration  the 12 types as chips, a row per collection (method_picker),
-                               what the chosen one does, where it saves, Start
-      Tests       Gaze check   person, type, how many calibrations (the newest N, None when
-                               there are none), Refresh, and a table comparing every type's
-                               error for that person
+                               what the chosen one does, where it saves, the reuse-4x4-dots
+                               switch for Sweep / Points / Line model, Start
+      Tests       Gaze check   record mode (switch), person, type, how many calibrations (the
+                               newest N, None when there are none), Refresh, a table comparing
+                               every type's error for that person; start one type, every type
+                               at once, or run the models over a recording
                   Blink test   what the blink score is, Start
       Data        Calibrations by person > type > date, in three columns (active /
                                non-active / not usable); double-click to read one in words and
@@ -622,7 +624,8 @@ class TestingPage(QWidget):
     blink test) and the data (the chosen method's calibrations, every gaze check,
     the blink scores, the log of what happened)."""
 
-    command = Signal(str)          # a start button: "calibrate" | "check" | "blink"
+    command = Signal(str)          # a start button: "calibrate" | "check" | "check-all" | "blink"
+    replay_requested = Signal(str) # Recordings > one of them: run the models over it (its json path)
     method_changed = Signal(str)   # another method chosen: its id
     data_changed = Signal()        # samples or a file removed / disabled / enabled: the app retrains
 
@@ -795,6 +798,18 @@ class TestingPage(QWidget):
         self.method_steps = label("", "sheetText")
         self.method_steps.setWordWrap(True)
         v.addWidget(self.method_steps)
+        self.reuse_row = QWidget()                       # Sweep / Points / Line model: skip the dots, reuse the 4x4's
+        reuse = QHBoxLayout(self.reuse_row)
+        reuse.setContentsMargins(0, 0, 0, 0)
+        reuse.setSpacing(12)
+        self.reuse_switch = Switch("Reuse the 4×4 dots")
+        self._reuse_wanted = True                        # the user's choice; the switch shows it only when a 4x4 exists
+        self.reuse_switch.clicked.connect(lambda: setattr(self, "_reuse_wanted", self.reuse_switch.isChecked()))
+        self.reuse_note = label("", "sheetText")
+        self.reuse_note.setWordWrap(True)
+        reuse.addWidget(self.reuse_switch)
+        reuse.addWidget(self.reuse_note, 1)
+        v.addWidget(self.reuse_row)
         go = button("Start the calibration", "filled")
         go.clicked.connect(lambda: self.command.emit("calibrate"))
         v.addSpacing(8)
@@ -815,6 +830,25 @@ class TestingPage(QWidget):
         if announce:
             self.method_changed.emit(method_id)
 
+    @property
+    def reuse_dots(self) -> bool:
+        """Sweep / Points / Line model: take the final dots from the person's 4x4 calibration instead."""
+        return self.reuse_switch.isEnabled() and self.reuse_switch.isChecked()
+
+    def _update_reuse(self):
+        m = METHOD_BY_ID[self.method_id]
+        self.reuse_row.setVisible(m.kind != "grid")
+        if m.kind == "grid":
+            return
+        source = storage.dots_source(m)
+        kind = "Random 4×4" if m.random_order else "Original 4×4"
+        self.reuse_switch.setEnabled(source is not None)
+        self.reuse_switch.set_checked_now(self._reuse_wanted if source else False)   # off while there's nothing to reuse
+        self.reuse_note.setText(
+            f"Skip the final dots: they are the same 16 as {kind}, so they are reused from the newest one "
+            f"({source.name}). Off: do the dots here too." if source else
+            f"No {kind} calibration for this person yet, so the dots are done here. Calibrate {kind} first to reuse them.")
+
     # ----- the gaze check: one person's model of one calibration type
 
     def _check_page(self) -> QWidget:
@@ -823,8 +857,20 @@ class TestingPage(QWidget):
         v.setContentsMargins(24, 20, 24, 24)
         v.setSpacing(12)
         v.addWidget(label(f"{I_CHART}   Gaze check", "sheetTitle"))
-        lead = label("Test one person's model of one calibration type. Every type is tested on the same 16 rings (4×4), "
-                     "so their errors can be compared: which method is the most accurate for this person?", "lead")
+        mode = QHBoxLayout()
+        mode.setSpacing(12)
+        self.record_switch = Switch("Record mode")      # off at every start: a video of your face is not made by accident
+        mode.addWidget(self.record_switch)
+        note = label("Record mode: the webcam is recorded instead of predicting live, with the moment of each "
+                     "Enter. Afterwards the models are run over the recording as if they had been live, and any "
+                     "model (even one made later) can be run over it from Recordings. The video of your face is "
+                     "kept in the person's gaze-videos folder; delete it any time.", "sheetText")
+        note.setWordWrap(True)
+        mode.addWidget(note, 1)
+        v.addLayout(mode)
+        lead = label("Test one person's model of one calibration type on 16 rings (4×4), or every type at once on "
+                     "36 (6×6): the same rings for all, so the errors can be compared. Which method is the most "
+                     "accurate for this person?", "lead")
         lead.setWordWrap(True)
         v.addWidget(lead)
         pick = QHBoxLayout()
@@ -863,17 +909,42 @@ class TestingPage(QWidget):
         v.addWidget(self.check_results)
         for s in ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, "
                   "and the next ring lights up. A sample's error is its distance to the lit ring.",
-                  "Do a full round of 16 for a fair number. Space pauses. Esc saves and leaves; the file goes in that "
-                  "person's folder of that calibration type."]:
+                  "Multiple model gaze check: every type this person has calibrations for, each trained on the newest "
+                  "N above (as many as it has), all predicting from the same camera frames: 36 rings (6×6), no dot, "
+                  "one file per type. One sitting, the fairest comparison.",
+                  "Do a full round (16, or 36) for a fair number. Space pauses. Esc saves and leaves; the files go in "
+                  "that person's folder of each calibration type."]:
             w = label(f"•   {s}", "sheetText")
             w.setWordWrap(True)
             v.addWidget(w)
         go = button("Start the gaze check", "filled")
         go.clicked.connect(lambda: self.command.emit("check"))
+        many = button("Multiple model gaze check", "outlined")
+        many.setToolTip("Every type this person has calibrations for, at once, on 36 rings (6×6): one file per type")
+        many.clicked.connect(lambda: self.command.emit("check-all"))
+        self.recordings_btn = button("", "assist")        # run every model over an earlier recording
+        self.recordings_menu = QMenu(self.recordings_btn)
+        self.recordings_menu.aboutToShow.connect(self._fill_recordings_menu)
+        self.recordings_btn.setMenu(self.recordings_menu)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        for b in (go, many, self.recordings_btn):
+            row.addWidget(b)
+        row.addStretch(1)
         v.addSpacing(8)
-        v.addWidget(go, 0, Qt.AlignLeft)
+        v.addLayout(row)
         v.addStretch(1)
         return page
+
+    @property
+    def record_mode(self) -> bool:
+        return self.record_switch.isChecked()
+
+    def _fill_recordings_menu(self):
+        self.recordings_menu.clear()
+        for path in storage.list_recordings(storage.person_root(self.check_person)):
+            self.recordings_menu.addAction(f"Run the models over {storage.recording_label(path)}",
+                                           lambda p=path: self.replay_requested.emit(str(p)))
 
     def set_check_count(self, n: int):
         """Use the newest n calibrations (0 only when there's none: shown as None)."""
@@ -918,6 +989,9 @@ class TestingPage(QWidget):
             f"<th>Gaze checks</th><th>Latest error</th><th>Mean error</th></tr>{rows}</table>"
             "<br>Error: the mean distance from where the model said to the lit ring, as a share of the screen. "
             "Lower is better.")
+        n = len(storage.list_recordings(storage.person_root(self.check_person)))
+        self.recordings_btn.setText(f"Recordings ({n})  {I_CHEVRON}" if n else "No recordings")
+        self.recordings_btn.setEnabled(n > 0)
 
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
         """An instruction page: what the test does, then the button that starts it."""
@@ -1024,6 +1098,7 @@ class TestingPage(QWidget):
             fill_tree(lst, rows, empty)
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
+        self._update_reuse()
         self.set_check()
 
     def showEvent(self, e):

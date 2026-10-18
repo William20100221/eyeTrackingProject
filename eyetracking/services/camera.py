@@ -23,16 +23,18 @@ class Camera:
         if not self._cap.isOpened():
             print("Cannot open camera")
             raise RuntimeError("Cannot open camera")
-    def read_rgb(self):
+    def read_bgr(self):
+        """One frame as OpenCV gives it (BGR): what a video recorder writes."""
         ret, frame = self._cap.read()
         # if frame is read correctly ret is True
         if not ret:
             print("Can't receive frame (stream end?). Exiting ...")
             return None
+        return frame
 
-        rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-
-        return rgb
+    def read_rgb(self):
+        frame = self.read_bgr()
+        return None if frame is None else cv.cvtColor(frame, cv.COLOR_BGR2RGB)
 
 
     def release(self):

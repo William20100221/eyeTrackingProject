@@ -1,24 +1,29 @@
 """
-The gaze check, full screen: a dot where the model thinks you look, and 16 test rings.
+The gaze check, full screen: test rings, one lit at a time, and what the models say.
 
     python -m eyetracking.ui.gaze_window sweep              (that type's calibrations, newest weighted most)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
-The faint rings are the 4x4 test rings (CHECK_GRID in services/storage.py), the same for
-every calibration type so the types can be compared. One ring is lit: look at it and press
-Enter, which records where the model says you look and lights the next ring. A sample's
-error is its distance to the lit ring. Samples are listed as "#index  x  y  off" on screen
-and saved on Esc in the person's folder of that type (the file name says how many
-calibrations trained the model); nothing is saved without one. Space pauses.
+Three ways to run it (app.py picks):
+  single     one model: its dot is drawn where it thinks you look; 4x4 rings (CHECK_GRID)
+  multiple   every model of a person at once, from the same camera frames: no dot (it would
+             show one model only); 6x6 rings (MULTI_GRID); one file per model
+  record     no model: the camera is recorded (services/recording.py) with the time of each
+             Enter; afterwards any model can be run over the video as if it had been live
+One ring is lit: look at it and press Enter, which records where each model says you look
+(or the moment, in record mode) and lights the next ring. A sample's error is its distance to
+the lit ring. Esc saves: one csv per model in the person's folder of that type (the file name
+says how many calibrations trained it); nothing is saved without a sample. Space pauses.
 
-Like CalibrationWindow, this window does NOT know about the camera or the model: it
-calls `get_point()` every tick and draws whatever comes back.
+This window does NOT know about the camera or the models: it calls `get_points()` every tick
+(a point per model name, None while the face is lost) and draws whatever comes back.
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
 from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
@@ -27,39 +32,43 @@ from PySide6.QtWidgets import QApplication, QWidget
 from eyetracking.core.calibration import point_grid
 from eyetracking.core.line_model import ScreenGeometry
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, train
-from eyetracking.services.storage import CHECK_GRID, load_all_calibrations, save_gaze_check
+from eyetracking.services.storage import CHECK_GRID, Check, load_all_calibrations, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
 TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
 DOT_RADIUS = 18      # px
-RING_RADIUS = 12     # px, the faint calibration positions
+RING_RADIUS = 12     # px, the faint test rings
 SHOWN_SAMPLES = 12   # how many of the latest "#index x y" lines are drawn
 
 LIVE = QColor(80, 220, 120)      # green: a prediction from this frame
 STALE = QColor(90, 90, 90)       # grey: face lost / blink, showing the last one
 OFF_SCREEN = QColor(235, 149, 46)  # orange ring: the guess is past the edge
+Point = tuple[float, float]
 
 
 class GazeWindow(QWidget):
-    logged = Signal(str)    # the csv file's path, just before the window closes
+    logged = Signal(object)     # list[Path]: the csv files saved, just before the window closes
+    recorded = Signal(object)   # Path: the recording's json (record mode), just before the window closes
 
-    def __init__(self,
-                 get_point: Callable[[], tuple[float, float] | None],
-                 targets: Sequence[tuple[float, float]] | None = None,
-                 method_id: str = "",
-                 folder: Path | None = None,
-                 parent: QWidget | None = None) -> None:
+    def __init__(self, get_points: Callable[[], dict[str, Point | None]], folders: dict[str, Path | None],
+                 calibrations: dict[str, int | None] | None = None, grid: int = CHECK_GRID,
+                 show_dot: bool = True, tag: str = "", recorder=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._get_point = get_point
-        self.method_id = method_id       # the csv goes into this method's folder, with the method in its name
-        self.folder = folder             # ...of this person (None: the person in use)
-        self.calibrations: int | None = None   # how many calibrations trained the model: goes in the file name
-        self._lit = 0                    # the ring to look at now: Enter records it and lights the next
+        self._get_points = get_points
+        self.folders = dict(folders)                 # model name -> where its csv goes (None: the type's folder)
+        self.calibrations = calibrations or {}       # model name -> how many calibrations trained it
+        self.grid = grid
+        self.show_dot = show_dot and len(folders) == 1   # the dot is one model's view: only when there is one
+        self.tag = tag                               # goes in the file names ("multi")
+        self.recorder = recorder                     # record mode: gets every press, finishes on Esc
+        self._targets = point_grid(grid)
+        self._lit = 0                                # the ring to look at now: Enter records it and lights the next
+        self.presses = 0                             # Enter presses so far: the sample index, the same for every model
+        self._pressed: list[tuple[int, int]] = []    # (press index, lit ring), for the lines on screen
         self.paused = False
-        self._targets = list(targets or point_grid(CHECK_GRID))
-        self._point: tuple[float, float] | None = None   # last prediction, 0..1
-        self._stale = True                                # no prediction this tick
-        self.log: list[tuple[int, float, float, float, float]] = []   # (index, x, y, ring x, ring y), one per Enter
+        self._points: dict[str, Point | None] = {name: None for name in folders}   # the last prediction per model
+        self._stale = True                                                        # no prediction this tick
+        self.logs: dict[str, list[Check]] = {name: [] for name in folders}       # (index, x, y, ring x, ring y)
 
         # frames per second, worked out once a second: the number to compare
         # when testing speed changes (e.g. a threaded camera)
@@ -75,6 +84,25 @@ class GazeWindow(QWidget):
         self.setWindowTitle("Gaze")
         self.setCursor(Qt.CursorShape.BlankCursor)  # a visible mouse pulls the eye
 
+    @classmethod
+    def single(cls, get_point: Callable[[], Point | None], method_id: str = "model", folder: Path | None = None,
+               calibrations: int | None = None, grid: int = CHECK_GRID) -> GazeWindow:
+        """One model, its dot drawn."""
+        return cls(lambda: {method_id: get_point()}, {method_id: folder}, {method_id: calibrations}, grid)
+
+    @property
+    def names(self) -> list[str]:
+        return list(self.folders)
+
+    @property
+    def log(self) -> list[Check]:
+        """The first model's samples (the one whose dot is drawn)."""
+        return self.logs[self.names[0]] if self.names else []
+
+    @property
+    def point(self) -> Point | None:
+        return self._points[self.names[0]] if self.names else None
+
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Space:
             self.paused = not self.paused
@@ -84,18 +112,23 @@ class GazeWindow(QWidget):
             self.record()
         elif event.key() == Qt.Key.Key_Escape:
             self._timer.stop()
-            if self.log:
-                self.logged.emit(str(self.save_log()))
+            if self.recorder is not None:
+                meta = self.recorder.finish()
+                if meta is not None:
+                    self.recorded.emit(meta)
+            elif any(self.logs.values()):
+                self.logged.emit(self.save_log())
             self.close()
         else:
             super().keyPressEvent(event)
 
     # ---- runs every TICK_MS ----------------------------------------
     def _tick(self) -> None:
-        point = self._get_point()
-        self._stale = point is None
-        if point is not None:
-            self._point = point     # while the face is lost, keep the last one
+        points = self._get_points()
+        self._stale = all(p is None for p in points.values()) if points else True
+        for name, p in points.items():
+            if p is not None:
+                self._points[name] = p     # while the face is lost, keep the last one
 
         self._frames += 1
         if self._fps_clock.elapsed() >= 1000:
@@ -106,28 +139,42 @@ class GazeWindow(QWidget):
         self.update()   # ask Qt to repaint (it calls paintEvent)
 
     def record(self) -> None:
-        """Enter: one sample of where the dot is now (index first, then x, y) and the lit ring;
-        then the next ring lights up (row by row, round again after the last)."""
-        if self._point is not None:
-            self.log.append((len(self.log), *self._point, *self._targets[self._lit]))
-            self._lit = (self._lit + 1) % len(self._targets)
-            self.update()
+        """Enter: one sample per model of where its dot is now (index first, then x, y) and the
+        lit ring, or the moment in record mode; then the next ring lights up (row by row, round
+        again after the last)."""
+        tx, ty = self._targets[self._lit]
+        if self.recorder is not None:
+            self.recorder.press(self.presses, tx, ty)
+        else:
+            got = [name for name, p in self._points.items() if p is not None]
+            if not got:
+                return                                   # no face yet: nothing to record
+            for name in got:
+                self.logs[name].append((self.presses, *self._points[name], tx, ty))
+        self._pressed.append((self.presses, self._lit))
+        self.presses += 1
+        self._lit = (self._lit + 1) % len(self._targets)
+        self.update()
 
-    def save_log(self, folder: Path | None = None) -> Path:
-        """Every sample as index,x,y, to the method's folder (or `folder`): to compare after a test."""
-        return save_gaze_check(self.log, self.method_id or "unknown", folder or self.folder, self.calibrations)
+    def save_log(self, folder: Path | None = None) -> list[Path]:
+        """Every model's samples as index,x,y,target_x,target_y, to its folder (or `folder`)."""
+        return [save_gaze_check(log, name, folder or self.folders[name], self.calibrations.get(name), self.tag)
+                for name, log in self.logs.items() if log]
 
     def sample_lines(self) -> list[str]:
-        """The latest samples, newest last: "#0042  x 0.430  y 0.610  off 0.032" (index first; off = from the ring)."""
-        return [f"#{i:04d}  x {x:.3f}  y {y:.3f}  off {((x - tx) ** 2 + (y - ty) ** 2) ** 0.5:.3f}"
-                for i, x, y, tx, ty in self.log[-SHOWN_SAMPLES:]]
+        """The latest samples, newest last: "#0042  x 0.430  y 0.610  off 0.032" (index first; off = from
+        the ring) for the drawn model; without a dot, the ring each press was on."""
+        if self.show_dot:
+            return [f"#{i:04d}  x {x:.3f}  y {y:.3f}  off {math.hypot(x - tx, y - ty):.3f}"
+                    for i, x, y, tx, ty in self.log[-SHOWN_SAMPLES:]]
+        return [f"#{i:04d}  ring ({lit % self.grid + 1}, {lit // self.grid + 1})" for i, lit in self._pressed[-SHOWN_SAMPLES:]]
 
     def dot_position(self) -> QPointF | None:
         """Where the dot is drawn, in window pixels. A guess past the edge is
         pinned to the edge, so it stays visible."""
-        if self._point is None:
+        if self.point is None:
             return None
-        x, y = self._point
+        x, y = self.point
         x = min(max(x, 0.0), 1.0)
         y = min(max(y, 0.0), 1.0)
         return QPointF(x * self.width(), y * self.height())
@@ -146,7 +193,7 @@ class GazeWindow(QWidget):
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Paused.\n\nSpace to carry on, Esc to leave.")
             return
 
-        # where the calibration dots were: look at one to check the accuracy
+        # the test rings: look at the lit one
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor(70, 70, 70), 2))
         for tx, ty in self._targets:
@@ -156,9 +203,9 @@ class GazeWindow(QWidget):
         p.setPen(QPen(QColor("white"), 3))
         p.drawEllipse(QPointF(tx * self.width(), ty * self.height()), RING_RADIUS + 6, RING_RADIUS + 6)
 
-        centre = self.dot_position()
+        centre = self.dot_position() if self.show_dot else None
         if centre is not None:
-            x, y = self._point
+            x, y = self.point
             if not (0 <= x <= 1 and 0 <= y <= 1):
                 p.setPen(QPen(OFF_SCREEN, 3))
                 p.drawEllipse(centre, DOT_RADIUS + 6, DOT_RADIUS + 6)
@@ -175,14 +222,16 @@ class GazeWindow(QWidget):
             p.drawText(20, 64 + 22 * n, line)
 
     def status_text(self) -> str:
-        if self._point is None:
+        if self.recorder is not None:
+            gaze = f"recording the camera: {len(self.recorder.frames_ms)} frames"
+        elif not self.show_dot:
+            gaze = f"{len(self.names)} models predicting" + ("   (no face / blink: holding the last points)" if self._stale else "")
+        elif self.point is None:
             gaze = "waiting for a face..."
         else:
-            x, y = self._point
-            gaze = f"x {x:.2f}  y {y:.2f}"
-            if self._stale:
-                gaze += "   (no face / blink: showing the last point)"
-        return (f"{gaze}     {self._fps:.0f} fps     {len(self.log)} samples (Enter records one)"
+            x, y = self.point
+            gaze = f"x {x:.2f}  y {y:.2f}" + ("   (no face / blink: showing the last point)" if self._stale else "")
+        return (f"{gaze}     {self._fps:.0f} fps     {self.presses} samples (Enter records one)"
                 "     Space: pause     Esc: save and quit")
 
 
@@ -223,7 +272,7 @@ def main() -> int:
         def get_point() -> tuple[float, float] | None:
             return model.predict(tracker.read_features())
 
-    window = GazeWindow(get_point=get_point, targets=point_grid(method.grid), method_id=method.id)
+    window = GazeWindow.single(get_point, method.id)
     window.showFullScreen()   # full screen, like calibration: same 0..1 -> pixels
     try:
         return app.exec()

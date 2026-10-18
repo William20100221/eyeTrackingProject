@@ -5,6 +5,7 @@ Calibration page, full screen (PySide6), for every type in core/methods.py:
   Sweep                      intro -> gliding dot (across, down) -> head step -> the 4x4 dots -> done
   Points, Line model         intro -> 14 still dots along a line -> head step -> the 4x4 dots -> done
   Random twins               the same steps; the final dots shuffled anew each time
+  (Sweep / Points / Line model with `dots` given reuse those as the grid and end after the head step)
 The In-order types run their final grid row by row (the same order for all of them).
 
 Only drawing and timing live here. What each step means is in core/calibration.py
@@ -33,7 +34,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from eyetracking.core.calibration import CalibrationSession, HeadStep, HeadStill, point_grid, sweep_points, sweep_target
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, Method
-from eyetracking.core.models import CalibrationRecording
+from eyetracking.core.models import CalibrationRecording, CalibrationSample
 
 SETTLE_MS = 1000       # dot appears, eyes travel to it: DON'T record yet
 COLLECT_MS = 1500      # eyes resting on the dot: record features
@@ -51,10 +52,15 @@ class CalibrationWindow(QWidget):
     cancelled = Signal()        # Esc
 
     def __init__(self, method: Method, get_features: Callable[[], Sequence[float] | None],
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, dots: Sequence[CalibrationSample] | None = None,
+                 dots_from: str = "") -> None:
+        """`dots`: reuse these as the final grid (from the person's Original / Random 4x4 calibration,
+        `dots_from` its name) and skip that step: the window ends after the head step."""
         super().__init__(parent)
         self.method = method
         self._get_features = get_features
+        self._borrowed = tuple(dots) if dots else None
+        self._dots_from = dots_from
         grid = point_grid(method.grid)                                 # row by row...
         self._session = CalibrationSession(random.sample(grid, len(grid)) if method.random_order else grid)   # ...or shuffled
         # steps 1-2 also go through a CalibrationSession, for its blink handling
@@ -163,6 +169,9 @@ class CalibrationWindow(QWidget):
             step = self._head_step.feed(features, elapsed)
             if step is None:
                 self._head.next_target()              # step over: flush the session
+                if self._borrowed is not None:        # the dots are reused: every step is done
+                    self._finish()
+                    return
                 self._active = self._session          # on to the grid
                 self._phase = "settle"
                 self._clock.restart()
@@ -209,7 +218,7 @@ class CalibrationWindow(QWidget):
         # the window doesn't close itself: whoever listens to `finished` decides
         self.finished.emit(CalibrationRecording(tuple(first.samples()) if first else (),
                                                 tuple(self._head.samples()) if self._head else (),
-                                                tuple(self._session.samples())))
+                                                self._borrowed or tuple(self._session.samples())))
 
     # ---- drawing ---------------------------------------------------
     def _text(self, p: QPainter, size: int, colour: QColor = QColor("white")) -> None:
@@ -251,7 +260,10 @@ class CalibrationWindow(QWidget):
             if self._phase == "done":
                 text = "Calibration done."
             else:
-                steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(self.method.steps))
+                steps = list(self.method.steps)
+                if self._borrowed is not None:
+                    steps[-1] = f"{steps[-1]} Skipped: the dots are reused from {self._dots_from}."
+                steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps))
                 text = (f"{self.method.name}\n\n{steps}\n\n"
                         "Press Space to start, Space again to pause,\nEsc to leave at any time.")
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
