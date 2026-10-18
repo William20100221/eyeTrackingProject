@@ -6,7 +6,7 @@ Checkpoint: live gaze predictions printed in the console (no window yet).
 
 Trains on the saved calibrations (newest weighted most), then for every camera frame:
 
-    camera -> MediaPipe -> 10 raw features -> GazeProfile.scale -> model -> (x, y)
+    camera -> MediaPipe -> 10 raw features -> model (the head turn taken out) -> 1-euro filter -> (x, y)
 
 x and y are fractions of the screen (0 = left/top, 1 = right/bottom), the
 same as the calibration dots. Look at different parts of the screen and
@@ -18,6 +18,7 @@ from pathlib import Path
 
 from eyetracking.core.calibration import training_set
 from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.services.tracker import EyeTracker
 
@@ -34,14 +35,15 @@ def region(x: float, y: float) -> str:
 def main() -> None:
     # one file if given, otherwise every saved calibration, the newest weighted most
     recordings = [load_calibration(Path(sys.argv[1]))] if len(sys.argv) > 1 else load_all_calibrations()
-    samples, weights, profile = training_set(recordings)
+    samples, weights, K = training_set(recordings)
     if not samples:
         print("No usable calibration yet: run calibrate first")
         return
 
-    # train on the scaled features. Live frames go through the SAME scaling
-    # (the newest profile), so the model sees the same kind of numbers
-    model = GazeModel().fit(samples, weights)
+    # the model takes the head turn out of every frame itself (K: the newest calibration's
+    # own head step), so live frames go in raw, exactly as the training frames did
+    model = GazeModel(K=K).fit(samples, weights)
+    smoother = GazeSmoother()               # the 1-euro filter on the live point, as in the app
     print(f"Trained on {len(samples)} samples. Look around the screen; Ctrl+C to stop.\n")
 
     with EyeTracker() as tracker:           # asks which camera, in the console
@@ -55,7 +57,7 @@ def main() -> None:
                     skipped += 1
                     point = None
                 else:
-                    point = model.predict(profile.scale(features))
+                    point = smoother.feed(model.predict(features))
 
                 now = time.perf_counter()
                 if now - last_print >= PRINT_EVERY_S:

@@ -45,6 +45,7 @@ from eyetracking.core.calibration import GazeProfile, training_set
 from eyetracking.core.gaze_model import GazeModel
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
+from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (KEY_ENV, KNOWN_MODELS, MODELS, PROVIDER_NAMES, grade_answer,
@@ -62,7 +63,6 @@ from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, 
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
-SMOOTH = 0.3             # share of each new gaze point taken: lower = steadier but laggier
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
 CAPTURE_MS = 1000        # how often the text of the window being read is re-read (scrolling, a new page)
 
@@ -267,6 +267,7 @@ class App(QObject):
         migrate_layout()                          # files from older versions, loose in data/, go into their folders
         self.model = self._load_model()
         self.smoothed: tuple[float, float] | None = None
+        self.smoother = GazeSmoother()           # the 1-euro filter on the live point (core/smoothing.py)
         self.fullscreen: QWidget | None = None   # calibration / check page, while open
         self.apply_settings({**settings, "camera": self.camera})   # the popup may have just chosen one
         self.reading: ReadingWindow | None = None
@@ -408,16 +409,15 @@ class App(QObject):
 
     # ---- gaze ------------------------------------------------------
     def _load_model(self) -> GazeModel | None:
-        """Train on every saved calibration, the newest weighted most.
-        Also keeps the newest calibration's GazeProfile: live frames must be
-        scaled the same way the training data was (see predict())."""
+        """Train on every saved calibration, the newest weighted most, with the newest one's
+        own head-rotation matrix K (core/head_correction.py): the model turns every frame,
+        trained or live, back to that calibration's posture."""
         self.samples_used = 0
-        self.profile: GazeProfile | None = None
         if self.mouse:
             return None
-        samples, weights, self.profile = training_set(load_all_calibrations())
+        samples, weights, K = training_set(load_all_calibrations())
         self.samples_used = len(samples)
-        return GazeModel().fit(samples, weights) if samples else None
+        return GazeModel(K=K).fit(samples, weights) if samples else None
 
     def _retrain(self) -> None:
         """Gaze data was removed in the Practice tab: train again on what is left."""
@@ -441,9 +441,8 @@ class App(QObject):
         if self.model is None:
             return None
         try:
-            # head correction + eye-range scaling first, exactly as in training
-            return self.model.predict(self.profile.scale(features))
-        except ValueError:                        # the saved file holds an older kind of features
+            return self.model.predict(features)   # raw features: the model takes the head turn out itself
+        except (ValueError, IndexError):          # the saved file holds an older kind of features
             self.model = None
             self.panel.reply("Your saved calibration is from an older version. Type calibrate.")
             return None
@@ -463,12 +462,9 @@ class App(QObject):
 
         point = self.predict(features)
         if point is not None:
-            # raw gaze jitters; without smoothing the dwell ring never fills
-            # ponytail: plain exponential average; swap in a real filter (e.g. One Euro) if lag or jitter bothers
-            if self.smoothed is None:
-                self.smoothed = point
-            else:
-                self.smoothed = tuple(s + SMOOTH * (p - s) for s, p in zip(self.smoothed, point))
+            # raw gaze jitters; without smoothing the dwell ring never fills. The 1-euro filter:
+            # steady while the eyes rest, quick when they jump (core/smoothing.py)
+            self.smoothed = self.smoother.feed(point)
         elif not face or self.smoothed is None:
             return                                # face lost: nothing to show
         # a blink lands here with point None: HOLD the last smoothed point and
@@ -655,6 +651,8 @@ class App(QObject):
 
         def get():
             point = self.predict(fake_point_from_mouse() if self.mouse else self.tracker.read_features())
+            if not self.mouse:
+                point = self.smoother.feed(point)   # the same filter as tick(): the check shows what the overlay would
             if point is not None:
                 self.smoothed = point     # keep it: the overlay carries on from here after quitting check
             return point
