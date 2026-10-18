@@ -10,7 +10,8 @@ The window (ui/control_window.py) has three tabs:
     Calibration  starts the chosen method full screen
     Settings     camera, theme
 The methods are in core/methods.py; each one keeps its own model, trained from
-its own folder under data/calibrations/<method>/ (services/storage.py).
+its own folder: data/<person>/<method>/, or data/<method>/ with person mode off
+(services/storage.py).
 
 What talks to what:
     camera -> tracker (services/tracker.py) -> features (core/features.py)
@@ -35,8 +36,8 @@ from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, train
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
-from eyetracking.services.storage import (ensure_layout, load_all_calibrations, migrate_layout, save_blink_scores,
-                                          save_calibration, use_person)
+from eyetracking.services.storage import (ensure_layout, load_all_calibrations, save_blink_scores, save_calibration,
+                                          use_person)
 from eyetracking.services import storage
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
@@ -66,7 +67,6 @@ class App(QObject):
         self.samples_used: dict[str, int] = {}
         self.person = None                         # whose data: set by _use_person, from the settings
         self._use_person(settings)
-        migrate_layout()                           # files from before the lab go to older-versions/
         self.apply_settings({**settings, "camera": self.camera})
         self._retrain(quiet=True)
         self.control.show_last()
@@ -102,7 +102,7 @@ class App(QObject):
                     self.testing.say(f"Now using the camera: {self.camera}.")
 
     def _use_person(self, values: dict) -> None:
-        """Person mode on: data under data/people/<name>/; off (or no name): straight under data/.
+        """Person mode on: data under data/<name>/; off (or no name): straight under data/.
         A change re-reads every method's files, so each model trains on that person's data only."""
         person = values["person"] if values["person_mode"] else ""
         if person == self.person:

@@ -37,14 +37,19 @@ Every method records the same 12 numbers per frame, so their files can be compar
 
 ## Where the data goes
 
+By person, then by calibration type. Settings > Person mode picks the person; with it off,
+the same folders sit straight in `data/`.
+
 ```
-data/calibrations/<method>/<method>_<date>_<time>.json      trains that method's model
-data/calibrations/<method>/disabled/                         kept, turned off
-data/calibrations/<method>/trash/                            removed files and the originals of edited ones
-data/calibrations/older-versions/                            files from before the lab (not used)
-data/gaze_checks/<method>/gaze-check_<method>_<date>_<time>.csv
-data/blink_scores/blink-scores_<date>_<time>.csv
+data/<person>/<method>/<method>_<date>_<time>.json             a calibration: trains that method's model
+data/<person>/<method>/gaze-check_<method>_<date>_<time>.csv   a gaze check of that method
+data/<person>/<method>/disabled/                                kept, turned off
+data/<person>/<method>/trash/                                   removed files and the originals of edited ones
+data/<person>/blink-test/blink-scores_<date>_<time>.csv
 ```
+
+`<method>` is one of `original-3x3`, `original-4x4`, `original-5x5`, `sweep`, `points`, `line-model`.
+The other branches' folders in `data/` (`calibrations/`, `gaze_checks/`, `blink_scores/`, `history/`) are left alone.
 
 ## Privacy
 

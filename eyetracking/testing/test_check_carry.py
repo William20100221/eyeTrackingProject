@@ -44,7 +44,7 @@ for _ in range(5):
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 assert app.fullscreen is None
-saved = list((tmp / "gaze_checks" / "original-3x3").glob("gaze-check_original-3x3_*.csv"))
+saved = list((tmp / "original-3x3").glob("gaze-check_original-3x3_*.csv"))
 assert len(saved) == 1, saved
 rows = list(csv.reader(open(saved[0])))
 assert rows == [["index", "x", "y"], ["0", "0.6200", "0.4100"]], rows       # the Enter sample, saved

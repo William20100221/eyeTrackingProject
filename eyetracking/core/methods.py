@@ -35,7 +35,7 @@ from eyetracking.core.quality import check_recording
 
 @dataclass(frozen=True)
 class Method:
-    id: str                       # folder under data/calibrations, and the file prefix
+    id: str                       # its data folder (data/[<person>/]<id>/), and the file prefix
     name: str
     kind: str                     # grid | sweep | points
     model: str                    # ridge | profile | line

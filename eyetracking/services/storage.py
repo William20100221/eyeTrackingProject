@@ -1,18 +1,19 @@
 """
-What the lab writes to disk, and reads back in words.
+What the lab writes to disk, and reads back in words. By person, then by calibration type:
 
-    data/                                                   (person mode: data/people/<name>/, same tree inside)
-      calibrations/<method>/<method>_<date>_<time>.json    what a method's model learns from
-      calibrations/<method>/disabled/...                   kept, but turned off by the user
-      calibrations/<method>/trash/...                      removed files, and the originals of edited ones
-      calibrations/older-versions/...                      files from before the lab (not used)
-      gaze_checks/<method>/gaze-check_<method>_<date>_<time>.csv
-      blink_scores/blink-scores_<date>_<time>.csv
+    data/<person>/                                  person mode on (Settings > Person mode)
+    data/                                           person mode off: the same folders straight in data/
+      <method>/<method>_<date>_<time>.json          a calibration: what the method's model learns from
+      <method>/gaze-check_<method>_<date>_<time>.csv  a gaze check of that method's model
+      <method>/disabled/                            calibrations kept, but turned off by the user
+      <method>/trash/                               removed files, and the originals of edited ones
+      blink-test/blink-scores_<date>_<time>.csv     blink tests (they belong to no method)
 
 <method> is a method id from core/methods.py (original-3x3, original-4x4,
 original-5x5, sweep, points, line-model), so a file name says which method made
-it and when. Every calibration file is in one format (FORMAT below), with the
-method and its grid size inside:
+it and when. The other branches' folders in data/ (calibrations/, gaze_checks/,
+blink_scores/, history/) are never read or moved here. Every calibration file is in
+one format (FORMAT below), with the method and its grid size inside:
 
     {"format": "gaze-calibration-v3", "method": "sweep", "grid": 5, "saved_at": ...,
      "sweep": [{"features": [...12], "target_x": .., "target_y": ..}, ...],   step 1 (empty for Original)
@@ -39,11 +40,12 @@ from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"                   # the date-time part of every file name
-BASE_DIR = DATA_DIR                         # data/ itself; use_person() moves the folders below
-CALIB_DIR = DATA_DIR / "calibrations"
-GAZE_CHECK_DIR = DATA_DIR / "gaze_checks"
-BLINK_DIR = DATA_DIR / "blink_scores"
-OLDER = "older-versions"                    # where files from before the lab go
+BASE_DIR = DATA_DIR                         # data/ itself; use_person() moves DATA_DIR into data/<person>/
+BLINK = "blink-test"                        # the blink tests' folder, beside the method folders
+KINDS = (*METHOD_BY_ID, BLINK)              # the folders in a person's folder (or in data/ with person mode off)
+# never a person: the lab's own folders, and the other branches' folders in the shared data/
+RESERVED = {k.lower() for k in KINDS} | {"calibrations", "gaze_checks", "blink_scores", "history", "people",
+                                         "disabled", "trash", "older-versions"}
 FORMAT = "gaze-calibration-v3"              # 12 features per frame
 PARTS = ("sweep", "head", "dots")
 STEP_NAMES = {"sweep": "Step 1, the eye range", "head": "Step 2, the head moving, eyes on the centre dot",
@@ -66,58 +68,50 @@ def method_of(path: Path) -> str:
 # ---- person mode: each person's files in their own folder -----------------------
 def person_name(text: str) -> str:
     """What a typed name becomes as a folder: letters, digits, spaces, - and _ only
-    (no "..", slashes or characters Windows refuses). "" = no usable name."""
-    return re.sub(r"[^\w \-]", "", text).strip(" .")
+    (no "..", slashes or characters Windows refuses). "" = no usable name, also for
+    a name taken by a data folder (a method, blink-test, the other branches' folders)."""
+    name = re.sub(r"[^\w \-]", "", text).strip(" .")
+    return "" if name.lower() in RESERVED else name
 
 
 def use_person(name: str) -> Path:
-    """'' = files straight under data/; a name = under data/people/<name>/ (the same
-    calibrations / gaze_checks / blink_scores tree inside). Returns the folder used now.
-    Every function below reads the folders at call time, so this switches them all."""
-    global DATA_DIR, CALIB_DIR, GAZE_CHECK_DIR, BLINK_DIR
+    """'' = files straight under data/; a name = under data/<name>/ (the same method
+    folders inside). Returns the folder used now. Every function below reads DATA_DIR
+    at call time, so this switches them all."""
+    global DATA_DIR, BLINK_DIR
     name = person_name(name)
-    DATA_DIR = BASE_DIR / "people" / name if name else BASE_DIR
-    CALIB_DIR, GAZE_CHECK_DIR, BLINK_DIR = DATA_DIR / "calibrations", DATA_DIR / "gaze_checks", DATA_DIR / "blink_scores"
+    DATA_DIR = BASE_DIR / name if name else BASE_DIR
+    BLINK_DIR = DATA_DIR / BLINK
     return DATA_DIR
 
 
+BLINK_DIR = DATA_DIR / BLINK
+
+
 def list_people() -> list[str]:
-    """The people with a folder under data/people/, A to Z."""
-    folder = BASE_DIR / "people"
-    return sorted((p.name for p in folder.iterdir() if p.is_dir()), key=str.lower) if folder.is_dir() else []
+    """The people with a folder in data/ (a folder holding method or blink-test folders), A to Z."""
+    if not BASE_DIR.is_dir():
+        return []
+    return sorted((p.name for p in BASE_DIR.iterdir()
+                   if p.is_dir() and p.name.lower() not in RESERVED and any((p / k).is_dir() for k in KINDS)),
+                  key=str.lower)
 
 
 def ensure_layout() -> list[Path]:
-    """Create every data folder that is missing (the whole data/ tree, or one method's
-    folder cut out to keep another person's files apart) and return the ones made.
-    Saving also creates its own folder, so a cut never breaks a save; this only makes
-    the empty skeleton visible again. Safe at every start."""
-    folders = [BLINK_DIR] + [d / m for m in METHOD_BY_ID for d in (CALIB_DIR, GAZE_CHECK_DIR)]
-    made = [f for f in folders if not f.is_dir()]
+    """Create every folder of the current person (or of data/) that is missing: all of
+    them for a new person, or the one cut out to keep someone's files apart. Returns the
+    ones made. Saving also creates its own folder, so a cut never breaks a save; this
+    only makes the empty skeleton visible again. Safe at every start."""
+    made = [DATA_DIR / k for k in KINDS if not (DATA_DIR / k).is_dir()]
     for f in made:
-        f.mkdir(parents=True, exist_ok=True)      # a test may point two kinds at one folder
+        f.mkdir(parents=True)
     return made
-
-
-def migrate_layout() -> int:
-    """Files from before the lab (calibration_*.json loose in data/ or data/calibrations/,
-    gaze_check_*.csv loose in data/ or data/gaze_checks/) are moved into an
-    older-versions folder, so they stay but don't mix with the lab's files. Safe at every start."""
-    moves = [(DATA_DIR, "calibration_*.json", CALIB_DIR / OLDER), (CALIB_DIR, "calibration_*.json", CALIB_DIR / OLDER),
-             (DATA_DIR, "gaze_check_*.csv", GAZE_CHECK_DIR / OLDER), (GAZE_CHECK_DIR, "gaze_check_*.csv", GAZE_CHECK_DIR / OLDER),
-             (DATA_DIR, "blink_scores_*.csv", BLINK_DIR)]
-    n = 0
-    for folder, pattern, target in moves:
-        for path in list(folder.glob(pattern)):
-            target.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(path), str(target / path.name))
-            n += 1
-    return n
 
 
 # ---- calibrations ---------------------------------------------------------------
 def method_dir(method_id: str) -> Path:
-    return CALIB_DIR / method_id
+    """A method's folder: its calibrations and its gaze checks."""
+    return DATA_DIR / method_id
 
 
 def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | None = None) -> Path:
@@ -301,8 +295,8 @@ def remove_calibration(path: Path) -> Path:
 
 # ---- gaze checks: the samples recorded with Enter, per method ------------------
 def save_gaze_check(samples: list[tuple[int, float, float]], method_id: str, folder: Path | None = None) -> Path:
-    """(index, x, y) rows -> data/gaze_checks/<method>/gaze-check_<method>_<time>.csv. Returns the path."""
-    folder = folder or GAZE_CHECK_DIR / method_id
+    """(index, x, y) rows -> <method>/gaze-check_<method>_<time>.csv. Returns the path."""
+    folder = folder or method_dir(method_id)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"gaze-check_{method_id}_{datetime.now():{STAMP}}.csv"
     with open(path, "w", newline="") as f:
@@ -313,8 +307,8 @@ def save_gaze_check(samples: list[tuple[int, float, float]], method_id: str, fol
 
 
 def list_gaze_checks() -> list[Path]:
-    """Every method's gaze checks (and the older ones), newest first."""
-    return sorted(GAZE_CHECK_DIR.glob("*/*.csv"), key=file_date, reverse=True)
+    """Every method's gaze checks, newest first."""
+    return sorted((p for m in METHOD_BY_ID for p in method_dir(m).glob("gaze-check_*.csv")), key=file_date, reverse=True)
 
 
 def _nearest_dot(x: float, y: float, grid: int) -> tuple[int, int, float]:
@@ -348,7 +342,7 @@ def gaze_check_lines(path: Path) -> list[str]:
 
 # ---- blink scores: from the blink test ------------------------------------------
 def save_blink_scores(rows: list[blink_scores.Row], folder: Path | None = None) -> Path:
-    """(state, ms, left, right) rows -> data/blink_scores/blink-scores_<time>.csv."""
+    """(state, ms, left, right) rows -> blink-test/blink-scores_<time>.csv."""
     folder = folder or BLINK_DIR
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"blink-scores_{datetime.now():{STAMP}}.csv"

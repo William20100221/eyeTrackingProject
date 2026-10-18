@@ -1,8 +1,8 @@
 """
 Self-check for person mode (no webcam):  python -m eyetracking.testing.test_person_mode
 
-Settings > Person mode: off = files straight under data/; on with a person = under
-data/people/<name>/. Saving the setting moves the app there at once (lists, "Saved as"
+Settings > Person mode: off = files straight under data/<method>/; on with a person =
+under data/<name>/<method>/. Saving the setting moves the app there at once (lists, "Saved as"
 path, models), and a restart comes back to the same person.
 """
 import os
@@ -29,8 +29,8 @@ qt.setQuitOnLastWindowClosed(False)
 app = appmod.App(mouse=True)
 w, page = app.control, app.testing
 page.set_method("original-3x3")
-assert storage.CALIB_DIR == tmp / "data" / "calibrations" and not w.person_switch.isChecked()
-assert "Saved as data/calibrations/original-3x3/original-3x3_<date>_<time>.json" in page.method_steps.text()
+assert storage.DATA_DIR == tmp / "data" and not w.person_switch.isChecked()
+assert "Saved as data/original-3x3/original-3x3_<date>_<time>.json" in page.method_steps.text()
 
 rec = CalibrationRecording((), (), (CalibrationSample((0.5,) * N_FEATURES, 0.5, 0.5),))
 mine = storage.save_calibration(rec, "original-3x3")            # someone's file straight under data/
@@ -40,15 +40,15 @@ assert page.active_list.item(0).data(0x0100) == str(mine)
 w.set_person("Ann")                                              # Settings: person Ann, mode on, Save
 w.person_switch.setChecked(True)
 w.save()
-assert storage.CALIB_DIR == tmp / "data" / "people" / "Ann" / "calibrations" and (storage.CALIB_DIR / "sweep").is_dir()
+assert storage.DATA_DIR == tmp / "data" / "Ann" and (tmp / "data" / "Ann" / "sweep").is_dir()
 assert page.active_list.item(0).data(0x0100) is None             # Ann has nothing yet: data/ files not shown
-assert "Saved as data/people/Ann/calibrations/original-3x3/" in page.method_steps.text()
-assert page.status.text() == "Saving for Ann in data/people/Ann/.", page.status.text()
+assert "Saved as data/Ann/original-3x3/" in page.method_steps.text()
+assert page.status.text() == "Saving for Ann in data/Ann/.", page.status.text()
 assert storage.list_people() == ["Ann"]
 
 w.person_switch.setChecked(False)                                # mode off: back to data/, the name is kept
 w.save()
-assert storage.CALIB_DIR == tmp / "data" / "calibrations" and page.active_list.item(0).data(0x0100) == str(mine)
+assert storage.DATA_DIR == tmp / "data" and page.active_list.item(0).data(0x0100) == str(mine)
 assert w.person == "Ann" and page.status.text() == "Saving straight under data/."
 
 w.person_switch.setChecked(True)
@@ -56,5 +56,5 @@ w.save()
 w.store.sync()
 storage.use_person("")
 app2 = appmod.App(mouse=True)                                    # a restart: still Ann
-assert storage.DATA_DIR == tmp / "data" / "people" / "Ann" and app2.control.person_switch.isChecked()
+assert storage.DATA_DIR == tmp / "data" / "Ann" and app2.control.person_switch.isChecked()
 print("person mode ok")

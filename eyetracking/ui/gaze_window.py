@@ -7,7 +7,7 @@ Live gaze demo: a dot on a full-screen window where the model thinks you look.
 The faint rings are the method's calibration dots. Look at one and see where
 the dot lands: a quick visual accuracy check. Press Enter to record a sample
 (where the dot is right now). Samples are listed as "#index  x  y" on screen
-and saved to data/gaze_checks/<method>/ on Esc; nothing is saved without one.
+and saved in the method's folder on Esc; nothing is saved without one.
 Space pauses.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
@@ -107,7 +107,7 @@ class GazeWindow(QWidget):
             self.update()
 
     def save_log(self, folder: Path | None = None) -> Path:
-        """Every sample as index,x,y, to data/gaze_checks/<method>/ (or `folder`): to compare after a test."""
+        """Every sample as index,x,y, to the method's folder (or `folder`): to compare after a test."""
         return save_gaze_check(self.log, self.method_id or "unknown", folder)
 
     def sample_lines(self) -> list[str]:

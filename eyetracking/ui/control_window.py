@@ -41,7 +41,7 @@ DEFAULTS = {
     "seed": "#3D6CF6",
     "theme": "system",          # system | light | dark
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
-    "person_mode": False,       # on: data under data/people/<person>/; off: straight under data/
+    "person_mode": False,       # on: data under data/<person>/; off: straight under data/
     "person": "",
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
@@ -585,7 +585,7 @@ class TestingPage(QWidget):
             ["A green dot follows where the model thinks you look. The faint rings are the method's calibration "
              "dots: look at one and see where the dot lands.",
              "Press Enter to record a sample of where you are looking. Samples are numbered on screen (#index  x  y) "
-             "and saved under data/gaze_checks/<method>/ when you leave, with the method in the file name.",
+             "and saved in the method's folder when you leave, with the method in the file name.",
              "Space pauses. Esc saves and leaves. It needs a calibration of the chosen method first."],
             "Start the gaze check", "check"))
         self.main.addWidget(self._intro(
@@ -604,7 +604,7 @@ class TestingPage(QWidget):
         mv.setSpacing(8)
         self.lists_title = label("Calibrations", "sheetTitle")
         mv.addWidget(self.lists_title)
-        hint = label("The chosen method's calibrations by date (data/calibrations/<method>/). Double-click one to read "
+        hint = label("The chosen method's calibrations by date (its folder: data/<person>/<method>/). Double-click one to read "
                      "it in words. Right-click to disable it (kept, but it stops training the model), enable it again, "
                      "or remove it. Only the active ones train the method's model.", "sheetText")
         hint.setWordWrap(True)
@@ -1000,8 +1000,8 @@ class SettingsWindow(QWidget):
         self.person_menu.aboutToShow.connect(self._fill_person_menu)   # list the people when opened
         self.person_btn.setMenu(self.person_menu)
         self.group("Person mode", [
-            self.row(I_PERSON, "Person mode", "On: every file goes under data/people/<name>/, one folder per person. "
-                     "Off: straight under data/. Changes apply when you save", self.person_switch),
+            self.row(I_PERSON, "Person mode", "On: every file goes under data/<name>/<calibration type>/, one folder "
+                     "per person. Off: data/<calibration type>/. Changes apply when you save", self.person_switch),
             self.row(I_PERSON, "Person", "Whose calibrations, checks and blink scores these are. Each person's "
                      "methods train on their own files only", self.person_btn),
         ])
