@@ -17,14 +17,14 @@ from eyetracking.services.storage import load_all_calibrations
 
 
 def main() -> None:
-    # every sample is already scaled by its own session's GazeProfile
-    samples, weights, _ = training_set(load_all_calibrations())
+    # raw dot samples; K = the newest calibration's own head-rotation matrix (the model takes the head turn out)
+    samples, weights, K = training_set(load_all_calibrations())
     if not samples:
         print("No usable calibration yet: run calibrate first")
         return
     newest = samples[:weights.count(1.0)]     # newest first, and only the newest has weight 1.0
     print(f"{len(samples)} samples from all calibrations; "
-          f"newest: {len(newest)} samples, {len(newest[0].features)} model inputs each")
+          f"newest: {len(newest)} samples, {len(newest[0].features)} raw features each")
 
     # the dots were placed using Qt's screen size, so measure with the same size
     app = QGuiApplication([])
@@ -32,11 +32,12 @@ def main() -> None:
     w, h = size.width(), size.height()
     print(f"screen: {w} x {h}")
 
-    model = GazeModel().fit(samples, weights)
+    model = GazeModel(K=K).fit(samples, weights)
     print(f"\nTested on the SAME dots it trained on: {mean_error_px(model, newest, w, h):.0f} px")
 
-    only = leave_one_dot_out(newest, w, h)
-    both = leave_one_dot_out(samples, w, h, weights, test=newest)
+    own = lambda: GazeModel(K=K)
+    only = leave_one_dot_out(newest, w, h, make_model=own)
+    both = leave_one_dot_out(samples, w, h, weights, test=newest, make_model=own)
     print("Each dot tested by a model that never saw it:   newest only | all, weighted")
     for dot in only:
         print(f"  dot ({dot[0]:.2f}, {dot[1]:.2f}): {only[dot]:5.0f} px | {both[dot]:5.0f} px")

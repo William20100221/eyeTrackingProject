@@ -25,6 +25,14 @@ raw head numbers are NOT given to the model as well: during the 25 dots the
 head barely moves, so the model would learn noise from them and then
 extrapolate badly when the head does move (tested on fake data: held-out
 error 61 px with head numbers, 17 px without).
+
+Since 18 Oct 2026 (ported from calibration-lab, see docs/model_improvements.md) the
+model no longer trains on the profile's scaled numbers: core/gaze_model.py takes the
+head turn out of the 4 eye numbers itself, with a matrix measured by the head step
+(core/head_correction.py: rotation only, no position, no range scaling; the position
+is not metric and the scaling measured no help on a new sitting). GazeProfile still
+checks that the sweep and head steps are usable; training_set() hands back the raw
+dots and that matrix.
 """
 from __future__ import annotations
 
@@ -35,6 +43,7 @@ from typing import Sequence
 import numpy as np
 
 from eyetracking.core.features import EYE, HEAD, N_FEATURES
+from eyetracking.core.head_correction import fit_k
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 
 
@@ -249,6 +258,10 @@ HEAD_RIDGE = 0.01        # small ridge in the head fit: a head number that hardl
 
 @dataclass(frozen=True, eq=False)
 class GazeProfile:
+    """Since 18 Oct 2026 the model no longer trains on these scaled numbers (the head is
+    taken out by core/head_correction.py instead: the range scaling measured no help on a new
+    sitting, see docs/model_improvements.md). from_recording() still validates the sweep and
+    head steps, which is what training_set() uses it for."""
     eye_min: np.ndarray   # (4,) eye numbers when looking at the left/top edge...
     eye_max: np.ndarray   # (4,) ...and at the right/bottom edge (after head correction)
     head_ref: np.ndarray  # (6,) the head position the correction is measured from
@@ -304,27 +317,27 @@ class GazeProfile:
 
 
 def training_set(recordings: Sequence[CalibrationRecording], older_weight: float = 0.5
-                 ) -> tuple[list[CalibrationSample], list[float], GazeProfile | None]:
-    """Recordings, NEWEST FIRST -> (model-ready dot samples, a weight per sample,
-    the newest profile). Each recording is scaled by ITS OWN profile, so
-    sessions from different seats/cameras land on the same 0..1 scale. The
-    newest weighs 1.0, older ones `older_weight`. Live frames must be scaled
-    with the returned (newest) profile. Unusable recordings are skipped."""
+                 ) -> tuple[list[CalibrationSample], list[float], np.ndarray | None]:
+    """Recordings, NEWEST FIRST -> (the dots' RAW samples, a weight per sample, K: the
+    head-rotation matrix for GazeModel(K=K), measured by the NEWEST recording's own head
+    step, core/head_correction.py). The model turns every frame, trained or live, back to
+    that calibration's posture, so older sittings add dots without adding their head pose.
+    The newest weighs 1.0, older ones `older_weight`. Unusable recordings (a short sweep
+    or head step, eyes that barely moved) are skipped."""
     samples: list[CalibrationSample] = []
     weights: list[float] = []
-    newest: GazeProfile | None = None
+    K: np.ndarray | None = None
     for rec in recordings:
         try:
-            profile = GazeProfile.from_recording(rec)
+            GazeProfile.from_recording(rec)               # checks the sweep and head steps
         except ValueError as e:
             print(f"Skipping a calibration: {e}")
             continue
-        newest = newest or profile
-        w = older_weight if samples else 1.0          # first one kept = newest
-        samples += [CalibrationSample(profile.scale(s.features), s.target_x, s.target_y)
-                    for s in rec.dots]
-        weights += [w] * len(rec.dots)
-    return samples, weights, newest
+        if K is None:                                     # first one kept = newest
+            K = fit_k(rec.head)
+        weights += [older_weight if samples else 1.0] * len(rec.dots)
+        samples += list(rec.dots)
+    return samples, weights, K
 
 
 if __name__ == "__main__":
@@ -355,8 +368,9 @@ if __name__ == "__main__":
     print(f"centre gaze, head moved -> {moved.round(2)}  (want ~0.5)")
     assert np.all(np.abs(edge) < 0.1) and np.all(np.abs(moved - 0.5) < 0.1)
 
-    samples, weights, newest = training_set([CalibrationRecording((), (), tuple(dots)),   # unusable
-                                             CalibrationRecording(tuple(sweep), tuple(head), tuple(dots))])
-    assert len(samples) == 25 and weights == [1.0] * 25 and newest is not None
+    samples, weights, K = training_set([CalibrationRecording((), (), tuple(dots)),   # unusable
+                                        CalibrationRecording(tuple(sweep), tuple(head), tuple(dots))])
+    assert len(samples) == 25 and weights == [1.0] * 25 and samples[0].features == dots[0].features
+    assert K.shape == (3, 4) and np.abs(K - 0.002).max() < 0.001       # the fake head leaks 0.002 per degree
     assert HeadStep().feed(None, 0) == ("Look at the dot", False)
     print("ok")

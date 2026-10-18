@@ -82,10 +82,11 @@ assert len(counts) == 25 and min(counts.values()) >= cw.DOT_SAMPLES and closing 
 
 # ---- 4. app holds the point through a blink --------------------------------
 import eyetracking.app as appmod
+from eyetracking.core.smoothing import GazeSmoother
 fed = []
 feats = iter([(0.2, 0.2), None, None, None])               # one prediction, then a blink
 app = types.SimpleNamespace(
-    mouse=False, smoothed=None, reading=None,
+    mouse=False, smoothed=None, smoother=GazeSmoother(), reading=None,
     clock=types.SimpleNamespace(restart=lambda: 33),
     tracker=types.SimpleNamespace(read_features=lambda: next(feats), face_found=True),
     ball=types.SimpleNamespace(set_tracking_state=lambda f: None, look_at=lambda p: None), reader=None,
