@@ -398,6 +398,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Eye-tracking calibration lab")
     parser.add_argument("--mouse", action="store_true", help="no camera: the mouse plays your eyes")
     args, _ = parser.parse_known_args()
+    if sys.platform == "win32":               # the taskbar groups a script under python.exe (and its icon)
+        import ctypes                         # until the process says it is an app of its own
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("StudyAssistant.EyeTracking")
     qt_app = QApplication(sys.argv)
     font = QFont()
     font.setFamilies(TEXT_FONTS)              # the window's fonts (icon font last, for its glyphs)
