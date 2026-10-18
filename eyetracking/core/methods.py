@@ -8,9 +8,11 @@ The calibration methods the lab offers, and the gaze model each one trains.
 A method says how the calibration runs (kind) and what learns from it (model):
 
   kind   "grid"    the dots only: the Original method, on a 3x3, 4x4 or 5x5 grid
-         "sweep"   a dot glides edge to edge (the eye range), the head step, then the 5x5 grid
+         "sweep"   a dot glides edge to edge (the eye range), the head step, then the 4x4 grid
          "points"  still dots along a line instead of the moving dot, the head step,
-                   then the grid in random order
+                   then the 4x4 grid
+Every type runs its grid row by row, the same order for all, so the order is not one
+more difference between them when they are compared.
   model  "ridge"   a curve (squares + pairs, ridge) fitted on the raw features of the
                    dots: the Original model (core/gaze_model.py)
          "profile" the same curve, on eye numbers scaled by this user's own sweep +
@@ -40,7 +42,6 @@ class Method:
     kind: str                     # grid | sweep | points
     model: str                    # ridge | profile | line
     grid: int = 5                 # dots per side of the final grid
-    random_order: bool = False    # the grid in random order (the eye can't guess the next dot)
     about: str = ""               # one or two sentences for the page
     steps: tuple[str, ...] = ()   # what the user does, in order
 
@@ -64,21 +65,20 @@ METHODS = (
            about="The original method: 25 dots row by row, then a curve (squares and pairs, ridge) is fitted on "
                  "their raw features. The baseline every other method is compared with.",
            steps=(GRID + " 25 dots, about a minute.",)),
-    Method("sweep", "Sweep", "sweep", "profile", 5,
+    # ponytail: Sweep / Points / Line model use a 4x4 grid on this branch only (5x5 on their own branches)
+    Method("sweep", "Sweep", "sweep", "profile", 4,
            about="Three steps: a dot glides edge to edge while you follow it (your eye range), the head step (how "
-                 "the head shifts the eye numbers), then the 25 dots. The curve is fitted on eye numbers scaled by "
+                 "the head shifts the eye numbers), then 16 dots. The curve is fitted on eye numbers scaled by "
                  "your own range, so sessions from different seats land on the same scale.",
-           steps=("Follow the gliding dot with your eyes, head still: across, then down.", HEAD, GRID + " 25 dots.")),
-    Method("points", "Points", "points", "profile", 5, random_order=True,
+           steps=("Follow the gliding dot with your eyes, head still: across, then down.", HEAD, GRID + " 16 dots.")),
+    Method("points", "Points", "points", "profile", 4,
            about="Like Sweep, but with still dots along the line instead of a moving dot (the eye rests on each, so "
-                 "no frame is taken mid-movement), and the 25 dots in random order.",
-           steps=("Look at each dot along a line across, then down the middle: 14 dots.", HEAD,
-                  GRID + " 25 dots, in random order.")),
-    Method("line-model", "Line model", "points", "line", 5, random_order=True,
+                 "no frame is taken mid-movement), then 16 dots.",
+           steps=("Look at each dot along a line across, then down the middle: 14 dots.", HEAD, GRID + " 16 dots.")),
+    Method("line-model", "Line model", "points", "line", 4,
            about="The Points procedure, but the model is geometric: a 3D line from each eye through the screen "
                  "(the eyes converge at about 6 degrees), blended with the fitted line by a leave-one-dot-out check.",
-           steps=("Look at each dot along a line across, then down the middle: 14 dots.", HEAD,
-                  GRID + " 25 dots, in random order.")),
+           steps=("Look at each dot along a line across, then down the middle: 14 dots.", HEAD, GRID + " 16 dots.")),
 )
 METHOD_BY_ID = {m.id: m for m in METHODS}
 DEFAULT_METHOD = "original-5x5"

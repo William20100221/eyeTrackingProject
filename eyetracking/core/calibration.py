@@ -13,9 +13,10 @@ A calibration has three steps (ui/calibration_window.py draws them):
   2. HEAD   eyes stay on a centre dot while the user turns, nods, tilts
             and leans. The gaze doesn't move, so any change in the eye
             numbers is caused by the HEAD alone.
-  3. DOTS   the 25-dot grid in random order: the training data for the
-            gaze model. Random, so the eye can't anticipate the next dot
-            and start moving early (a fixed row-by-row order invites that).
+  3. DOTS   the dot grid: the training data for the gaze model. In the lab
+            it runs row by row for every type, so the order is the same for
+            all of them (random would stop the eye anticipating the next dot,
+            but then the types would differ in one more way).
 
 GazeProfile turns steps 1 + 2 into a correction applied to every frame:
 

@@ -82,6 +82,6 @@ for x in rec.dots:
 closing = sum(x.features[0] < 0 for part in (rec.sweep, rec.head, rec.dots) for x in part)
 print(f"3. calibration: {len(counts)} dots, fewest samples {min(counts.values())} "
       f"(need {cw.DOT_SAMPLES}); closing-lid frames saved: {closing}")
-assert len(counts) == 25 and min(counts.values()) >= cw.DOT_SAMPLES and closing == 0
+assert len(counts) == METHOD_BY_ID["sweep"].dots and min(counts.values()) >= cw.DOT_SAMPLES and closing == 0
 
 print("ok")

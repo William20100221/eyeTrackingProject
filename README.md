@@ -21,8 +21,8 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is sav
 | Method | What you do | Model |
 |---|---|---|
 | Original 3×3 / 4×4 / 5×5 | look at each dot, row by row | ridge curve on the raw features |
-| Sweep | follow a gliding dot across and down, the head step, then 25 dots | ridge curve on eye numbers scaled by your own range |
-| Points | 14 still dots along a line, the head step, 25 dots in random order | the same scaled curve |
+| Sweep | follow a gliding dot across and down, the head step, then 16 dots (4×4) | ridge curve on eye numbers scaled by your own range |
+| Points | 14 still dots along a line, the head step, 16 dots (4×4) | the same scaled curve |
 | Line model | the Points procedure | a 3D line from each eye through the screen, blended with the curve |
 
 Every method records the same 12 numbers per frame, so their files can be compared.

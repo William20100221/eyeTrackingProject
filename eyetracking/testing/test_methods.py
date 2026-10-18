@@ -3,7 +3,7 @@ Self-check for the methods (no webcam):  python -m eyetracking.testing.test_meth
 
 1. Every method's calibration window, run quickly on fake features, hands back the right
    recording: Original = dots only, on its own grid, row by row; Sweep = a moving-dot sweep
-   + head frames + the 25 dots; Points / Line model = 14 line dots + head + the 25 dots, shuffled
+   + head frames + the 4x4 dots; Points / Line model = 14 line dots + head + the 4x4 dots; every grid row by row
 2. train() fits each kind of model on a simulated person and predicts near the dots
 """
 import os
@@ -45,11 +45,12 @@ for m in METHODS:
     rec = run(m)
     dots = list(dict.fromkeys(targets(rec.dots)))                                 # in the order they came
     assert len(dots) == m.dots and set(dots) == set(cal.point_grid(m.grid)), (m.id, len(dots))
+    assert dots == cal.point_grid(m.grid), m.id                                     # every type: row by row
+    assert m.grid == (4 if m.kind != "grid" else m.grid), m.id                       # Sweep / Points / Line: 4x4
     if m.kind == "grid":
-        assert dots == cal.point_grid(m.grid) and rec.sweep == () and rec.head == (), m.id      # row by row, nothing else
+        assert rec.sweep == () and rec.head == (), m.id                             # the dots, nothing else
     else:
         assert rec.head and set(targets(rec.head)) == {(0.5, 0.5)}, m.id
-        assert (dots != cal.point_grid(5)) == m.random_order, m.id                   # shuffled only when the method says so
         if m.kind == "sweep":
             assert len(set(targets(rec.sweep))) > 50, m.id                          # a moving dot: a target per frame
         else:
