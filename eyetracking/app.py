@@ -774,6 +774,9 @@ def main() -> int:
                         help="force the AI; normally the app works it out from your key (or uses Ollama)")
     args, _ = parser.parse_known_args()
 
+    if sys.platform == "win32":               # the taskbar groups a script under python.exe (and its icon)
+        import ctypes                         # until the process says it is an app of its own
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("StudyAssistant.EyeTracking")
     qt_app = QApplication(sys.argv)
     qt_app.setQuitOnLastWindowClosed(False)   # the ball is the app: quit from its right-click menu
     font = QFont()
