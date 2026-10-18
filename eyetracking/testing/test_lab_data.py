@@ -8,6 +8,7 @@ Self-check (no webcam):  python -m eyetracking.testing.test_lab_data
    samples / the file (the original kept in the method's trash/); the Testing page lists the chosen method only
 3. Gaze checks per method (nearest dot of THAT method's grid), blink scores, older loose files moved to
    older-versions/
+4. Folders cut out come back empty; person mode puts the same tree under data/people/<name>/
 """
 import os
 import tempfile
@@ -29,8 +30,8 @@ from eyetracking.ui.calibration_window import CalibrationWindow
 qt = QApplication([])
 tmp = Path(tempfile.mkdtemp())
 cw.QSettings = lambda *_: QSettings(str(tmp / "settings.ini"), QSettings.IniFormat)   # never the user's settings
-storage.DATA_DIR = tmp                                                                 # never the real data/
-storage.CALIB_DIR, storage.GAZE_CHECK_DIR, storage.BLINK_DIR = tmp / "calibrations", tmp / "gaze_checks", tmp / "blink_scores"
+storage.BASE_DIR = tmp                                                                 # never the real data/
+storage.use_person("")                                                                 # straight under it
 
 
 def key(window, k):
@@ -129,4 +130,17 @@ shutil.rmtree(tmp / "gaze_checks" / "points")
 assert storage.ensure_layout() == [tmp / "gaze_checks" / "points"]
 path = storage.save_calibration(CalibrationRecording((), (), (sample(0.5, 0.5),)), "original-4x4")   # saving never needs the folder first
 assert path.parent == tmp / "calibrations" / "original-4x4"
+
+assert storage.person_name("  ../Ann <Lee>. ") == "Ann Lee" and storage.person_name(r"/\:*?") == ""
+assert storage.use_person("Ann Lee") == tmp / "people" / "Ann Lee" and storage.list_calibrations("original-4x4") == []
+storage.ensure_layout()
+ann = storage.save_calibration(CalibrationRecording((), (), (sample(0.5, 0.5),)), "original-4x4")
+assert ann.parent == tmp / "people" / "Ann Lee" / "calibrations" / "original-4x4", ann
+assert storage.save_gaze_check([(0, 0.5, 0.5)], "sweep").parent == tmp / "people" / "Ann Lee" / "gaze_checks" / "sweep"
+assert storage.set_calibration_enabled(ann, False).parent == tmp / "people" / "Ann Lee" / "calibrations" / "original-4x4" / "disabled"
+storage.use_person("Bo")
+assert storage.list_people() == ["Ann Lee"] and storage.list_disabled("original-4x4") == []    # Bo has no folder until made
+storage.ensure_layout()
+assert storage.list_people() == ["Ann Lee", "Bo"]
+assert storage.use_person("") == tmp and storage.list_calibrations("original-4x4") == [path]    # back to data/ itself
 print("lab data ok")

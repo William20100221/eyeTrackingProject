@@ -17,7 +17,8 @@ import eyetracking.ui.control_window as cw
 
 tmp = Path(tempfile.mkdtemp())
 cw.QSettings = lambda *_: QSettings(str(tmp / "settings.ini"), QSettings.IniFormat)
-storage.DATA_DIR = storage.CALIB_DIR = storage.GAZE_CHECK_DIR = storage.BLINK_DIR = tmp / "data"
+storage.BASE_DIR = tmp / "data"                                 # never the real data/
+storage.use_person("")                                          # every folder under it
 import eyetracking.app as appmod
 
 qt = QApplication([])

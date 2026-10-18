@@ -25,11 +25,12 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpre
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
                            QRegularExpressionValidator)
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
+import eyetracking.services.storage as storage
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_disabled,
                                           list_gaze_checks, method_of, remove_calibration, remove_samples,
@@ -40,6 +41,8 @@ DEFAULTS = {
     "seed": "#3D6CF6",
     "theme": "system",          # system | light | dark
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
+    "person_mode": False,       # on: data under data/people/<person>/; off: straight under data/
+    "person": "",
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 
@@ -55,7 +58,7 @@ I_MIN, I_MAX, I_RESTORE, I_CLOSE = "", "", "", ""
 I_CHECK, I_DISMISS, I_RESET, I_CHEVRON = "", "", "", ""
 I_THEME, I_PALETTE, I_BALL, I_LAYERS = "", "", "", ""
 I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
-I_EYE, I_CAMERA = "", ""   # View (eye), Camera
+I_EYE, I_CAMERA, I_PERSON = "", "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
 I_TESTING = "\uE9D9"   # Diagnostic
 I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
@@ -730,7 +733,8 @@ class TestingPage(QWidget):
         self.method_chips.button(METHODS.index(m)).setChecked(True)
         self.method_about.setText(m.about)
         self.method_steps.setText("\n".join(f"{i + 1}.  {s}" for i, s in enumerate(m.steps))
-                                  + f"\n\nSaved as data/calibrations/{m.id}/{m.id}_<date>_<time>.json")
+                                  + f"\n\nSaved as {storage.method_dir(m.id).relative_to(storage.BASE_DIR.parent).as_posix()}"
+                                    f"/{m.id}_<date>_<time>.json")
         self.lists_title.setText(f"Calibrations · {m.name}")
         self.refresh()
         if announce:
@@ -989,6 +993,18 @@ class SettingsWindow(QWidget):
         self.group("Camera", [
             self.row(I_CAMERA, "Webcam", "Used for eye tracking. Changes apply when you save", self.camera_btn),
         ])
+
+        self.person_switch = Switch("Person mode")
+        self.person_btn = button("", "assist")
+        self.person_menu = QMenu(self.person_btn)
+        self.person_menu.aboutToShow.connect(self._fill_person_menu)   # list the people when opened
+        self.person_btn.setMenu(self.person_menu)
+        self.group("Person mode", [
+            self.row(I_PERSON, "Person mode", "On: every file goes under data/people/<name>/, one folder per person. "
+                     "Off: straight under data/. Changes apply when you save", self.person_switch),
+            self.row(I_PERSON, "Person", "Whose calibrations, checks and blink scores these are. Each person's "
+                     "methods train on their own files only", self.person_btn),
+        ])
         self.content.addStretch(1)
 
         scroll = QScrollArea()
@@ -1096,13 +1112,16 @@ class SettingsWindow(QWidget):
 
     def load(self, values: dict):
         self.set_camera(values["camera"])
+        self.person_switch.set_checked_now(values["person_mode"])
+        self.set_person(values["person"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
         self.seed_before_sheet = values["seed"]
         self.set_seed(values["seed"])
 
     def save(self):
-        values = dict(seed=self.seed, theme=self.mode, camera=self.camera)
+        values = dict(seed=self.seed, theme=self.mode, camera=self.camera,
+                      person_mode=self.person_switch.isChecked(), person=self.person)
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)
@@ -1112,6 +1131,24 @@ class SettingsWindow(QWidget):
     def set_camera(self, name: str):
         self.camera = name
         self.camera_btn.setText(f"{name or 'Not chosen'}  {I_CHEVRON}")
+
+    def set_person(self, name: str):
+        self.person = name
+        self.person_btn.setText(f"{name or 'Not chosen'}  {I_CHEVRON}")
+
+    def _fill_person_menu(self):
+        self.person_menu.clear()
+        for name in storage.list_people():
+            self.person_menu.addAction(name, lambda n=name: self.set_person(n))
+        self.person_menu.addAction("Add a person…", self.add_person)
+
+    def add_person(self):
+        """A new name (its folder is made when you save); person mode turns on with it."""
+        text, ok = QInputDialog.getText(self, "Add a person", "Name (letters, digits, spaces, - and _):")
+        name = storage.person_name(text) if ok else ""
+        if name:
+            self.set_person(name)
+            self.person_switch.setChecked(True)
 
     def _fill_camera_menu(self):
         self.camera_menu.clear()

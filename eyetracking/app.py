@@ -36,7 +36,8 @@ from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
 from eyetracking.services.storage import (ensure_layout, load_all_calibrations, migrate_layout, save_blink_scores,
-                                          save_calibration)
+                                          save_calibration, use_person)
+from eyetracking.services import storage
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
@@ -61,12 +62,11 @@ class App(QObject):
         self.camera_users: set[str] = set()
         self.camera = settings["camera"]
         self.fullscreen: QWidget | None = None     # the calibration / check / blink page while it runs
-        migrate_layout()                           # files from before the lab go to older-versions/
-        ensure_layout()                            # folders cut out (another person's data) come back empty
         self.models: dict[str, TrainedModel] = {}  # one model per method, trained from its own folder
         self.samples_used: dict[str, int] = {}
-        for m in METHOD_BY_ID.values():
-            self._train(m)
+        self.person = None                         # whose data: set by _use_person, from the settings
+        self._use_person(settings)
+        migrate_layout()                           # files from before the lab go to older-versions/
         self.apply_settings({**settings, "camera": self.camera})
         self._retrain(quiet=True)
         self.control.show_last()
@@ -92,6 +92,7 @@ class App(QObject):
 
     def apply_settings(self, values: dict) -> None:
         """Start-up, and every time Save changes is pressed."""
+        self._use_person(values)
         if values["camera"] != self.camera:
             self.camera = values["camera"]
             if self.tracker is not None:          # in use right now: switch at once
@@ -99,6 +100,21 @@ class App(QObject):
                 self.tracker = None
                 if self._open_camera():
                     self.testing.say(f"Now using the camera: {self.camera}.")
+
+    def _use_person(self, values: dict) -> None:
+        """Person mode on: data under data/people/<name>/; off (or no name): straight under data/.
+        A change re-reads every method's files, so each model trains on that person's data only."""
+        person = values["person"] if values["person_mode"] else ""
+        if person == self.person:
+            return
+        self.person = person
+        root = use_person(person)
+        ensure_layout()                           # a new person / folders cut out: made empty
+        for m in METHOD_BY_ID.values():
+            self._train(m)
+        self.testing.set_method(self.testing.method_id, announce=False)   # lists + "Saved as" path
+        where = root.relative_to(storage.BASE_DIR.parent).as_posix()
+        self.testing.say(f"Saving for {person} in {where}/." if person else f"Saving straight under {where}/.")
 
     # The camera is on only while a window needs the gaze: a feature waits about a
     # second for it when it starts, and the camera light is off the rest of the time.

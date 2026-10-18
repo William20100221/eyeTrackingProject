@@ -1,7 +1,7 @@
 """
 What the lab writes to disk, and reads back in words.
 
-    data/
+    data/                                                   (person mode: data/people/<name>/, same tree inside)
       calibrations/<method>/<method>_<date>_<time>.json    what a method's model learns from
       calibrations/<method>/disabled/...                   kept, but turned off by the user
       calibrations/<method>/trash/...                      removed files, and the originals of edited ones
@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 import shutil
 import statistics
 from dataclasses import asdict
@@ -38,6 +39,7 @@ from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"                   # the date-time part of every file name
+BASE_DIR = DATA_DIR                         # data/ itself; use_person() moves the folders below
 CALIB_DIR = DATA_DIR / "calibrations"
 GAZE_CHECK_DIR = DATA_DIR / "gaze_checks"
 BLINK_DIR = DATA_DIR / "blink_scores"
@@ -59,6 +61,30 @@ def method_of(path: Path) -> str:
     if folder.name in ("disabled", "trash"):
         folder = folder.parent
     return folder.name
+
+
+# ---- person mode: each person's files in their own folder -----------------------
+def person_name(text: str) -> str:
+    """What a typed name becomes as a folder: letters, digits, spaces, - and _ only
+    (no "..", slashes or characters Windows refuses). "" = no usable name."""
+    return re.sub(r"[^\w \-]", "", text).strip(" .")
+
+
+def use_person(name: str) -> Path:
+    """'' = files straight under data/; a name = under data/people/<name>/ (the same
+    calibrations / gaze_checks / blink_scores tree inside). Returns the folder used now.
+    Every function below reads the folders at call time, so this switches them all."""
+    global DATA_DIR, CALIB_DIR, GAZE_CHECK_DIR, BLINK_DIR
+    name = person_name(name)
+    DATA_DIR = BASE_DIR / "people" / name if name else BASE_DIR
+    CALIB_DIR, GAZE_CHECK_DIR, BLINK_DIR = DATA_DIR / "calibrations", DATA_DIR / "gaze_checks", DATA_DIR / "blink_scores"
+    return DATA_DIR
+
+
+def list_people() -> list[str]:
+    """The people with a folder under data/people/, A to Z."""
+    folder = BASE_DIR / "people"
+    return sorted((p.name for p in folder.iterdir() if p.is_dir()), key=str.lower) if folder.is_dir() else []
 
 
 def ensure_layout() -> list[Path]:

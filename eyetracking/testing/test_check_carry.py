@@ -21,8 +21,8 @@ from eyetracking.core.calibration import point_grid
 
 tmp = Path(tempfile.mkdtemp())
 cw.QSettings = lambda *_: QSettings(str(tmp / "settings.ini"), QSettings.IniFormat)
-storage.DATA_DIR = storage.CALIB_DIR = storage.BLINK_DIR = tmp / "data"
-storage.GAZE_CHECK_DIR = tmp / "gaze_checks"
+storage.BASE_DIR = tmp                                          # never the real data/
+storage.use_person("")                                          # every folder under it
 import eyetracking.app as appmod
 
 qt = QApplication([])
