@@ -32,3 +32,6 @@ htmlcov/
 Thumbs.db
 desktop.ini
 .DS_Store
+self_test.txt
+installer/Output/
+crash.log

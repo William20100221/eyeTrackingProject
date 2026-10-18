@@ -14,3 +14,8 @@ dependencies = [
     "scikit-learn>=1.9.1",
     "winocr>=0.0.15",
 ]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+]

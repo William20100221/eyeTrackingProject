@@ -762,7 +762,12 @@ def main() -> int:
     parser.add_argument("--mouse", action="store_true", help="no camera: the mouse plays your eyes")
     parser.add_argument("--provider", choices=list(MODELS), default=None,
                         help="force the AI; normally the app works it out from your key (or uses Ollama)")
+    parser.add_argument("--self-test", action="store_true",
+                        help="check the model, packages and data folder, then exit (see eyetracking/self_test.py)")
     args, _ = parser.parse_known_args()
+    if args.self_test:
+        from eyetracking import self_test
+        return self_test.run()
 
     if sys.platform == "win32":               # the taskbar groups a script under python.exe (and its icon)
         import ctypes                         # until the process says it is an app of its own
