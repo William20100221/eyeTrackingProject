@@ -921,7 +921,8 @@ class TestingPage(QWidget):
         go.clicked.connect(lambda: self.command.emit("check"))
         many = button("Multiple model gaze check", "outlined")
         many.setToolTip("Every type this person has calibrations for, at once, on 36 rings (6×6): one file per type")
-        many.clicked.connect(lambda: self.command.emit("check-all"))
+        many.clicked.connect(lambda: self.pick_multi_counts() and self.command.emit("check-all"))
+        self.multi_counts: dict[str, int] = {}             # the popup's choice: type -> calibrations (app reads it)
         self.recordings_btn = button("", "assist")        # run every model over an earlier recording
         self.recordings_menu = QMenu(self.recordings_btn)
         self.recordings_menu.aboutToShow.connect(self._fill_recordings_menu)
@@ -944,7 +945,21 @@ class TestingPage(QWidget):
         self.recordings_menu.clear()
         for path in storage.list_recordings(storage.person_root(self.check_person)):
             self.recordings_menu.addAction(f"Run the models over {storage.recording_label(path)}",
-                                           lambda p=path: self.replay_requested.emit(str(p)))
+                                           lambda p=path: self.pick_multi_counts() and self.replay_requested.emit(str(p)))
+
+    def pick_multi_counts(self) -> bool:
+        """The popup before a multiple check (or a replay): which types, how many calibrations each.
+        False if there is nothing to pick or it was cancelled."""
+        root = storage.person_root(self.check_person)
+        available = {m: n for m in METHOD_BY_ID if (n := storage.usable_calibrations(m, root))}
+        if not available:
+            self.say(f"{self.check_person or 'No person'}: no usable calibration of any type yet. Calibrate first.")
+            return False
+        dlg = MultiCheckDialog(self.check_person, available, self.multi_counts, self.window())
+        if dlg.exec() != QDialog.Accepted or not dlg.chosen():
+            return False
+        self.multi_counts = {m: dlg.counts[m] if m in dlg.chosen() else 0 for m in available}   # 0: left out, remembered
+        return True
 
     def set_check_count(self, n: int):
         """Use the newest n calibrations (0 only when there's none: shown as None)."""
@@ -1544,6 +1559,67 @@ class SettingsWindow(QWidget):
 
 def is_dark(mode: str) -> bool:
     return mode == "dark" or (mode == "system" and QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
+
+
+class MultiCheckDialog(QDialog):
+    """Multiple model gaze check: which types take part, and how many of the person's calibrations
+    each one trains on (the newest first). `available`: type id -> usable calibrations; `last`:
+    the counts chosen before (0 = left out), remembered from the previous popup."""
+
+    def __init__(self, person: str, available: dict[str, int], last: dict[str, int] | None = None,
+                 parent: QWidget | None = None):
+        super().__init__(parent, Qt.Dialog | Qt.WindowCloseButtonHint)
+        self.setObjectName("root")
+        self.setAttribute(Qt.WA_StyledBackground)
+        self.setWindowTitle("Multiple model gaze check")
+        last = last or {}
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 20, 24, 20)
+        v.setSpacing(12)
+        v.addWidget(label("Which types, and how many calibrations each", "sheetTitle"))
+        hint = label(f"Every ticked type predicts from the same camera frames, trained on the newest N of "
+                     f"{person or 'No person'}'s calibrations. 36 rings (6×6), one file per type.", "sheetText")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        self.rows: dict[str, tuple[CheckButton, QPushButton]] = {}
+        self.counts: dict[str, int] = {}
+        for r, (m, most) in enumerate(available.items()):
+            chip = CheckButton(METHOD_BY_ID[m].name, "chip")
+            chip.setChecked(last.get(m, most) > 0)
+            pick = button("", "assist")
+            menu = QMenu(pick)
+            for n in range(1, most + 1):
+                menu.addAction(f"{n}{' (all)' if n == most else ''}", lambda n=n, m=m: self.set_count(m, n))
+            pick.setMenu(menu)
+            self.rows[m] = (chip, pick)
+            self.set_count(m, min(last.get(m) or most, most))
+            grid.addWidget(chip, r, 0)
+            grid.addWidget(label("calibrations", "rowsub"), r, 1)
+            grid.addWidget(pick, r, 2)
+        grid.setColumnStretch(3, 1)
+        v.addLayout(grid)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = button("Cancel", "text")
+        cancel.clicked.connect(self.reject)
+        ok = button("Start the gaze check", "filled")
+        ok.clicked.connect(self.accept)
+        actions.addWidget(cancel)
+        actions.addWidget(ok)
+        v.addLayout(actions)
+
+    def set_count(self, m: str, n: int):
+        self.counts[m] = n
+        chip, pick = self.rows[m]
+        most = len(pick.menu().actions())
+        pick.setText(f"{n}{' (all)' if n == most else ''}  {I_CHEVRON}")
+
+    def chosen(self) -> dict[str, int]:
+        """type id -> calibrations to use, for the ticked types only."""
+        return {m: n for m, n in self.counts.items() if self.rows[m][0].isChecked()}
 
 
 def pick_camera(names: list[str], current: str = "") -> str | None:

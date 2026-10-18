@@ -274,11 +274,12 @@ class App(QObject):
         self._open_fullscreen(window)
 
     def _models_for(self, root: Path, types: list[str] | None) -> tuple[dict, dict[str, int]]:
-        """A person's models of `types` (None: every type), each trained on their newest N
-        calibrations (N = the page's choice; as many as a type has). (models, calibrations used)."""
-        newest = self.testing.check_count or None
+        """A person's models: of `types`, each trained on the page's newest N; or, for None, the
+        types ticked in the multiple-check popup, each on the N chosen there. (models, calibrations used)."""
+        wanted = {m: self.testing.check_count or None for m in types} if types else \
+                 {m: n for m, n in self.testing.multi_counts.items() if n}
         models, counts = {}, {}
-        for m in types or list(METHOD_BY_ID):
+        for m, newest in wanted.items():
             recordings = load_all_calibrations(m, root)[:newest]
             if self.mouse:                               # no models in mouse mode: the mouse plays each type that has data
                 if recordings:

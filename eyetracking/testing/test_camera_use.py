@@ -124,7 +124,17 @@ from PySide6.QtWidgets import QPushButton
 next(b for b in page.findChildren(QPushButton) if b.text().endswith("Refresh")).click()
 assert page.check_most == 3 and page.check_count == 1            # ...until Refresh; the choice of 1 is kept
 
-# the multiple-model check: every type William has (one), 6x6 rings, no dot, from the same frames
+# the multiple-model check: the popup picks the types and how many calibrations each; 6x6 rings, no dot
+storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(4) for s in frames(t))), "original-4x4",
+                         tmp / "data" / "William" / "original-4x4" / "original-4x4_2026-10-18_120000.json")
+dlg = cw.MultiCheckDialog("William", {"original-3x3": 3, "original-4x4": 1})
+assert dlg.chosen() == {"original-3x3": 3, "original-4x4": 1}                   # all ticked, all calibrations
+dlg.set_count("original-3x3", 1)
+dlg.rows["original-4x4"][0].setChecked(False)                                   # 4x4 left out
+assert dlg.chosen() == {"original-3x3": 1} and dlg.rows["original-3x3"][1].text().startswith("1  ")
+again = cw.MultiCheckDialog("William", {"original-3x3": 3, "original-4x4": 1}, {"original-3x3": 1, "original-4x4": 0})
+assert again.chosen() == {"original-3x3": 1}                                     # remembered: the count and the tick
+page.multi_counts = {"original-3x3": 1, "original-4x4": 0}                       # as if the popup was answered so
 app.check_all()
 win = app.fullscreen
 assert win.names == ["original-3x3"] and win.grid == 6 and not win.show_dot and win.tag == "multi"
