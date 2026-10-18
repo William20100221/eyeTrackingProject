@@ -1,24 +1,30 @@
 """
 What the lab writes to disk, and reads back in words. By person, then by calibration type:
 
-    data/<person>/                                  person mode on (Settings > Person mode)
-    data/                                           person mode off: the same folders straight in data/
-      <method>/<method>_<date>_<time>.json          a calibration: what the method's model learns from
-      <method>/gaze-check_<method>_<date>_<time>.csv  a gaze check of that method's model
-      <method>/disabled/                            calibrations kept, but turned off by the user
-      <method>/trash/                               removed files, and the originals of edited ones
-      blink-test/blink-scores_<date>_<time>.csv     blink tests (they belong to no method)
+    data/<person>/                                    person mode on (Settings > Person mode)
+    data/                                             person mode off: the same folders straight in data/
+      <type>/<type>_<date>_<time>.json                a calibration: what the type's model learns from
+      <type>/gaze-check_<type>[_<n>-calibrations]_<date>_<time>.csv
+                                                      a gaze check of that type's model, trained on n calibrations
+      <type>/disabled/                                calibrations kept, but turned off by the user
+      <type>/trash/                                   removed files, and the originals of edited ones
+      blink-test/blink-scores_<date>_<time>.csv       blink tests (they belong to no type)
 
-<method> is a method id from core/methods.py (original-3x3, original-4x4,
-original-5x5, sweep, points, line-model), so a file name says which method made
-it and when. The other branches' folders in data/ (calibrations/, gaze_checks/,
-blink_scores/, history/) are never read or moved here. Every calibration file is in
-one format (FORMAT below), with the method and its grid size inside:
+<type> is a method id from core/methods.py: original-3x3, original-4x4, original-5x5,
+sweep, points, line-model, and the random twins random-3x3 ... random-line-model. So a
+file name says which type made it and when, and its folders say whose it is. Missing
+folders are made at start (ensure_layout): a person's folder can be cut out and moved
+away by hand. The other branches' folders in data/ (calibrations/, gaze_checks/,
+blink_scores/, history/) are never read or moved here, and can't be used as a person's name.
 
-    {"format": "gaze-calibration-v3", "method": "sweep", "grid": 5, "saved_at": ...,
+Every calibration file is in one format (FORMAT below), with its type and grid size inside:
+
+    {"format": "gaze-calibration-v3", "method": "sweep", "grid": 4, "saved_at": ...,
      "sweep": [{"features": [...12], "target_x": .., "target_y": ..}, ...],   step 1 (empty for Original)
      "head":  [...the same, at the centre dot...],                              step 2 (empty for Original)
      "dots":  [...the same, at the grid dots...]}
+
+A gaze check is a csv of index, x, y (where the model said), target_x, target_y (the lit ring).
 """
 from __future__ import annotations
 

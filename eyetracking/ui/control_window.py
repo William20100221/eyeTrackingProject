@@ -1,16 +1,28 @@
-"""The calibration lab's main window: direction 3 ("Toolbar") in PySide6.
+"""The calibration lab's main window (PySide6, Material 3 colours).
 
-Three tabs in the title bar: Testing, Calibration, Settings. The calibration,
-check and blink pages fill the screen with no title bar or buttons, then the
-window goes back to the Testing tab. pick_camera() is the small camera popup
-used at first start.
+Three tabs in the title bar: Testing, Calibration, Settings. The calibration, gaze-check
+and blink pages fill the screen with no title bar or buttons, then the window comes back
+where it was. The window reopens on the page, Testing entry and type it was left on.
 
-Every colour comes from one seed colour through the Material 3 Fidelity
-scheme, in light and dark. Pick a colour in the side sheet and the whole
-window re-themes live.
+    Testing     a sidebar of pages:
+      Calibrate   Calibration  the 12 types as chips, a row per collection (method_picker),
+                               what the chosen one does, where it saves, Start
+      Tests       Gaze check   person, type, how many calibrations (the newest N, None when
+                               there are none), Refresh, and a table comparing every type's
+                               error for that person
+                  Blink test   what the blink score is, Start
+      Data        Calibrations by person > type > date, in three columns (active /
+                               non-active / not usable); double-click to read one in words and
+                               remove samples, right-click to disable / enable / remove
+                  Gaze checks  by person > type > date, each sample in words
+                  Blink scores each test in words, with the cut-off it suggests
+                  Log          what happened this run, newest first
+    Settings    theme and colour, the webcam, person mode (on: data/<person>/, off: data/)
 
-    pip install PySide6 materialyoucolor
-    python settings_window.py
+pick_camera() is the small camera popup used at first start. Every colour comes from
+one seed colour through the Material 3 Fidelity scheme, in light and dark.
+
+    python -m eyetracking.ui.control_window      (the window alone, no camera or app)
 """
 import ctypes
 import sys

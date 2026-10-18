@@ -1,24 +1,25 @@
 """
-Calibration page, full screen (PySide6), for every method in core/methods.py:
+Calibration page, full screen (PySide6), for every type in core/methods.py:
 
-  Original 3x3 / 4x4 / 5x5   intro -> the dots, row by row -> done
+  Original 3x3 / 4x4 / 5x5   intro -> the dots -> done
   Sweep                      intro -> gliding dot (across, down) -> head step -> the 4x4 dots -> done
   Points, Line model         intro -> 14 still dots along a line -> head step -> the 4x4 dots -> done
-  Random <any of the above>   the same steps, the final dots in a new random order each time
-The "In order" types run their grid row by row (the same order for all of them).
+  Random twins               the same steps; the final dots shuffled anew each time
+The In-order types run their final grid row by row (the same order for all of them).
 
 Only drawing and timing live here. What each step means is in core/calibration.py
-(the dot bookkeeping, the sweep motion, the head step with its gauge, the
-head-still rule); the camera is in services/tracker.py; the app saves the
-recording through services/storage.py, in the method's own folder.
+(the dot bookkeeping, the sweep motion, the head step with its gauge, the head-still
+rule); the camera is in services/tracker.py; the app saves the recording through
+services/storage.py, in the person's folder of that type.
 
     python -m eyetracking.ui.calibration_window sweep           (your webcam)
-    python -m eyetracking.ui.calibration_window original-3x3 --mouse
+    python -m eyetracking.ui.calibration_window random-3x3 --mouse
 
-Space starts, Space again pauses / carries on (as often as you like), Esc
-leaves at any time (once samples are collected it asks first: they aren't saved). In the head-still steps a frame whose head turned more than
-3 degrees from the dot's first frame is left out. Screen positions are stored as
-fractions 0..1 (x across, y down), so they work on any screen size.
+Space starts, Space again pauses / carries on (as often as you like). Esc leaves at any
+time; once samples are collected it pauses and asks first, because nothing is saved if
+you leave (No is the default). In the head-still steps a frame whose head turned more
+than 3 degrees from the dot's first frame is left out. Screen positions are fractions
+0..1 (x across, y down), so they work on any screen size.
 """
 from __future__ import annotations
 

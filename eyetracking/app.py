@@ -1,24 +1,30 @@
 """
-The calibration lab: every calibration method, the tests, and their data, in one window.
+The calibration lab: every calibration method, the tests and their data, in one window,
+to find out which method gives the most accurate gaze model for each person.
 
     python main.py                 (the camera chosen in Settings; a popup asks on first start)
     python main.py --mouse         (no camera: the mouse plays the eyes; nothing is saved)
 
 The window (ui/control_window.py) has three tabs:
-    Testing      Calibration (pick a method, start it), the tests (gaze check, blink test),
-                 and the data (calibrations, gaze checks, blink scores, the log)
-    Calibration  starts the chosen method full screen
-    Settings     camera, theme
-The methods are in core/methods.py; each one keeps its own model, trained from
-its own folder: data/<person>/<method>/, or data/<method>/ with person mode off
-(services/storage.py).
+    Testing      Calibration: pick one of the 12 types (core/methods.py) and start it
+                 Gaze check: pick a person, a type and how many calibrations, start the check
+                 Blink test, and the data: calibrations, gaze checks, blink scores, the log
+    Calibration  starts the chosen type full screen
+    Settings     theme, camera, person mode (whose folder the calibrations go into)
+
+Each type keeps its own model, trained from its own folder: data/<person>/<type>/
+(data/<type>/ with person mode off; services/storage.py). The app trains every type's
+model for the person in use at start, after a calibration, and after any change on the
+Data pages. A gaze check trains its own model on demand, for the person and type picked
+on its page, from that person's newest N calibrations only.
 
 What talks to what:
-    camera -> tracker (services/tracker.py) -> features (core/features.py)
-      -> CalibrationWindow (one per method) -> recording -> quality check -> saved -> model trained
-      -> GazeWindow: the chosen method's model predicts where you look; Enter records samples
+    camera -> tracker (services/tracker.py) -> 12 features per frame (core/features.py)
+      -> CalibrationWindow(type) -> recording -> quality check -> saved -> models retrained
+      -> GazeWindow: the picked person's model of the picked type says where you look;
+         one of 16 rings (4x4) is lit, Enter records the point against it -> error per sample
       -> BlinkWindow: blink scores in six eye states
-The camera is on only while one of those windows runs.
+The camera is on only while one of those full-screen windows runs.
 """
 from __future__ import annotations
 

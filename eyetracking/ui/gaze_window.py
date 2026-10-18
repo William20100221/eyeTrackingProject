@@ -1,18 +1,18 @@
 """
-Live gaze demo: a dot on a full-screen window where the model thinks you look.
+The gaze check, full screen: a dot where the model thinks you look, and 16 test rings.
 
-    python -m eyetracking.ui.gaze_window sweep              (that method's calibrations, newest weighted most)
+    python -m eyetracking.ui.gaze_window sweep              (that type's calibrations, newest weighted most)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
-The faint rings are the 4x4 test rings (CHECK_GRID), the same for every calibration type so
-the types can be compared. One ring is lit: look at it and press Enter, which
-records where the model says you look and lights the next ring. The error of a
-sample is its distance to the lit ring. Samples are listed as "#index  x  y" on
-screen and saved in the method's folder on Esc; nothing is saved without one.
-Space pauses.
+The faint rings are the 4x4 test rings (CHECK_GRID in services/storage.py), the same for
+every calibration type so the types can be compared. One ring is lit: look at it and press
+Enter, which records where the model says you look and lights the next ring. A sample's
+error is its distance to the lit ring. Samples are listed as "#index  x  y  off" on screen
+and saved on Esc in the person's folder of that type (the file name says how many
+calibrations trained the model); nothing is saved without one. Space pauses.
 
-Like CalibrationWindow, this window does NOT know about the camera or the
-model: it calls `get_point()` every tick and draws whatever comes back.
+Like CalibrationWindow, this window does NOT know about the camera or the model: it
+calls `get_point()` every tick and draws whatever comes back.
 """
 from __future__ import annotations
 

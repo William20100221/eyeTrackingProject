@@ -26,15 +26,26 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is sav
 | Line model | the Points procedure | a 3D line from each eye through the screen, blended with the curve |
 | Random 3×3 / 4×4 / 5×5 / Sweep / Points / Line model | each type above, its final dots in a new random order each time | the same as its in-order type |
 
-Every method records the same 12 numbers per frame, so their files can be compared.
+Every type records the same 12 numbers per frame, so their files can be compared. Sweep, Points and
+Line model end on a 4×4 grid on this branch, the same 16 dots as Original 4×4.
 
 ## Testing tab
 
-- **Calibration:** pick a method, read what it does, start it (Space starts, Space pauses, Esc leaves).
-- **Gaze check:** a dot where the chosen method's model thinks you look, rings on its calibration dots; Enter records a sample.
+- **Calibration:** pick a type (two rows: *In order*, *Random order*), read what it does, start it.
+  Space starts, Space pauses / carries on, Esc leaves (it asks first once samples are collected:
+  they aren't saved).
+- **Gaze check:** pick a **person**, a **type** and how many of their calibrations to use (the newest
+  *N*; *None* when there are none). 16 rings (4×4), one lit at a time: look at it, press Enter. Each
+  sample's error is its distance to the lit ring. A table compares every type's latest and mean error
+  for that person; **Refresh** re-reads the data folder.
 - **Blink test:** your blink scores in six eye states, with the cut-off they suggest.
-- **Data:** the chosen method's calibrations (active / non-active / not usable, each readable in words, samples removable),
-  every gaze check, the blink scores, and a log of what happened.
+- **Data:** calibrations (by person > type > date; active / non-active / not usable; readable in words,
+  samples removable), gaze checks (by person > type > date), blink scores, and a log of this run.
+
+## Settings
+
+Theme and colour, the webcam, and **person mode**: on, every file goes under `data/<person>/`; off,
+straight under `data/`. The person in use is the one whose calibrations train the models.
 
 ## Where the data goes
 

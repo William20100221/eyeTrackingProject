@@ -1,20 +1,16 @@
 """
-The calibration methods the lab offers, and the gaze model each one trains.
+The calibration types the lab offers, and the gaze model each one trains.
 
-    METHODS                 every method, in the order the app lists them
+    METHODS                 every type, in the order the app lists them (12)
     METHOD_BY_ID["sweep"]   one by its id (the id is also its data folder and file prefix)
     train(method, recordings, screen) -> (TrainedModel | None, samples used)
 
-A method says how the calibration runs (kind) and what learns from it (model):
+A type says how the calibration runs (kind) and what learns from it (model):
 
   kind   "grid"    the dots only: the Original method, on a 3x3, 4x4 or 5x5 grid
          "sweep"   a dot glides edge to edge (the eye range), the head step, then the 4x4 grid
          "points"  still dots along a line instead of the moving dot, the head step,
                    then the 4x4 grid
-The "In order" collection runs its grid row by row, the same order for all, so the order
-is not one more difference between them. The "Random order" collection is every one of them again with
-the final dots shuffled (the eye can't anticipate the next dot), so each type vs its
-random twin measures what the order alone changes.
   model  "ridge"   a curve (squares + pairs, ridge) fitted on the raw features of the
                    dots: the Original model (core/gaze_model.py)
          "profile" the same curve, on eye numbers scaled by this user's own sweep +
@@ -22,8 +18,16 @@ random twin measures what the order alone changes.
          "line"    a 3D line from each eye through the screen (vergence 6 degrees),
                    blended with the fitted line (core/line_model.py)
 
-Every method records the same 12 features per frame (core/features.py), so the
-files of different methods can be compared, and every file carries its method.
+Two collections of six:
+  In order      Original 3x3 / 4x4 / 5x5, Sweep, Points, Line model: the final grid row by
+                row, the same order for all, so the order is not one more difference
+  Random order  a twin of each (randomised()): the same steps and model, the final grid
+                shuffled anew each time, so a type vs its twin measures what the order changes
+Sweep, Points and Line model end on 4x4 on this branch (5x5 on their own branches), so
+Original 4x4 and those three share the same 16 dot positions.
+
+Every type records the same 12 features per frame (core/features.py), so the files of
+different types can be compared, and every file carries its type and grid size.
 """
 from __future__ import annotations
 
