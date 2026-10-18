@@ -6,7 +6,7 @@ Checkpoint: live gaze predictions printed in the console (no window yet).
 
 Trains on the saved calibrations (newest weighted most), then for every camera frame:
 
-    camera -> MediaPipe -> 10 raw features -> GazeProfile.scale -> model -> (x, y)
+    camera -> MediaPipe -> 12 raw features -> the line model -> 1-euro filter -> (x, y)
 
 x and y are fractions of the screen (0 = left/top, 1 = right/bottom), the
 same as the calibration dots. Look at different parts of the screen and
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication
 
 from eyetracking.core.calibration import training_set
 from eyetracking.core.line_model import LineModel
+from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services.storage import load_all_calibrations, load_calibration
 from eyetracking.ui.gaze_window import screen_geometry
 from eyetracking.services.tracker import EyeTracker
@@ -37,7 +38,7 @@ def region(x: float, y: float) -> str:
 def main() -> None:
     # one file if given, otherwise every saved calibration, the newest weighted most
     recordings = [load_calibration(Path(sys.argv[1]))] if len(sys.argv) > 1 else load_all_calibrations()
-    samples, weights, _ = training_set(recordings, scaled=False)
+    samples, weights, _ = training_set(recordings)
     if not samples:
         print("No usable calibration yet: run calibrate first")
         return
@@ -45,6 +46,7 @@ def main() -> None:
     # the line model needs the screen's real size: Qt knows it (no window shown)
     _qt = QApplication.instance() or QApplication([])
     model = LineModel(screen_geometry()).fit(samples, weights)
+    smoother = GazeSmoother()               # the 1-euro filter on the live point, as in the app
     print(f"Trained on {len(samples)} samples. Look around the screen; Ctrl+C to stop.\n")
 
     with EyeTracker() as tracker:           # asks which camera, in the console
@@ -58,7 +60,7 @@ def main() -> None:
                     skipped += 1
                     point = None
                 else:
-                    point = model.predict(features)
+                    point = smoother.feed(model.predict(features))
 
                 now = time.perf_counter()
                 if now - last_print >= PRINT_EVERY_S:

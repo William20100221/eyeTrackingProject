@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid, training_set
 from eyetracking.core.line_model import LineModel, ScreenGeometry
+from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services.storage import load_all_calibrations, load_calibration, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
@@ -202,7 +203,7 @@ def main() -> int:
         # one file if given, otherwise every saved calibration, the newest weighted most
         files = [a for a in sys.argv[1:] if not a.startswith("--")]
         recordings = [load_calibration(Path(files[0]))] if files else load_all_calibrations()
-        samples, weights, _ = training_set(recordings, scaled=False)
+        samples, weights, _ = training_set(recordings)
         if not samples:
             print("No usable calibration yet: run calibrate first")
             return 1
@@ -210,11 +211,12 @@ def main() -> int:
         model = LineModel(screen_geometry()).fit(samples, weights)
         print(f"Trained on {len(samples)} samples (blend w = {model.w:.1f})")
         tracker = EyeTracker()             # asks which camera, in the console
+        smoother = GazeSmoother()          # the 1-euro filter on the live point, as in the app
 
         def get_point() -> tuple[float, float] | None:
-            # raw features -> the 3D line -> where it hits the screen
+            # raw features -> the 3D line -> where it hits the screen -> the filter
             features = tracker.read_features()
-            return None if features is None else model.predict(features)
+            return smoother.feed(None if features is None else model.predict(features))
 
     window = GazeWindow(get_point=get_point)
     window.showFullScreen()   # full screen, like calibration: same 0..1 -> pixels

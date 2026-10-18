@@ -5,7 +5,8 @@ Train on the saved calibrations and print how accurate the models are.
 
 Both models train on every calibration (the newest weighted most) and are
 scored on the NEWEST session's dots, each dot held out (leave-one-dot-out):
-    curve model   GazeProfile-scaled eye numbers -> poly + ridge (the old way)
+    ridge model   a straight line on the 6 eye features, the head turn taken out with
+                  the head step's matrix (core/gaze_model.py, core/head_correction.py)
     line model    the 3D line from the eyes, calibrated + blended (core/line_model.py)
 Also checks the 3D model itself: the angle between the two eyes' measured
 lines vs the vergence formula (core/vergence.py).
@@ -17,16 +18,14 @@ import numpy as np
 from PySide6.QtWidgets import QApplication
 
 from eyetracking.core.calibration import training_set
-from eyetracking.core.gaze_model import leave_one_dot_out
+from eyetracking.core.gaze_model import GazeModel, leave_one_dot_out
 from eyetracking.core.line_model import LineModel, eye_lines
 from eyetracking.services.storage import load_all_calibrations
 from eyetracking.ui.gaze_window import screen_geometry
 
 
 def main() -> None:
-    recordings = load_all_calibrations()
-    scaled, weights, _ = training_set(recordings)               # for the curve model
-    raw, _, _ = training_set(recordings, scaled=False)          # for the line model, same order
+    raw, weights, K = training_set(load_all_calibrations())     # raw dots; K = the newest head step's matrix
     if not raw:
         print("No usable calibration yet: run calibrate first")
         return
@@ -49,12 +48,12 @@ def main() -> None:
     print(f"angle between the two eye lines: measured {np.median(measured):.1f} deg (median), "
           f"vergence formula {np.mean(formula):.1f} deg")
 
-    curve = leave_one_dot_out(scaled, w, h, weights, test=scaled[:n])
+    ridge = leave_one_dot_out(raw, w, h, weights, test=raw[:n], make_model=lambda: GazeModel(K=K))
     line = leave_one_dot_out(raw, w, h, weights, test=raw[:n], make_model=lambda: LineModel(screen))
-    print("\nEach dot tested by a model that never saw it:   curve model | line model")
-    for dot in curve:
-        print(f"  dot ({dot[0]:.2f}, {dot[1]:.2f}): {curve[dot]:5.0f} px | {line[dot]:5.0f} px")
-    print(f"  average:            {sum(curve.values()) / len(curve):5.0f} px | "
+    print("\nEach dot tested by a model that never saw it:   ridge model | line model")
+    for dot in ridge:
+        print(f"  dot ({dot[0]:.2f}, {dot[1]:.2f}): {ridge[dot]:5.0f} px | {line[dot]:5.0f} px")
+    print(f"  average:            {sum(ridge.values()) / len(ridge):5.0f} px | "
           f"{sum(line.values()) / len(line):5.0f} px")
 
     full = LineModel(screen).fit(raw, weights)
