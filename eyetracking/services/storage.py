@@ -61,6 +61,18 @@ def method_of(path: Path) -> str:
     return folder.name
 
 
+def ensure_layout() -> list[Path]:
+    """Create every data folder that is missing (the whole data/ tree, or one method's
+    folder cut out to keep another person's files apart) and return the ones made.
+    Saving also creates its own folder, so a cut never breaks a save; this only makes
+    the empty skeleton visible again. Safe at every start."""
+    folders = [BLINK_DIR] + [d / m for m in METHOD_BY_ID for d in (CALIB_DIR, GAZE_CHECK_DIR)]
+    made = [f for f in folders if not f.is_dir()]
+    for f in made:
+        f.mkdir(parents=True)
+    return made
+
+
 def migrate_layout() -> int:
     """Files from before the lab (calibration_*.json loose in data/ or data/calibrations/,
     gaze_check_*.csv loose in data/ or data/gaze_checks/) are moved into an

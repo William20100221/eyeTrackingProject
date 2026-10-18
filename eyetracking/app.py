@@ -35,7 +35,8 @@ from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, train
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
-from eyetracking.services.storage import load_all_calibrations, migrate_layout, save_blink_scores, save_calibration
+from eyetracking.services.storage import (ensure_layout, load_all_calibrations, migrate_layout, save_blink_scores,
+                                          save_calibration)
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
@@ -61,6 +62,7 @@ class App(QObject):
         self.camera = settings["camera"]
         self.fullscreen: QWidget | None = None     # the calibration / check / blink page while it runs
         migrate_layout()                           # files from before the lab go to older-versions/
+        ensure_layout()                            # folders cut out (another person's data) come back empty
         self.models: dict[str, TrainedModel] = {}  # one model per method, trained from its own folder
         self.samples_used: dict[str, int] = {}
         for m in METHOD_BY_ID.values():

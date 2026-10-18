@@ -118,4 +118,15 @@ assert blink.name.startswith("blink-scores_20") and storage.load_blink_scores(bl
 words = storage.blink_score_lines(blink)
 assert "Closed eyes score at least 0.8" in words[-1] and "never pass 0.21" in words[-1] and "wink" in words[-1], words[-1]
 assert storage.trash_file(blink) == storage.BLINK_DIR / "trash" / blink.name and storage.list_blink_scores() == []
+
+# ---- 4. folders cut out (another person's data kept elsewhere) come back empty ----
+import shutil
+shutil.rmtree(tmp / "calibrations")                            # the whole calibrations folder cut away
+assert storage.list_calibrations("sweep") == [] and storage.list_disabled("sweep") == []   # listing a missing folder: nothing
+made = storage.ensure_layout()
+assert {f.name for f in made if f.parent == tmp / "calibrations"} == set(METHOD_BY_ID) and storage.ensure_layout() == []
+shutil.rmtree(tmp / "gaze_checks" / "points")
+assert storage.ensure_layout() == [tmp / "gaze_checks" / "points"]
+path = storage.save_calibration(CalibrationRecording((), (), (sample(0.5, 0.5),)), "original-4x4")   # saving never needs the folder first
+assert path.parent == tmp / "calibrations" / "original-4x4"
 print("lab data ok")
