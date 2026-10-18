@@ -314,7 +314,7 @@ def remove_calibration(path: Path) -> Path:
 
 
 # ---- gaze checks: one person's model of one calibration type, on the same rings -------
-CHECK_GRID = 5     # every type is checked on the 5x5 rings, one lit at a time: the same test for all
+CHECK_GRID = 4     # every type is checked on the 4x4 rings (16), one lit at a time: the same test for all
 Check = tuple[int, float, float, float, float]   # index, where the model said (x, y), the lit ring (x, y)
 
 

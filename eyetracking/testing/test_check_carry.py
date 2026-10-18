@@ -1,7 +1,7 @@
 """
 Self-check for the gaze check in the app (no webcam):  python -m eyetracking.testing.test_check_carry
 
-The check tests the type picked on its page, on the same 25 rings as every type; the
+The check tests the type picked on its page, on the same 16 rings (4x4) as every type; the
 samples recorded with Enter (with the lit ring) are saved on Esc into that type's
 folder, with the type in the file name, and the log says so.
 """
@@ -34,7 +34,7 @@ app = appmod.App(mouse=True)
 app.testing.set_check(method_id="original-3x3")
 app.check()
 win = app.fullscreen
-assert win._targets == point_grid(5) and win.method_id == "original-3x3"     # the same 25 rings for every type
+assert win._targets == point_grid(4) and win.method_id == "original-3x3"     # the same 16 rings for every type
 for _ in range(3):
     win._tick()
 QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))

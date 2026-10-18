@@ -811,7 +811,7 @@ class TestingPage(QWidget):
         v.setContentsMargins(24, 20, 24, 24)
         v.setSpacing(12)
         v.addWidget(label(f"{I_CHART}   Gaze check", "sheetTitle"))
-        lead = label("Test one person's model of one calibration type. Every type is tested on the same 25 rings, "
+        lead = label("Test one person's model of one calibration type. Every type is tested on the same 16 rings (4×4), "
                      "so their errors can be compared: which method is the most accurate for this person?", "lead")
         lead.setWordWrap(True)
         v.addWidget(lead)
@@ -851,7 +851,7 @@ class TestingPage(QWidget):
         v.addWidget(self.check_results)
         for s in ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, "
                   "and the next ring lights up. A sample's error is its distance to the lit ring.",
-                  "Do a full round of 25 for a fair number. Space pauses. Esc saves and leaves; the file goes in that "
+                  "Do a full round of 16 for a fair number. Space pauses. Esc saves and leaves; the file goes in that "
                   "person's folder of that calibration type."]:
             w = label(f"•   {s}", "sheetText")
             w.setWordWrap(True)

@@ -4,7 +4,7 @@ Live gaze demo: a dot on a full-screen window where the model thinks you look.
     python -m eyetracking.ui.gaze_window sweep              (that method's calibrations, newest weighted most)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
-The faint rings are the 5x5 test rings, the same for every calibration type so
+The faint rings are the 4x4 test rings (CHECK_GRID), the same for every calibration type so
 the types can be compared. One ring is lit: look at it and press Enter, which
 records where the model says you look and lights the next ring. The error of a
 sample is its distance to the lit ring. Samples are listed as "#index  x  y" on
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from eyetracking.core.calibration import point_grid
 from eyetracking.core.line_model import ScreenGeometry
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, train
-from eyetracking.services.storage import load_all_calibrations, save_gaze_check
+from eyetracking.services.storage import CHECK_GRID, load_all_calibrations, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
 TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
@@ -56,7 +56,7 @@ class GazeWindow(QWidget):
         self.calibrations: int | None = None   # how many calibrations trained the model: goes in the file name
         self._lit = 0                    # the ring to look at now: Enter records it and lights the next
         self.paused = False
-        self._targets = list(targets or point_grid())
+        self._targets = list(targets or point_grid(CHECK_GRID))
         self._point: tuple[float, float] | None = None   # last prediction, 0..1
         self._stale = True                                # no prediction this tick
         self.log: list[tuple[int, float, float, float, float]] = []   # (index, x, y, ring x, ring y), one per Enter

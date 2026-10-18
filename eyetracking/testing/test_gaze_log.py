@@ -34,9 +34,9 @@ key(window, Qt.Key.Key_Enter)                             # ...so sample 1 is (0
 window._tick()                                            # no Enter: nothing recorded
 window._tick()
 key(window, Qt.Key.Key_Return)                            # sample 2 at (0.5, 0.6)
-assert window.sample_lines() == ["#0000  x 0.100  y 0.200  off 0.158", "#0001  x 0.100  y 0.200  off 0.230",
-                                 "#0002  x 0.500  y 0.600  off 0.550"], window.sample_lines()   # off = from the lit ring
-assert window._lit == 3 and [r[3:] for r in window.log] == [(0.05, 0.05), (0.275, 0.05), (0.5, 0.05)]   # ring by ring
+assert window.sample_lines() == ["#0000  x 0.100  y 0.200  off 0.158", "#0001  x 0.100  y 0.200  off 0.292",
+                                 "#0002  x 0.500  y 0.600  off 0.570"], window.sample_lines()   # off = from the lit ring
+assert window._lit == 3 and [r[3:] for r in window.log] == [(0.05, 0.05), (0.35, 0.05), (0.65, 0.05)]   # 4x4 rings, one by one
 
 for _ in range(2):                                        # Space pauses, Space carries on
     key(window, Qt.Key.Key_Space)
