@@ -12,7 +12,7 @@ Ask an AI model about a text the user has partly read.
 Every function takes provider="claude" | "gemini" | "openai" | "ollama".
 Install only the one you use, and set that provider's API key:
     claude   uv add anthropic      ANTHROPIC_API_KEY   (keys start with sk-ant-)
-    gemini   uv add google-genai   GEMINI_API_KEY      (AIza...)
+    gemini   uv add google-genai   GEMINI_API_KEY      (AQ.... from AI Studio since 2026; older keys AIza...)
     openai   uv add openai         OPENAI_API_KEY      (sk-...)
     ollama   nothing to install: a free local AI from ollama.com, no key
 The app works the provider out from the key (provider_for_key), looks for a key
@@ -37,7 +37,8 @@ MODELS = {
 }
 OLLAMA_URL = "http://localhost:11434"   # Ollama's default address
 KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
-KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("sk-", "openai"))   # the longer one first
+# the longer one first; Gemini: AI Studio issues "AQ." auth keys now, "AIza" was the older format
+KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("AQ.", "gemini"), ("sk-", "openai"))
 
 
 PROVIDER_NAMES = {"claude": "Claude (Anthropic)", "gemini": "Gemini (Google)", "openai": "ChatGPT (OpenAI)",

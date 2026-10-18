@@ -1211,7 +1211,7 @@ class SettingsWindow(QWidget):
         mv.setContentsMargins(0, 0, 0, 0)
         mv.setSpacing(0)
         mv.addWidget(self.row(I_KEY, "Manage keys",
-                              "Paste a key from Claude (sk-ant-…), ChatGPT (sk-…) or Gemini (AIza…): it is filed under "
+                              "Paste a key from Claude (sk-ant-…), ChatGPT (sk-…) or Gemini (AQ.… or AIza…): it is filed under "
                               "its brand as Key 1, Key 2…, so the key itself is never shown, and stored encrypted for "
                               "your Windows login. Double-click a key to use it; right-click to pick its model, ask "
                               "for its models again, rename or remove it.", self.key, add))
@@ -1410,7 +1410,7 @@ class SettingsWindow(QWidget):
         key = text.strip()
         provider = provider_for_key(key)
         if provider is None:
-            self._note("That doesn't look like a Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…) key.")
+            self._note("That doesn't look like a Claude (sk-ant-…), Gemini (AQ.… or AIza…) or OpenAI (sk-…) key.")
             return None
         keys = self.stored_keys()
         same = next((k for k in keys if self.entry_secret(k) == key), None)
@@ -1802,7 +1802,7 @@ def pick_ai() -> str | None:
     v.setContentsMargins(24, 20, 24, 20)
     v.setSpacing(12)
     v.addWidget(label("Which AI should write your summaries?", "sheetTitle"))
-    hint = label("Paste a key from Claude (sk-ant-…), Gemini (AIza…) or OpenAI (sk-…): the app tells them apart "
+    hint = label("Paste a key from Claude (sk-ant-…), Gemini (AQ.… or AIza…) or OpenAI (sk-…): the app tells them apart "
                  "and remembers it (Settings > AI > Keys; add more there). No key? Install Ollama from ollama.com and start the app "
                  "again: it is free and runs on this PC.", "sheetText")
     hint.setWordWrap(True)
