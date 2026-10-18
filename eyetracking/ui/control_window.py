@@ -30,7 +30,7 @@ from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPai
                            QRegularExpressionValidator)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+                               QColorDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
@@ -49,9 +49,13 @@ DEFAULTS = {
     "show_ball": True,
     "ball_on_top": True,
     "hide_fullscreen": False,
+    "ball_look": "logo",        # logo | water | image: the floating ball's face
+    "ball_image": "",           # the user's picture, for "image"
+    "ball_ring": "",            # the thin ring around a still ball; "" = the theme colour
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
 }
+BALL_LOOKS = ["logo", "water", "image"]
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#F4511E", "#D32F2F", "#D81B60", "#7E57C2"]
 
 PAGE_OF_TAB = {0: 0, 1: 1, 3: 2}          # title-bar tab -> page in the stack (tab 2, Calibration, is full screen)
@@ -366,15 +370,16 @@ class Swatch(QAbstractButton):
 
 
 class ColorDot(QWidget):
-    def __init__(self):
+    def __init__(self, color=None):
         super().__init__()
+        self._color = color                  # a function giving the hex to show; None = the theme seed
         self.setFixedSize(20, 20)
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(QPen(QColor(0, 0, 0, 40), 1))
-        p.setBrush(QColor(self.window().seed))
+        p.setBrush(QColor(self._color() if self._color else self.window().seed))
         p.drawEllipse(QRectF(.5, .5, 19, 19))
 
 
@@ -1149,12 +1154,39 @@ class SettingsWindow(QWidget):
         self.switches = {k: Switch(t) for k, t in [("show_ball", "Show floating ball"),
                                                    ("ball_on_top", "Keep it above other windows"),
                                                    ("hide_fullscreen", "Hide during full-screen apps")]}
+        self.ball_look, self.ball_image, self.ball_ring = "logo", "", ""
+        looks = QWidget()
+        lk = QHBoxLayout(looks)
+        lk.setContentsMargins(0, 0, 0, 0)
+        lk.setSpacing(8)
+        self.look_group = QButtonGroup(self)
+        for i, text in enumerate(["Logo", "Water ball", "Image"]):
+            b = CheckButton(text, "chip")
+            lk.addWidget(b)
+            self.look_group.addButton(b, i)
+        self.look_group.idClicked.connect(lambda i: self.set_ball_look(BALL_LOOKS[i]))
+        self.image_name = label("", "rowsub")
+        self.image_btn = button("Choose image…", "assist")
+        self.image_btn.clicked.connect(self.choose_ball_image)
+        self.ring_dot = ColorDot(lambda: self.ball_ring or self.seed)
+        self.ring_hex = label("", "hex")
+        self.ring_hex.setMinimumWidth(62)
+        ring_pick = button("Change", "text")
+        ring_pick.clicked.connect(self.choose_ring)
+        ring_theme = button("Theme colour", "text")
+        ring_theme.clicked.connect(lambda: self.set_ball_ring(""))
         self.group("Floating ball", [
             self.row(I_BALL, "Show floating ball", "Opens the assistant from any app", self.switches["show_ball"]),
             self.row(I_LAYERS, "Keep it above other windows", "Turn off to let it hide behind full windows",
                      self.switches["ball_on_top"]),
             self.row(I_FULLSCREEN, "Hide during full-screen apps", "Games and videos stay clear",
                      self.switches["hide_fullscreen"]),
+            self.row(I_BALL, "Ball look", "The logo or your own image (still, inside a thin ring), or the moving "
+                     "water ball. Applies when you save", looks),
+            self.row(I_BALL, "Image", "Your picture for the still ball (png, jpg); it is cropped to a circle",
+                     self.image_name, self.image_btn),
+            self.row(I_PALETTE, "Ring colour", "The thin ring around the still ball", self.ring_dot, self.ring_hex,
+                     ring_pick, ring_theme),
         ])
 
         self.words = QSpinBox(minimum=50, maximum=500, singleStep=25, alignment=Qt.AlignRight)
@@ -1528,9 +1560,39 @@ class SettingsWindow(QWidget):
         self.chat.model_btn.setText(f"{I_SPARKLE}  {active['name']} · {model_label(active)}  {I_CHEVRON}" if active
                                     else f"{I_SPARKLE}  No AI yet  {I_CHEVRON}")
 
+    def set_ball_look(self, look: str):
+        self.ball_look = look
+        self.look_group.button(BALL_LOOKS.index(look)).setChecked(True)
+        self.image_btn.setEnabled(look == "image")
+
+    def set_ball_image(self, path: str):
+        self.ball_image = path
+        self.image_name.setText(Path(path).name if path else "No image yet: the logo is used")
+
+    def choose_ball_image(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the ball's image", self.ball_image or str(Path.home()),
+                                              "Images (*.png *.jpg *.jpeg *.bmp *.webp)")
+        if path:
+            self.set_ball_image(path)
+            self.set_ball_look("image")
+
+    def set_ball_ring(self, hex_: str):
+        """The ring's colour as #rrggbb, or "" for the theme colour."""
+        self.ball_ring = hex_
+        self.ring_hex.setText(hex_.upper() if hex_ else "Theme")
+        self.ring_dot.update()
+
+    def choose_ring(self):
+        colour = QColorDialog.getColor(QColor(self.ball_ring or self.seed), self, "Ring colour")
+        if colour.isValid():
+            self.set_ball_ring(colour.name())
+
     def load(self, values: dict):
         for k, sw in self.switches.items():
             sw.set_checked_now(values[k])
+        self.set_ball_look(values["ball_look"])
+        self.set_ball_image(values["ball_image"])
+        self.set_ball_ring(values["ball_ring"])
         self.set_camera(values["camera"])
         self.words.setValue(values["summary_words"])
         self.mode = values["theme"]
@@ -1541,7 +1603,7 @@ class SettingsWindow(QWidget):
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
         values.update(seed=self.seed, theme=self.mode, summary_words=self.words.value(),
-                      camera=self.camera)
+                      camera=self.camera, ball_look=self.ball_look, ball_image=self.ball_image, ball_ring=self.ball_ring)
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)
