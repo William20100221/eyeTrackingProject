@@ -54,7 +54,7 @@ from eyetracking.services.storage import (blink_score_lines, calibration_lines, 
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_disabled,
                                           remove_calibration, remove_samples,
                                           set_calibration_enabled, trash_file)
-from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS, partner
+from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS, partners
 
 DEFAULTS = {
     "seed": "#E5483B",          # the logo's red
@@ -891,11 +891,11 @@ class TestingPage(QWidget):
         reuse.addWidget(self.reuse_switch)
         reuse.addWidget(self.reuse_note, 1)
         v.addWidget(self.reuse_row)
-        self.share_row = QWidget()                       # Points <-> Line model: one recording saved as both
+        self.share_row = QWidget()                       # Sweep / Points / Line model: one recording saved as all
         share = QHBoxLayout(self.share_row)
         share.setContentsMargins(0, 0, 0, 0)
         share.setSpacing(12)
-        self.share_switch = Switch("Save it as both")
+        self.share_switch = Switch("Save it for all three")
         self.share_switch.set_checked_now(True)
         self.share_note = label("", "sheetText")
         self.share_note.setWordWrap(True)
@@ -929,17 +929,18 @@ class TestingPage(QWidget):
 
     @property
     def share_partner(self) -> bool:
-        """Points / Line model: save the calibration as the other type too."""
+        """Sweep / Points / Line model: save the calibration as the other two types too."""
         return self.share_switch.isChecked()
 
     def _update_reuse(self):
         m = METHOD_BY_ID[self.method_id]
-        twin = partner(m)
-        self.share_row.setVisible(twin is not None)
-        if twin is not None:
-            self.share_note.setText(f"{m.name} and {twin.name} run the same steps, so this calibration is saved as "
-                                    f"a {twin.name} calibration too: both models train on the same data. Off: "
-                                    f"{m.name} only.")
+        others = partners(m)
+        self.share_row.setVisible(bool(others))
+        if others:
+            names = " and ".join(o.name for o in others)
+            self.share_note.setText(f"{m.name}, {names} share the head step and the dots (the first step only checks "
+                                    f"that your eyes followed), so this calibration is saved as {names} too: all "
+                                    f"three models train on the same data. Calibrate once. Off: {m.name} only.")
         self.reuse_row.setVisible(m.kind != "grid")
         if m.kind == "grid":
             return
@@ -1198,11 +1199,11 @@ class TestingPage(QWidget):
             elif lst is self.disabled_list:
                 menu.addAction("Enable (train on it again)", lambda: self.set_enabled(paths, True))
             add_move_menu(menu, paths, lambda person: self._changed(move_all(paths, person)))
-            twins = {partner(METHOD_BY_ID[storage.method_of(p)]) if storage.method_of(p) in METHOD_BY_ID else None
-                     for p in paths}
-            if len(twins) == 1 and None not in twins:   # Points <-> Line model: train the other on the same data
-                twin = twins.pop()
-                menu.addAction(f"Copy to {twin.name} (the same data trains both)", lambda: self.copy_files(paths, twin.id))
+            kinds = {storage.method_of(p) for p in paths}
+            if len(kinds) == 1 and kinds <= METHOD_BY_ID.keys():   # Sweep / Points / Line model: the same data for all
+                for twin in partners(METHOD_BY_ID[kinds.pop()]):
+                    menu.addAction(f"Copy to {twin.name} (the same data trains both)",
+                                   lambda t=twin.id: self.copy_files(paths, t))
             menu.addAction(f"{I_DELETE}  Remove {count(paths, 'calibration')}", lambda: self.remove_files(paths))
         menu.exec(lst.mapToGlobal(pos))
 
@@ -1218,7 +1219,7 @@ class TestingPage(QWidget):
         self._changed(f"{'Enabled' if enabled else 'Disabled'} {count(paths, 'calibration')}.")
 
     def copy_files(self, paths: list[Path], method_id: str):
-        """Copy to > the same recordings as calibrations of the partner type (Points <-> Line model)."""
+        """Copy to > the same recordings as calibrations of a partner type (Sweep / Points / Line model)."""
         clash = []
         for p in paths:
             try:

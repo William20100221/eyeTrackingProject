@@ -202,8 +202,8 @@ def _load(path: Path) -> tuple[CalibrationRecording, int, str | None, str | None
 
 
 def copy_as(path: Path, method_id: str) -> Path:
-    """The same recording saved as another type's calibration (Points <-> Line model, which run the same
-    procedure), in the same person's folder, with the same date and time and "same_as" naming the
+    """The same recording saved as another type's calibration (Sweep / Points / Line model share theirs),
+    in the same person's folder, with the same date and time and "same_as" naming the
     original. Never overwrites: FileExistsError. Returns the new path."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)

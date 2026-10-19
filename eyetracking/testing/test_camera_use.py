@@ -171,10 +171,11 @@ app.testing.set_method("random-sweep")                                          
 assert not app.testing.reuse_switch.isEnabled() and "No Random 4×4" in app.testing.reuse_note.text()
 app.testing.set_method("original-3x3")
 assert not app.testing.reuse_row.isVisibleTo(app.testing) and not app.testing.share_row.isVisibleTo(app.testing)
-app.testing.set_method("points")                                                 # Points: saved as Line model too, by default
-assert app.testing.share_row.isVisibleTo(app.testing) and app.testing.share_partner and "Line model" in app.testing.share_note.text()
-app.testing.set_method("sweep")
-assert not app.testing.share_row.isVisibleTo(app.testing)
+app.testing.set_method("points")                                                 # Points: saved as Sweep and Line model too
+assert app.testing.share_row.isVisibleTo(app.testing) and app.testing.share_partner
+assert "saved as Sweep and Line model too" in app.testing.share_note.text(), app.testing.share_note.text()
+app.testing.set_method("random-sweep")
+assert "saved as Random Points and Random Line model too" in app.testing.share_note.text()
 
 fail = True                                                                    # a camera that can't open
 app.calibrate()
