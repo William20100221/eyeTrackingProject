@@ -36,6 +36,11 @@ N_FEATURES = 12            # how many numbers gaze_features() returns
 EYE = slice(0, 4)          # the eye part (ratios)
 HEAD = slice(4, 10)        # the head part (angles + position)
 IRIS_DOWN = slice(10, 12)  # iris height vs the corners, cm
+FEATURE_NAMES = ("right iris x (between the corners)", "left iris x (between the corners)",
+                 "right iris y (between the lids)", "left iris y (between the lids)",
+                 "head yaw (deg)", "head pitch (deg)", "head roll (deg)",
+                 "head x (cm)", "head y (cm)", "head z (cm)",
+                 "right iris down from the corners (cm)", "left iris down from the corners (cm)")
 
 
 def gaze_features(r: FrameResult) -> tuple[float, ...] | None:
