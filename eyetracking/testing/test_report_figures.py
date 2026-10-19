@@ -6,6 +6,7 @@ eye, core/line_model.features_for) and one synthetic gaze check (a multiple chec
 calibration) and a Sweep's head step. report_figures runs on it; every PNG and CSV must exist, the PNGs
 real ones; the smoothing figure's maths is checked on a made-up step (no video here).
 """
+import csv
 import os
 import tempfile
 from pathlib import Path
@@ -47,9 +48,13 @@ storage.save_gaze_check([(i, tx + rng.normal(0, .012), ty + rng.normal(0, .012),
 head = frames((0.5, 0.5), 120, spread=(8, 6, 3, 2, 2, 4))                      # a Sweep's head step, for k_matrix
 storage.save_calibration(CalibrationRecording(dots(3)[:30], tuple(head), ()), "sweep",
                          data / "Ann" / "sweep" / "sweep_2026-10-20_101000.json")
-assert report_figures.main([str(data), "--out", str(out)]) == 0
+# a blink test: open eyes with one blink (0.2 -> 0.85 for 3 frames), and the other states held
+blink = [("open", 33 * i, s, s) for i, s in enumerate([0.2] * 40 + [0.85] * 3 + [0.2] * 40)]
+blink += [(state, 33 * i, v, v) for state, v in (("down", 0.3), ("half", 0.55), ("closed", 0.9)) for i in range(30)]
+storage.save_blink_scores(blink, data / "Ann" / "blink-test")
+assert report_figures.main([str(data), "--out", str(out), "--person", "Ann"]) == 0
 names = ["multi_check", "one_vs_two", "across_vs_down", "ring_map", "versions", "feature_correlation",
-         "feature_subsets", "heat_25", "lodo", "k_matrix", "one_euro", "same_vs_next"]
+         "feature_subsets", "heat_25", "lodo", "k_matrix", "one_euro", "same_vs_next", "blink_timeline", "blink_states"]
 for n in names:
     assert (out / f"{n}.png").read_bytes()[:4] == b"\x89PNG", n
     assert (out / f"{n}.csv").exists() and (out / f"{n}.csv").stat().st_size > 0, n
@@ -74,4 +79,8 @@ traces = report_figures.smoothing_traces(ms, [(v, 0.5) for v in raw])
 settle = {n: report_figures.settling_ms(ms, [p[0] for p in v], 1000) for n, v in traces.items()}
 assert settle["raw"] < settle["moving average 30 %"] < 1000 and settle["1-euro"] < 1000, settle
 assert report_figures.settling_ms(ms, [0.5] * len(ms), 1000) is None                # it never moved
+regions = [r[4] for r in csv.reader((out / "blink_timeline.csv").open(encoding="utf-8"))][1:]
+assert "closed" in regions and "recovery" in regions and regions.index("recovery") > regions.index("closed"), regions
+states = (out / "blink_states.csv").read_text(encoding="utf-8")
+assert "eyes open,left,83," in states and "today's cut-off (BLINK_THRESHOLD)" in states, states
 print("report figures ok:", ", ".join(f"{n}.png/.csv" for n in names))

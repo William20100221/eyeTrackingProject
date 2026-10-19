@@ -43,6 +43,15 @@ the numbers it plots, the files it came from printed, and every number printed a
   same_vs_next       the multiple checks' median per type (same sitting) beside bench_train's mean error per type
                      over every pair of one person's calibrations (next sitting, bench_train.new_sitting_errors),
                      with the old 12-feature curve on the same pairs as a reference line
+  blink_timeline     one blink inside a blink test's open-eye states (the newest recording with one): both
+                     eyes' scores over 3 s, run through the tracker's own blink rules (EyeTracker.read_features
+                     fed the recorded scores; BLINK_ONSET_RISE, BLINK_RECOVERY_MS... imported): the open level,
+                     the onset line, the regions open / onset / closed / recovery shaded, and the frames where
+                     the gaze point is held
+  blink_states       every blink test's states as a box plot per eye, with the candidate cut-offs (today's
+                     BLINK_THRESHOLD, the highest open-eye score, the lowest closed one, their midpoint if
+                     there is a gap). Blink tests: each person's blink-test/, and data/blink_scores/ (the other
+                     branches' folder, the same columns) when no --person is given
 
 Calibration dots go through the quality check first (core/quality.check_recording), as training does.
 """
@@ -89,10 +98,11 @@ BLUE, RED, GREY = "#1E88E5", "#E5483B", "#9E9E9E"
 def collect(data: Path, person: str | None):
     """Of the folder: calibrations [(person, type, path, recording)], checks [(person, model id, path, rows)],
     head steps [(person, path, head samples)] (every special's, the old types' too; a copy saved under another
-    type counted once) and record-mode videos [(person, json path)]."""
+    type counted once), record-mode videos [(person, json path)] and blink tests [(person, csv path)]: each
+    person's blink-test/, and (for everyone) the other branches' data/blink_scores/, oldest first."""
     storage.BASE_DIR = data.resolve()
     storage.use_person("")
-    cals, checks, heads, videos, seen = [], [], [], [], set()
+    cals, checks, heads, videos, blinks, seen = [], [], [], [], [], set()
     for name, root in storage.person_roots():
         if person is not None and name != person:
             continue
@@ -107,6 +117,7 @@ def collect(data: Path, person: str | None):
                     seen.add(key)
                     heads.append((name, path, head))
         videos += [(name, p) for p in storage.list_recordings(root)]
+        blinks += [(name, p) for p in sorted((root / storage.BLINK).glob("blink*scores_*.csv"), key=storage.file_date)]
         for g in GRIDS:
             for path in storage.list_calibrations(g.id, root):
                 try:
@@ -122,7 +133,10 @@ def collect(data: Path, person: str | None):
                     continue
                 if rows:
                     checks.append((name, m, path, rows))
-    return cals, checks, heads, videos
+    if person is None:                 # the other branches' blink tests, the same columns (state, t_ms, left, right)
+        blinks += [("data/blink_scores", p) for p in sorted((storage.BASE_DIR / "blink_scores").glob("blink*scores_*.csv"),
+                                                               key=storage.file_date)]
+    return cals, checks, heads, videos, blinks
 
 
 # ---------------------------------------------------------------- writing
@@ -706,6 +720,138 @@ def same_vs_next(checks, data: Path, person, screen, out):
           multi_files + [str(p) for p in used])
 
 
+# ---------------------------------------------------------------- blinks
+REGIONS = (("open", "#FFFFFF"), ("onset", "#FFE0B2"), ("closed", "#EF9A9A"), ("recovery", "#C5CAE9"))
+
+
+def tracker_regions(rows):
+    """The recorded blink scores through the tracker's own blink rules (EyeTracker.read_features, fed frames
+    as test_blinks does: no camera), frame by frame: (t ms, left, right, region, the open level it compared
+    with, gaze point held?). Region from the tracker's state after the frame: closed (a full blink),
+    recovery (within BLINK_RECOVERY_MS of one), onset (the score rose more than BLINK_ONSET_RISE above the
+    open level, for up to BLINK_ONSET_MAX_MS), else open. Nothing of its logic is copied here."""
+    from eyetracking.core.models import FrameResult, HeadPose
+    from eyetracking.services.tracker import BLINK_RECOVERY_MS, EyeTracker
+    lm = np.random.default_rng(0).uniform(0.2, 0.8, (478, 3))      # landmarks only so features can be made
+    tracker = EyeTracker.__new__(EyeTracker)                       # ponytail: the tracker's private state, as test_blinks
+    tracker.face_found, tracker._open_level, tracker._onset_ms, tracker._blink_ms = False, None, None, None
+    out = []
+    for _, t, left, right in rows:
+        level = tracker._open_level
+        frame = FrameResult(int(t), True, HeadPose(0, 0, 0), float(left), float(right), lm)
+        tracker.read = lambda f=frame: f
+        held = tracker.read_features() is None
+        if tracker._blink_ms == t:
+            region = "closed"
+        elif tracker._blink_ms is not None and t - tracker._blink_ms < BLINK_RECOVERY_MS:
+            region = "recovery"
+        elif tracker._onset_ms is not None:
+            region = "onset"
+        else:
+            region = "open"
+        out.append((int(t), float(left), float(right), region, level if level is not None else max(left, right), held))
+    return out
+
+
+def blink_timeline(blinks, out):
+    """One blink in a blink test's open-eye states (the newest recording with one): the scores over 3 s around
+    it, the tracker's regions shaded, its open level and onset line, and when the gaze point is held."""
+    from eyetracking.core.analysis import BLINK_THRESHOLD
+    from eyetracking.core.blink_scores import NAMES, OPEN_STATES
+    from eyetracking.services.tracker import BLINK_ONSET_MAX_MS, BLINK_ONSET_RISE, BLINK_RECOVERY_MS
+    fig, ax = plt.subplots(figsize=(10, 4.6))
+    table, sources = [], []
+    for who, path in reversed(blinks):
+        rows = storage.load_blink_scores(path)
+        for state in OPEN_STATES:                       # natural blinks while the eyes are meant to be open
+            seq = [r for r in rows if r[0] == state]
+            frames = tracker_regions(seq)
+            closed = [f for f in frames if f[3] == "closed"]
+            if not closed:
+                continue
+            mid = closed[0][0]
+            win = [f for f in frames if mid - 1500 <= f[0] <= mid + 1500]
+            t = [(f[0] - mid) / 1000 for f in win]
+            for (f, x0), x1 in zip(zip(win, t), t[1:] + [t[-1] + 0.033]):
+                ax.axvspan(x0, x1, color=dict(REGIONS)[f[3]], lw=0)
+            ax.plot(t, [f[1] for f in win], color=BLUE, lw=1.4, label="left eye score")
+            ax.plot(t, [f[2] for f in win], color=RED, lw=1.4, label="right eye score")
+            ax.plot(t, [f[4] for f in win], color="black", lw=1, label="open level (the tracker's)")
+            ax.plot(t, [f[4] + BLINK_ONSET_RISE for f in win], color="black", lw=1, ls="--",
+                    label=f"onset: open level + {BLINK_ONSET_RISE} (BLINK_ONSET_RISE)")
+            ax.axhline(BLINK_THRESHOLD, color=GREY, lw=1, ls=":", label=f"closed: both eyes > {BLINK_THRESHOLD}")
+            held = [x for f, x in zip(win, t) if f[5]]
+            ax.scatter(held, [-0.06] * len(held), marker="s", s=8, color="black", label="gaze point held (frame skipped)")
+            for name, colour in REGIONS[1:]:
+                ax.bar(0, 0, color=colour, label=f"{name}" + {"onset": f" (up to {BLINK_ONSET_MAX_MS} ms)",
+                                                              "recovery": f" ({BLINK_RECOVERY_MS} ms)"}.get(name, ""))
+            ax.set_ylim(-0.1, 1.05)
+            ax.set_xlabel("seconds from the first closed frame")
+            ax.set_ylabel("blink score (0 open, 1 shut)")
+            ax.legend(fontsize=7, loc="upper left", ncol=2)
+            ax.set_title(f"A blink during \"{NAMES[state]}\" ({who}: {path.name}), through the tracker's blink rules "
+                         "(services/tracker.py)", fontsize=9)
+            table = [(f[0] - mid, f[1], f[2], f[4], f[3], "held" if f[5] else "live") for f in win]
+            sources.append(str(path))
+            break
+        if sources:
+            break
+    if not sources:
+        empty(ax, "no blink-test recording with a blink while the eyes were meant to be open")
+    write(out, "blink_timeline", fig, ["ms_from_blink", "left", "right", "open_level", "region", "gaze_point"],
+          table, sources)
+
+
+def blink_states(blinks, out):
+    """Every blink test's states as box plots of each eye's score, with the candidate cut-offs: today's 0.5,
+    the highest open-eye score (95th percentile of open / looking down / half closed), the lowest closed
+    score (5th percentile) and the midpoint between them when there is a gap."""
+    from eyetracking.core.analysis import BLINK_THRESHOLD
+    from eyetracking.core.blink_scores import NAMES, OPEN_STATES, STATES, summary
+    rows = [r for _, p in blinks for r in storage.load_blink_scores(p)]
+    fig, ax = plt.subplots(figsize=(11, 5))
+    table = []
+    states = [s for s, _ in STATES if any(r[0] == s for r in rows)]
+    if states:
+        data, pos, colours = [], [], []
+        for i, s in enumerate(states):
+            for k, (eye, colour) in enumerate((("left", BLUE), ("right", RED))):
+                v = [r[2 + k] for r in rows if r[0] == s]
+                data.append(v)
+                pos.append(i * 3 + k)
+                colours.append(colour)
+                q = np.percentile(v, [0, 5, 50, 95, 100])
+                table.append((NAMES[s], eye, len(v), *(float(x) for x in q)))
+        box = ax.boxplot(data, positions=pos, widths=0.8, patch_artist=True, showfliers=True,
+                         flierprops=dict(markersize=2, alpha=0.4))
+        for patch, colour in zip(box["boxes"], colours):
+            patch.set_facecolor(colour)
+            patch.set_alpha(0.5)
+        ax.set_xticks([i * 3 + 0.5 for i in range(len(states))], [NAMES[s] for s in states])
+        s = summary(rows)
+        opens = [s[k][eye][2] for k in OPEN_STATES if k in s for eye in ("left", "right")]
+        cuts = [(BLINK_THRESHOLD, "today's cut-off (BLINK_THRESHOLD)", "black", "-")]
+        if opens:
+            cuts.append((max(opens), "highest open-eye score (95th pct)", BLUE, "--"))
+        if "closed" in s:
+            cuts.append((min(s["closed"]["left"][0], s["closed"]["right"][0]), "lowest closed score (5th pct)", RED, "--"))
+        if len(cuts) == 3 and cuts[2][0] > cuts[1][0]:
+            cuts.append(((cuts[1][0] + cuts[2][0]) / 2, "midpoint of the gap", GREY, ":"))
+        for value, name, colour, style in cuts:
+            ax.axhline(value, color=colour, ls=style, lw=1, label=f"{name}: {value:.2f}")
+        ax.plot([], [], color=BLUE, lw=6, alpha=0.5, label="left eye")
+        ax.plot([], [], color=RED, lw=6, alpha=0.5, label="right eye")
+        ax.legend(fontsize=7, loc="upper left")
+        ax.set_ylabel("blink score (0 open, 1 shut)")
+        ax.set_ylim(-0.03, 1.03)
+        ax.set_title(f"Blink scores per eye state ({len(blinks)} blink test{'s' if len(blinks) != 1 else ''}, "
+                     f"{len(rows)} frames): where a cut-off would have to go", fontsize=9)
+        table += [("cut-off", name, None, value, None, None, None, None) for value, name, _, _ in cuts]
+    else:
+        empty(ax, "no blink-test recording")
+    write(out, "blink_states", fig, ["state", "eye", "frames", "min", "p5", "median", "p95", "max"], table,
+          [str(p) for _, p in blinks])
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="The report's figures, from the data folder")
     parser.add_argument("data", type=Path)
@@ -714,7 +860,7 @@ def main(argv=None) -> int:
     parser.add_argument("--screen", default="1440x960", help="the screen the checks were made on, in px")
     args = parser.parse_args(argv)
     screen = tuple(int(v) for v in args.screen.lower().split("x"))
-    cals, checks, heads, videos = collect(args.data, args.person)
+    cals, checks, heads, videos, blinks = collect(args.data, args.person)
     print(f"{len(cals)} calibrations, {len(checks)} gaze checks, {len(heads)} head steps, {len(videos)} gaze videos "
           f"under {args.data.resolve()}" + (f" ({args.person or 'no person'})" if args.person is not None else ""))
     multi_check(checks, screen, args.out)
@@ -729,6 +875,8 @@ def main(argv=None) -> int:
     k_matrix(heads, args.out)
     one_euro(videos, cals, screen, args.out)
     same_vs_next(checks, args.data, args.person, screen, args.out)
+    blink_timeline(blinks, args.out)
+    blink_states(blinks, args.out)
     return 0
 
 
