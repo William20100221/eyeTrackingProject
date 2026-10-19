@@ -680,6 +680,28 @@ def method_picker(group: QButtonGroup) -> QWidget:
     return box
 
 
+def results_table(results, chosen: str, colors: tuple[str, str]) -> str:
+    """The gaze-check comparison as rich text: per type its calibrations, checks, latest and mean error,
+    a bar for the mean (the worst so far the longest) and, once two or more types have been checked,
+    the lowest mean marked in colors[0] (the others' bars in colors[1]): which method is the most
+    accurate for this person, at a glance."""
+    pct = lambda e: "–" if e is None else f"{e:.1%}"
+    means = {m: mean for m, _, n, _, mean in results if n and mean is not None}
+    best = min(means, key=means.get) if len(means) >= 2 else None
+    worst = max(means.values(), default=0) or 1
+    rows = []
+    for m, cal, n, last, mean in results:
+        name = f"<b>{METHOD_BY_ID[m].name}</b>" if m == chosen else METHOD_BY_ID[m].name
+        tag = f"&nbsp; <span style='color:{colors[0]}'><b>lowest</b></span>" if m == best else ""
+        bar = (f"<table cellspacing=0 cellpadding=0><tr><td bgcolor='{colors[0] if m == best else colors[1]}' "
+               f"width={max(3, round(120 * mean / worst))} style='font-size:6px'>&nbsp;</td></tr></table>"
+               if m in means else "")
+        rows.append(f"<tr><td>{name}{tag}</td><td align=right>{cal}</td><td align=right>{n}</td>"
+                    f"<td align=right>{pct(last)}</td><td align=right>{pct(mean)}</td><td valign=middle>{bar}</td></tr>")
+    return ("<table cellspacing=0 cellpadding=4><tr><th align=left>Calibration type</th><th>Calibrations</th>"
+            "<th>Gaze checks</th><th>Latest error</th><th>Mean error</th><th></th></tr>" + "".join(rows) + "</table>")
+
+
 def side_list(on_open) -> QListWidget:
     """A list of dated files; double-click (or Enter) calls on_open(path). Ctrl / Shift-click picks several."""
     lst = QListWidget(objectName="sideList")
@@ -902,6 +924,8 @@ class TestingPage(QWidget):
         self.main = QStackedWidget()
         self.main.addWidget(self._calibrate_page())
         self.check_person = ""                   # whose model the check tests (the app sets the person in use)
+        self.results: list = []                  # storage.method_results of that person: the comparison table
+        self.bar_colors = (DEFAULTS["seed"], mix(DEFAULTS["seed"], "#FFFFFF", .35))   # (lowest, others): apply_theme
         self.check_method = method_id                                     # ...and which calibration type
         check = QScrollArea()                     # nine types + the table: taller than a small window
         check.setWidget(self._check_page())
@@ -1131,17 +1155,6 @@ class TestingPage(QWidget):
         v.setContentsMargins(24, 20, 24, 24)
         v.setSpacing(12)
         v.addWidget(label(f"{I_CHART}   Gaze check", "sheetTitle"))
-        mode = QHBoxLayout()
-        mode.setSpacing(12)
-        self.record_switch = Switch("Record mode")      # off at every start: a video of your face is not made by accident
-        mode.addWidget(self.record_switch)
-        note = label("Record mode: the webcam is recorded instead of predicting live, with the moment of each "
-                     "Enter. Afterwards the models are run over the recording as if they had been live, and any "
-                     "model (even one made later) can be run over it from Recordings. The video of your face is "
-                     "kept in the person's gaze-videos folder; delete it any time.", "sheetText")
-        note.setWordWrap(True)
-        mode.addWidget(note, 1)
-        v.addLayout(mode)
         lead = label("Test one person's model of one calibration type on 16 rings (4×4), or every type at once on "
                      "36 (6×6): the same rings for all, so the errors can be compared. Which method is the most "
                      "accurate for this person?", "lead")
@@ -1178,19 +1191,7 @@ class TestingPage(QWidget):
         fresh.clicked.connect(self.refresh)
         use.addWidget(fresh)
         v.addLayout(use)
-        self.check_results = label("", "sheetText")              # the comparison: every type, this person
-        self.check_results.setTextFormat(Qt.RichText)
-        v.addWidget(self.check_results)
-        for s in ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, "
-                  "and the next ring lights up. A sample's error is its distance to the lit ring.",
-                  "Multiple model gaze check: every type this person has calibrations for, each trained on the newest "
-                  "N above (as many as it has), all predicting from the same camera frames: 36 rings (6×6), no dot, "
-                  "one file per type. One sitting, the fairest comparison.",
-                  "Do a full round (16, or 36) for a fair number. Space pauses. Esc saves and leaves; the files go in "
-                  "that person's folder of each calibration type."]:
-            w = label(f"•   {s}", "sheetText")
-            w.setWordWrap(True)
-            v.addWidget(w)
+        # the start buttons straight after the choices (below the table they were out of view)
         go = button("Start the gaze check", "filled")
         go.clicked.connect(lambda: self.command.emit("check"))
         many = button("Multiple model gaze check", "outlined")
@@ -1206,8 +1207,38 @@ class TestingPage(QWidget):
         for b in (go, many, self.recordings_btn):
             row.addWidget(b)
         row.addStretch(1)
-        v.addSpacing(8)
+        v.addSpacing(4)
         v.addLayout(row)
+        mode = QHBoxLayout()                               # an option of the start: next to it
+        mode.setSpacing(12)
+        self.record_switch = Switch("Record mode")      # off at every start: a video of your face is not made by accident
+        mode.addWidget(self.record_switch)
+        note = label("Record mode: the webcam is recorded with the moment of each Enter, and the models run over "
+                     "it afterwards as if live (any model, even one made later: Recordings). The video of your "
+                     "face stays in the person's gaze-videos folder; delete it any time.", "sheetText")
+        note.setWordWrap(True)
+        mode.addWidget(note, 1)
+        v.addLayout(mode)
+        v.addSpacing(8)
+        v.addWidget(label("How each type did", "rowtitle"))
+        self.check_results = label("", "sheetText")              # the comparison: every type, this person
+        self.check_results.setTextFormat(Qt.RichText)
+        v.addWidget(self.check_results)
+        note = label("Error: the mean distance from where the model said to the lit ring, as a share of the "
+                     "screen. Lower is better; with a few checks only, a difference of a few points may be chance.",
+                     "sheetText")
+        note.setWordWrap(True)                                   # (in the table's label it set the page's width)
+        v.addWidget(note)
+        for s in ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, "
+                  "and the next ring lights up. A sample's error is its distance to the lit ring.",
+                  "Multiple model gaze check: every type this person has calibrations for, each trained on the newest "
+                  "N above (as many as it has), all predicting from the same camera frames: 36 rings (6×6), no dot, "
+                  "one file per type. One sitting, the fairest comparison.",
+                  "Do a full round (16, or 36) for a fair number. Space pauses. Esc saves and leaves; the files go in "
+                  "that person's folder of each calibration type."]:
+            w = label(f"•   {s}", "sheetText")
+            w.setWordWrap(True)
+            v.addWidget(w)
         v.addStretch(1)
         return page
 
@@ -1268,19 +1299,14 @@ class TestingPage(QWidget):
         self.check_count_note.setText(f"of {most}, the newest first" if most else "no usable calibration of this type yet")
         self.check_person_btn.setText(f"{self.check_person or 'No person (data/)'}  {I_CHEVRON}")
         self.check_chips.button([m.id for m in METHODS].index(self.check_method)).setChecked(True)
-        pct = lambda e: "–" if e is None else f"{e:.1%}"
-        rows = "".join(
-            f"<tr><td>{'<b>' if m == self.check_method else ''}{METHOD_BY_ID[m].name}</td><td align=right>{cal}</td>"
-            f"<td align=right>{n}</td><td align=right>{pct(last)}</td><td align=right>{pct(mean)}</td></tr>"
-            for m, cal, n, last, mean in storage.method_results(storage.person_root(self.check_person)))
-        self.check_results.setText(
-            "<table cellspacing=0 cellpadding=4><tr><th align=left>Calibration type</th><th>Calibrations</th>"
-            f"<th>Gaze checks</th><th>Latest error</th><th>Mean error</th></tr>{rows}</table>"
-            "<br>Error: the mean distance from where the model said to the lit ring, as a share of the screen. "
-            "Lower is better.")
+        self.results = storage.method_results(storage.person_root(self.check_person))
+        self.show_results()
         n = len(storage.list_recordings(storage.person_root(self.check_person)))
         self.recordings_btn.setText(f"Recordings ({n})  {I_CHEVRON}" if n else "No recordings")
         self.recordings_btn.setEnabled(n > 0)
+
+    def show_results(self):
+        self.check_results.setText(results_table(self.results, self.check_method, self.bar_colors))
 
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
         """An instruction page: what the test does, then the button that starts it."""
@@ -1856,6 +1882,8 @@ class SettingsWindow(QWidget):
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
         for b in self.findChildren(SpinButton):
             b.set_color(c["primary"] if b.property("kind") == "text" else c["onSurface"])
+        self.testing.bar_colors = (c["primary"], mix(c["primary"], c["surface"], .35))
+        self.testing.show_results()                  # the comparison's bars in the theme colours
         self.busy.color, self.busy.track = QColor(c["primary"]), QColor(c["primary"])
         self.busy.track.setAlphaF(.2)                # the bar's track: the same colour, faint
         self._dwm(34, int(c["outlineVariant"][5:7] + c["outlineVariant"][3:5] + c["outlineVariant"][1:3], 16))

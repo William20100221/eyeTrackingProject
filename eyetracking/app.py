@@ -31,7 +31,8 @@ What talks to what:
       Sweep, Points and Line model share every recording (one calibration is saved as all three)
       -> ReadingWindow: the sample text, a paragraph read once the gaze stayed on it long enough
       -> BlinkWindow: blink scores in six eye states
-The camera is on only while one of those full-screen windows runs. Slow work (the camera opening,
+The camera is on only while one of those full-screen windows runs, read on a thread of its own
+(FrameFeed): the windows tick at the screen's pace, never waiting for a frame. Slow work (the camera opening,
 training, checking and saving a calibration, a replay) runs on a worker thread while a thin bar
 runs under the title bar (App._busy), so the window never stops answering.
 """
@@ -49,15 +50,15 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.blink_scores import advice as blink_advice
 from eyetracking.core.calibration import GazeProfile
-from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, live_clock, partners, train
-from eyetracking.core.models import CalibrationRecording
+from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, partners, train
+from eyetracking.core.models import NO_FRAME, CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
 from eyetracking.services.recording import Recorder, replay
 from eyetracking.services.storage import (ensure_layout, load_calibration, save_blink_scores,
                                           save_calibration, save_gaze_check, use_person)
 from eyetracking.services import storage
-from eyetracking.services.tracker import EyeTracker
+from eyetracking.services.tracker import EyeTracker, FrameFeed
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
 from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, busy, pick_camera, run_busy
@@ -99,6 +100,7 @@ class App(QObject):
         self.tracker: EyeTracker | None = None     # opened by _use_camera(), only while a window needs the gaze
         self._working = False                      # slow work running (App._busy): a second start meanwhile is ignored
         self._closing: threading.Thread | None = None   # the last camera, closing on its own thread
+        self.feed: FrameFeed | None = None         # the camera read on its own thread, while a window runs
         self.camera_users: set[str] = set()
         self.camera = settings["camera"]
         self.fullscreen: QWidget | None = None     # the calibration / check / blink page while it runs
@@ -164,6 +166,7 @@ class App(QObject):
         if values["camera"] != self.camera:
             self.camera = values["camera"]
             if self.tracker is not None:          # in use right now: switch at once
+                self._stop_feed()
                 self.tracker.close()
                 self.tracker = None
                 if self._open_camera():
@@ -201,9 +204,39 @@ class App(QObject):
             # camera light off, MediaPipe freed: on its own thread (a driver's release can block for a second);
             # the next open waits for it (open_tracker), so the camera is free again before it's asked for
             old, self.tracker = self.tracker, None
-            self._closing = threading.Thread(target=old.close, daemon=True)
+            feed, self.feed = self.feed, None
+
+            def close() -> None:
+                if feed is not None:
+                    feed.stop()                   # its read in progress ends first
+                old.close()
+            self._closing = threading.Thread(target=close, daemon=True)
             self._closing.start()
             self._closing.join(0.25)              # usually done by now: the camera is off when this returns
+
+    def _frames(self, part: str = "features"):
+        """A reader of the camera's frames (FrameFeed.reader), the feed started on first use: each tick
+        a window gets the newest frame, or NO_FRAME, instead of waiting for the camera."""
+        if self.feed is None:
+            self.feed = FrameFeed(self.tracker)
+        return self.feed.reader(part)
+
+    def _stop_feed(self) -> None:
+        if self.feed is not None:
+            self.feed.stop()
+            self.feed = None
+
+    def _live(self, track):
+        """get() for a window that shows one model's smoothed point: track(features, time) per camera
+        frame (NO_FRAME in between), or the mouse in mouse mode."""
+        if self.mouse:
+            return fake_point_from_mouse
+        frames = self._frames("stamped")
+
+        def get():
+            got = frames()
+            return NO_FRAME if got is NO_FRAME else track(*got)
+        return get
 
     def _open_camera(self) -> bool:
         """Open the chosen camera and MediaPipe on a worker thread, this one painting meanwhile."""
@@ -263,7 +296,7 @@ class App(QObject):
         if not self._use_camera("calibration"):
             return
         method = self.method
-        get = fake_features_from_mouse if self.mouse else self.tracker.read_features
+        get = fake_features_from_mouse if self.mouse else self._frames()
         # Sweep / Points / Line model: the final dots reused from the person's 4x4 calibration (the switch)
         borrowed = storage.dots_source(method) if self.testing.reuse_dots else None
         window = CalibrationWindow(method, get, dots=load_calibration(borrowed).dots if borrowed else None,
@@ -326,11 +359,7 @@ class App(QObject):
                              f"calibration{'s' if count != 1 else ''}. Look at the lit ring, press Enter.")
         if not self._use_camera("check"):
             return
-
-        track = None if self.mouse else model.tracker()   # the smoothed live point
-
-        def get():
-            return fake_point_from_mouse() if self.mouse else track(self.tracker.read_features(), live_clock())
+        get = self._live(None if self.mouse else model.tracker())   # the smoothed live point
         window = GazeWindow.single(get, method.id, storage.method_dir(method.id, root), count or None)
         window.logged.connect(lambda paths: self._checked(who, paths))
         self._open_fullscreen(window)
@@ -370,13 +399,14 @@ class App(QObject):
                          "Look at the lit ring, press Enter.")
 
         tracks = {} if self.mouse else {m: model.tracker() for m, model in models.items()}
+        frames = None if self.mouse else self._frames("stamped")
 
         def get_all():
             if self.mouse:
                 point = fake_point_from_mouse()
                 return {m: point for m in models}
-            features, t = self.tracker.read_features(), live_clock()      # one frame, every model
-            return {m: track(features, t) for m, track in tracks.items()}
+            got = frames()                                # one frame, every model
+            return NO_FRAME if got is NO_FRAME else {m: track(*got) for m, track in tracks.items()}
         window = GazeWindow(get_all, {m: storage.method_dir(m, root) for m in models}, counts,
                             grid=storage.MULTI_GRID, show_dot=False, tag="multi")
         window.logged.connect(lambda paths: self._checked(who, paths))
@@ -447,10 +477,7 @@ class App(QObject):
             track = model.tracker()                   # the smoothed live point, as in the gaze check
         if not self._use_camera("sample"):
             return
-
-        def get():
-            return fake_point_from_mouse() if self.mouse else track(self.tracker.read_features(), live_clock())
-        window = ReadingWindow(get)
+        window = ReadingWindow(self._live(track))
         window.finished.connect(lambda results: self.testing.say(f"{who}, sample text: {reading_summary(results)}"))
         self.testing.say(f"{who}: read the text at your own pace; Esc finishes.")
         self._open_fullscreen(window)
@@ -461,8 +488,12 @@ class App(QObject):
         if self.mouse:
             get = fake_scores_from_mouse
         else:
+            results = self._frames("result")
+
             def get():
-                r = self.tracker.read()
+                r = results()
+                if r is NO_FRAME:
+                    return NO_FRAME
                 return (r.blink_score_left, r.blink_score_right) if r is not None and r.face_found else None
         window = BlinkWindow(get_scores=get)
         window.finished.connect(lambda rows: self._blink_done(window, rows))
@@ -475,6 +506,7 @@ class App(QObject):
         self.testing.say(f"Blink scores saved as {path.name}. {blink_advice(rows)}")
 
     def close(self) -> None:
+        self._stop_feed()
         if self.tracker is not None:
             self.tracker.close()
 

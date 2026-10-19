@@ -34,13 +34,13 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from eyetracking.core.calibration import CalibrationSession, HeadStep, HeadStill, point_grid, sweep_points, sweep_target
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, Method
-from eyetracking.core.models import CalibrationRecording, CalibrationSample
+from eyetracking.core.models import NO_FRAME, CalibrationRecording, CalibrationSample
 
 SETTLE_MS = 1000       # dot appears, eyes travel to it: DON'T record yet
 COLLECT_MS = 1500      # eyes resting on the dot: record features
 DOT_SAMPLES = 25       # good frames each dot needs; a blink costs frames, so the dot waits longer
 MAX_COLLECT_MS = 4000  # ...but never longer than this (face lost, eyes closed for ages)
-TICK_MS = 33           # check about 30 times a second, like a webcam
+TICK_MS = 16           # the dot moves at the screen's pace; each camera frame (~30 a second) is recorded once
 
 RING_START = 40        # px: ring radius when a dot first appears
 RING_END = 12          # px: ring radius once it has shrunk onto the dot
@@ -149,7 +149,12 @@ class CalibrationWindow(QWidget):
         # Read on EVERY tick, settle included, and throw settle frames away.
         # A webcam keeps a few frames buffered: if we stop reading while the
         # eye travels, the first "collect" frames could be those stale ones.
+        # From the camera's thread (app.py) most ticks come before the next frame: NO_FRAME. The
+        # dot moves on with the clock, but nothing is recorded, and it isn't a blink: `fresh`.
         features = self._get_features()
+        fresh = features is not NO_FRAME
+        if not fresh:
+            features = None
         elapsed = self._clock.elapsed()
 
         if self._phase == "sweep":                    # Sweep step 1: follow the gliding dot
@@ -161,8 +166,9 @@ class CalibrationWindow(QWidget):
             else:
                 x, y, record = step
                 self._target = (x, y)
-                self._head_moved = features is not None and self._still.moved(features)
-                if record and not self._head_moved:   # the head turned: leave the frame out
+                if fresh:
+                    self._head_moved = features is not None and self._still.moved(features)
+                if fresh and record and not self._head_moved:   # the head turned: leave the frame out
                     self._sweep.add_sample(features, at=(x, y))
 
         elif self._phase == "head":                   # step 2: centre dot, the head moves
@@ -178,7 +184,7 @@ class CalibrationWindow(QWidget):
             else:
                 self._target = (0.5, 0.5)
                 self._prompt, record = step
-                if record:
+                if record and fresh:
                     self._head.add_sample(features)
 
         elif self._phase == "settle" and elapsed >= SETTLE_MS:
@@ -191,9 +197,10 @@ class CalibrationWindow(QWidget):
             # the dot waits (like for a blink), with "keep your head still" under it.
             # None (no face / blink / eyes reopening) also drops the frames held
             # back just before it: see CalibrationSession.add_sample
-            self._head_moved = features is not None and self._still.moved(features)
-            if not self._head_moved:
-                self._active.add_sample(features)
+            if fresh:
+                self._head_moved = features is not None and self._still.moved(features)
+                if not self._head_moved:
+                    self._active.add_sample(features)
             # move on after COLLECT_MS once the dot has enough good frames;
             # blinks extend the dot, up to MAX_COLLECT_MS
             enough = self._active.current_count() >= DOT_SAMPLES

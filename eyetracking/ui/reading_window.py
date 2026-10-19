@@ -22,6 +22,8 @@ from PySide6.QtCore import QElapsedTimer, QPointF, QRect, QRectF, Qt, QTimer, Si
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
+from eyetracking.core.models import NO_FRAME
+
 SAMPLE = """\
 When you read, your eyes do not glide smoothly along a line. They move in quick jumps called saccades, each lasting only a few hundredths of a second. During a saccade you take in almost no new information; the brain hides the blur so you do not notice it.
 
@@ -95,12 +97,16 @@ class ReadingWindow(QWidget):
     # ---- every TICK_MS
     def _tick(self, dt: float | None = None) -> None:
         dt = self._clock.restart() / 1000 if dt is None else dt
-        self.point = self._get_point()
+        point = self._get_point()
+        fresh = point is not NO_FRAME                # NO_FRAME: no camera frame yet, the last point holds
+        if fresh:
+            self.point = point
         if self.point is not None:
             i = self.paragraph_at(self.point[0] * self.width(), self.point[1] * self.height())
             if i is not None:
                 self.seen[i] += dt
-        self.update()
+        if fresh:
+            self.update()
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Space:

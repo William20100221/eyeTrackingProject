@@ -41,11 +41,12 @@ are, with the measurements: `docs/model_improvements.md`.
   they aren't saved).
 - **Gaze check:** pick a **person**, a **type** and how many of their calibrations to use (the newest
   *N*; *None* when there are none). 16 rings (4×4), one lit at a time: look at it, press Enter. Each
-  sample's error is its distance to the lit ring. A table compares every type's latest and mean error
-  for that person; **Refresh** re-reads the data folder.
+  sample's error is its distance to the lit ring. The start buttons come right after these choices; below
+  them a table compares every type's latest and mean error for that person, a bar for each mean and the
+  lowest marked once two or more types have been checked; **Refresh** re-reads the data folder.
   - **Multiple model gaze check:** every type the person has calibrations for at once, predicting from
     the same camera frames, on 36 rings (6×6), no dot; one file per type.
-  - **Record mode** (switch at the top): the webcam is recorded with the moment of each Enter instead of
+  - **Record mode** (switch under the start buttons): the webcam is recorded with the moment of each Enter instead of
     predicting live; afterwards the models are run over the recording as if live, and **Recordings**
     runs any model (even a later one) over an old recording.
 - **Calibration, Sweep / Points / Line model:** a switch reuses the person's newest Original 4×4
@@ -56,7 +57,8 @@ are, with the measurements: `docs/model_improvements.md`.
 - **Data:** calibrations (by person > type > date; active / non-active / not usable; readable in words,
   samples removable), gaze checks (by person > type > date) and blink scores. What the app just did shows in the
   status line at the bottom of the sidebar; slow work (opening the camera, training, saving) runs a thin bar
-  under the title bar while the window keeps answering.
+  under the title bar while the window keeps answering. The camera is read on a thread of its own, so the
+  full-screen pages move at the screen's pace (~60 a second) instead of the camera's.
   Ctrl- or Shift-click picks several files; right-click (or Delete) disables, enables, moves them to another
   person (or a new one) or removes them. Removed calibrations are listed under **Removed**: right-click to
   restore (an edited file's untouched original too, which undoes the edit).

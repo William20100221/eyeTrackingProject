@@ -32,10 +32,11 @@ from PySide6.QtWidgets import QApplication, QWidget
 from eyetracking.core.calibration import point_grid
 from eyetracking.core.line_model import ScreenGeometry
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, live_clock, train
+from eyetracking.core.models import NO_FRAME
 from eyetracking.services.storage import CHECK_GRID, Check, load_all_calibrations, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
-TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
+TICK_MS = 16         # asks for the newest camera frame (read on its own thread) at the screen's pace
 DOT_RADIUS = 18      # px
 RING_RADIUS = 12     # px, the faint test rings
 SHOWN_SAMPLES = 12   # how many of the latest "#index x y" lines are drawn
@@ -88,7 +89,10 @@ class GazeWindow(QWidget):
     def single(cls, get_point: Callable[[], Point | None], method_id: str = "model", folder: Path | None = None,
                calibrations: int | None = None, grid: int = CHECK_GRID) -> GazeWindow:
         """One model, its dot drawn."""
-        return cls(lambda: {method_id: get_point()}, {method_id: folder}, {method_id: calibrations}, grid)
+        def points():
+            p = get_point()
+            return NO_FRAME if p is NO_FRAME else {method_id: p}
+        return cls(points, {method_id: folder}, {method_id: calibrations}, grid)
 
     @property
     def names(self) -> list[str]:
@@ -125,6 +129,8 @@ class GazeWindow(QWidget):
     # ---- runs every TICK_MS ----------------------------------------
     def _tick(self) -> None:
         points = self._get_points()
+        if points is NO_FRAME:                       # the camera's next frame hasn't come: nothing new
+            return
         self._stale = all(p is None for p in points.values()) if points else True
         for name, p in points.items():
             if p is not None:
