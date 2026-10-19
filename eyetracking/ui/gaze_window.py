@@ -12,7 +12,8 @@ and saved to data/gaze_checks/gaze_check_<time>.csv on Esc; nothing is saved wit
 Space pauses.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
-model: it calls `get_point()` every tick and draws whatever comes back.
+model: it calls `get_point()` every tick and draws whatever comes back
+(NO_FRAME: no new camera frame since the last tick, nothing to draw).
 """
 from __future__ import annotations
 
@@ -26,11 +27,12 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid, training_set
 from eyetracking.core.line_model import LineModel, ScreenGeometry
+from eyetracking.core.models import NO_FRAME
 from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services.storage import load_all_calibrations, load_calibration, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
-TICK_MS = 33         # ~30 checks a second; the camera read limits it anyway
+TICK_MS = 16         # asks for the newest camera frame (read on its own thread) at the screen's pace
 DOT_RADIUS = 18      # px
 RING_RADIUS = 12     # px, the faint calibration positions
 SHOWN_SAMPLES = 12   # how many of the latest "#index x y" lines are drawn
@@ -87,6 +89,8 @@ class GazeWindow(QWidget):
     # ---- runs every TICK_MS ----------------------------------------
     def _tick(self) -> None:
         point = self._get_point()
+        if point is NO_FRAME:       # the camera's next frame hasn't come: nothing new, no repaint
+            return
         self._stale = point is None
         if point is not None:
             self._point = point     # while the face is lost, keep the last one

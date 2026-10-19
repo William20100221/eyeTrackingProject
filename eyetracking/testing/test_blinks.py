@@ -91,11 +91,12 @@ assert len(counts) == 25 and min(counts.values()) >= cw.DOT_SAMPLES and closing 
 import eyetracking.app as appmod
 from eyetracking.core.smoothing import GazeSmoother
 fed = []
-feats = iter([(0.2, 0.2), None, None, None])               # one prediction, then a blink
+face = types.SimpleNamespace(face_found=True)              # the FrameResult: a blink is still a face
+feats = iter([((0.2, 0.2), face, 0.0)] + [(None, face, i / 30) for i in (1, 2, 3)])   # one prediction, then a blink
 app = types.SimpleNamespace(
     mouse=False, smoothed=None, smoother=GazeSmoother(), reading=None,
     clock=types.SimpleNamespace(restart=lambda: 33),
-    tracker=types.SimpleNamespace(read_features=lambda: next(feats), face_found=True),
+    tracker=object(), _tick_frames=lambda: next(feats),   # (features, FrameResult, time) from the camera's thread
     ball=types.SimpleNamespace(set_tracking_state=lambda f: None, look_at=lambda p: None), reader=None,
     dwell=types.SimpleNamespace(feed=lambda p: fed.append((p.x(), p.y()))),
     predict=lambda f: f)

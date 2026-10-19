@@ -5,7 +5,8 @@ Blink test, full screen: hold six eye states while the blink scores are recorded
     python -m eyetracking.ui.blink_window --mouse    (fake scores: the mouse's height on the screen)
 
 Like the calibration page it knows nothing about the camera: get_scores() is
-called every tick and returns (left, right) blink scores, or None (no face).
+called every tick and returns (left, right) blink scores, None (no face), or
+NO_FRAME (no new camera frame since the last tick: nothing to record).
 Each state: a short "get ready" (not recorded), then the recording. Two bars
 show the live scores against today's cut-off, so you can see what a blink
 looks like to the app. Space starts, Esc leaves (what was recorded so far is
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 import eyetracking.core.blink_scores as bs
 from eyetracking.core.analysis import BLINK_THRESHOLD
+from eyetracking.core.models import NO_FRAME
 
 TICK_MS = 33
 Scores = tuple[float, float]
@@ -71,13 +73,16 @@ class BlinkWindow(QWidget):
             super().keyPressEvent(event)
 
     def _tick(self) -> None:
-        self._scores = self._get()
+        scores = self._get()
+        fresh = scores is not NO_FRAME               # NO_FRAME: no camera frame since the last tick
+        if fresh:
+            self._scores = scores
         elapsed = self._clock.elapsed()
         if self._phase == "ready" and elapsed >= bs.COUNTDOWN * 1000:
             self._phase = "record"
             self._clock.restart()
         elif self._phase == "record":
-            if self._scores is not None:
+            if fresh and self._scores is not None:
                 self.rows.append((bs.STATES[self._state][0], elapsed, *self._scores))
             if elapsed >= bs.SECONDS * 1000:
                 self._state += 1
