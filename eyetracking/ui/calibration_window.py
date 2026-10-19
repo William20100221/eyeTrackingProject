@@ -27,7 +27,7 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import CalibrationSession, point_grid
-from eyetracking.core.models import CalibrationSample
+from eyetracking.core.models import NO_FRAME, CalibrationSample
 from eyetracking.services.storage import save_calibration
 from eyetracking.services.tracker import EyeTracker
 
@@ -39,7 +39,7 @@ from eyetracking.services.tracker import EyeTracker
 
 SETTLE_MS = 1000   # dot appears, eyes travel to it: DON'T record yet
 COLLECT_MS = 1500  # eyes resting on the dot: record features
-TICK_MS = 33       # check about 30 times a second, like a webcam
+TICK_MS = 16       # the ring shrinks at the screen's pace; each camera frame (~30 a second) is recorded once
 
 RING_START = 40    # px: ring radius when a dot first appears
 RING_END = 12      # px: ring radius once it has shrunk onto the dot
@@ -104,7 +104,11 @@ class CalibrationWindow(QWidget):
         # Read on EVERY tick, settle included, and throw settle frames away.
         # A webcam keeps a few frames buffered: if we stop reading while the
         # eye travels, the first "collect" frames could be those stale ones.
+        # From the camera's thread (app.py) most ticks come before the next frame: NO_FRAME. The
+        # ring moves on with the clock, and nothing is recorded, as for a skipped frame.
         features = self._get_features()
+        if features is NO_FRAME:
+            features = None
         elapsed = self._clock.elapsed()
 
         if self._phase == "settle" and elapsed >= SETTLE_MS:

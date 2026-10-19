@@ -28,3 +28,8 @@ class CalibrationSample:
     features: tuple[float, ...]   # what the eyes looked like (model INPUT)
     target_x: float               # where the dot was, 0..1 across (model ANSWER)
     target_y: float               # 0..1 down
+
+
+# A frame source's answer when no new camera frame has come since the last ask (services/tracker.py
+# FrameFeed). Not a blink, not a lost face: nothing happened yet. A window draws on and records nothing.
+NO_FRAME = object()
