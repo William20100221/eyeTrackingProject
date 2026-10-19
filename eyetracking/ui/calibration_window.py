@@ -204,7 +204,7 @@ class CalibrationWindow(QWidget):
         p.setBrush(QColor("white"))
         p.drawEllipse(QPointF(vx, y0), 6, 6)                 # the head now
         p.setPen(QColor(160, 160, 160))
-        p.drawText(QRectF(x0, y0 + 14, w, 20), Qt.AlignmentFlag.AlignCenter,
+        p.drawText(QRectF(x0, y0 + 12, w, 30), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextDontClip,
                    "move until both marks turn green" if not all(reached) else "good, keep going")
 
     # ---- drawing ---------------------------------------------------

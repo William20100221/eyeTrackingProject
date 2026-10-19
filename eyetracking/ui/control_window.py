@@ -15,6 +15,7 @@ window re-themes live.
     python settings_window.py
 """
 import ctypes
+import threading
 import json
 import sys
 from datetime import datetime
@@ -147,7 +148,6 @@ QLineEdit#find:focus { border-bottom: 2px solid $primary; }
 
 /* buttons */
 QPushButton { border: none; border-radius: 12px; min-height: 36px; max-height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600; background: transparent; }
-QPushButton:focus { border: 2px solid $secondary; }
 QPushButton[kind="filled"] { background: $primary; color: $onPrimary; }
 QPushButton[kind="filled"]:hover { background: $primaryHover; }
 QPushButton[kind="filled"]:pressed { background: $primaryPress; }
@@ -167,9 +167,24 @@ QPushButton[kind="chip"]:hover, QPushButton[kind="assist"]:hover { background: $
 QPushButton[kind="chip"]:checked { background: $secondaryContainer; color: $onSecondaryContainer; border-color: $secondaryContainer; padding-left: 8px; }
 QPushButton[kind="chip"]:checked:hover { background: $secContainerHover; }
 
+/* keyboard focus: a 2px ring on every button. The ring is a border, which eats into the text's room,
+   so each kind's padding gives that width back: focused text never moves or clips (19 Oct: a focused
+   "Save changes" lost the end of its text) */
+QPushButton:focus { border: 2px solid $secondary; padding: 0 14px; }
+QPushButton[kind="text"]:focus { padding: 0 10px; }
+QPushButton[kind="outlined"]:focus { border: 2px solid $secondary; padding: 0 15px 0 11px; }
+QPushButton[kind="icon"]:focus { padding: 0; }
+QPushButton[kind="nav"]:focus { padding: 0 10px; }
+QPushButton[kind="go"]:focus { padding: 0 14px; }
+QPushButton[kind="chip"]:focus { border: 2px solid $secondary; padding: 0 13px; }
+QPushButton[kind="chip"]:checked:focus { padding: 0 13px 0 7px; }
+QPushButton[kind="assist"]:focus { border: 2px solid $secondary; padding: 0 9px 0 7px; }
+#caps QPushButton:focus, QPushButton#settingsBtn:focus { padding: 0; }
+
 /* setting groups */
 #content { background: transparent; }
 QScrollArea { border: none; background: transparent; }
+QScrollArea > QWidget > QWidget { background: transparent; }   /* a scroll area's page: the surface, not Windows' grey */
 QScrollBar:vertical { width: 10px; background: transparent; margin: 4px 2px; }
 QScrollBar::handle:vertical { background: $outlineVariant; border-radius: 3px; min-height: 32px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
@@ -199,6 +214,8 @@ QListWidget#sideList { background: transparent; border: none; outline: none; fon
 QListWidget#sideList::item { padding: 6px 12px 6px 36px; border-radius: 8px; color: $onSurfaceVariant; }
 QListWidget#sideList::item:hover { background: $hover; }
 QListWidget#sideList::item:selected { background: $selected; color: $onSurface; }
+QListWidget#sideList[wrap="true"] { padding: 0 12px 0 36px; }   /* wrapped titles: the side padding on the list, */
+QListWidget#sideList[wrap="true"]::item { padding: 6px 0; }     /* so a wrapped row is measured at the width it is drawn at */
 QListWidget#linesList { background: transparent; border: none; outline: none; font-size: 14px; }
 QListWidget#linesList::item { padding: 4px 12px; color: $onSurface; }
 QListWidget#linesList::item:selected { background: $selected; }
@@ -254,6 +271,156 @@ def button(text: str, kind: str) -> QPushButton:
     b.setCursor(Qt.PointingHandCursor)
     b.setFocusPolicy(Qt.TabFocus)   # focus ring only for keyboard users
     return b
+
+
+class SpinButton(QPushButton):
+    """A button whose glyph turns once when clicked (Refresh, Reset to defaults): the click is seen to
+    land, like the turning arrows in Windows' and Android's refresh buttons. The glyph is drawn as an
+    icon so it can turn; set_color() follows the theme."""
+
+    def __init__(self, glyph: str, text: str, kind: str):
+        super().__init__(text)
+        self.glyph, self.angle, self.color = glyph, 0.0, "#000000"
+        self.setProperty("kind", kind)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
+        self._turn = QVariantAnimation(self, startValue=0.0, endValue=360.0, duration=550,
+                                       easingCurve=QEasingCurve.OutCubic)
+        self._turn.valueChanged.connect(self._draw)
+        self.clicked.connect(self._turn.start)
+
+    def set_color(self, color: str):
+        self.color = color
+        self._draw(self.angle)
+
+    def _draw(self, angle: float):
+        self.angle = angle
+        px = 16
+        pm = QPixmap(px * 2, px * 2)
+        pm.setDevicePixelRatio(2)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        f = QFont()
+        f.setFamilies(ICON_FONTS)
+        f.setPixelSize(px - 2)
+        p.setFont(f)
+        p.setPen(QColor(self.color))
+        p.translate(px / 2, px / 2)
+        p.rotate(angle)
+        p.drawText(QRectF(-px / 2, -px / 2, px, px), Qt.AlignCenter, self.glyph)
+        p.end()
+        self.setIcon(QIcon(pm))
+
+
+class _FadeOut(QWidget):
+    """A picture of the page being left, laid over the new one and faded out: see cross_fade()."""
+
+    def __init__(self, stack: QWidget, picture: QPixmap, ms: int):
+        super().__init__(stack)
+        self.picture, self.opacity = picture, 1.0
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)   # the new page answers clicks at once
+        self.setGeometry(stack.rect())
+        fade = QVariantAnimation(self, startValue=1.0, endValue=0.0, duration=ms, easingCurve=QEasingCurve.OutCubic)
+        fade.valueChanged.connect(lambda v: (setattr(self, "opacity", v), self.update()))
+        fade.finished.connect(self.deleteLater)
+        self.show()
+        self.raise_()
+        fade.start()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setOpacity(self.opacity)
+        p.drawPixmap(0, 0, self.picture)
+
+
+def cross_fade(stack, index: int, ms: int = 180):
+    """Switch a QStackedWidget's page with a short cross-fade instead of a jump: the old page's picture
+    fades out over the new one. Nothing is done to the pages themselves (a QGraphicsOpacityEffect on a
+    page with a scroll area painted it black on 19 Oct), so it can't leave a page drawn wrongly."""
+    if stack.currentIndex() == index or not stack.isVisible():
+        stack.setCurrentIndex(index)
+        return
+    picture = stack.currentWidget().grab()
+    stack.setCurrentIndex(index)
+    _FadeOut(stack, picture, ms)
+
+
+class BusyBar(QWidget):
+    """A thin bar along the top of the window that runs while the app works (opening the camera,
+    training a model, checking and saving a calibration, running a recording): M3's indeterminate
+    linear progress indicator, as IDEs show background work. It sits over the page, 3 px high, and
+    takes no clicks. It only moves while events are processed: App._busy keeps them going."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.color, self.track = QColor("#E5483B"), QColor(229, 72, 59, 50)
+        self._t = 0.0
+        self._run = QVariantAnimation(self, startValue=0.0, endValue=1.0, duration=1300, loopCount=-1)
+        self._run.valueChanged.connect(lambda v: (setattr(self, "_t", v), self.update()))
+        self.hide()
+
+    def start(self):
+        self.raise_()
+        self.show()
+        self._run.start()
+
+    def stop(self):
+        self._run.stop()
+        self.hide()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.fillRect(self.rect(), self.track)
+        w = self.width()
+        x = (self._t * 1.5 - 0.4) * w                    # a 40%-wide segment sweeping left to right
+        p.fillRect(QRectF(x, 0, 0.4 * w, self.height()), self.color)
+
+
+_running = [False]          # run_busy is waiting: a call made meanwhile (a click it answered) runs straight away
+
+
+def busy() -> bool:
+    """True while run_busy waits for slow work: a second click on the same button can check it."""
+    return _running[0]
+
+
+def run_busy(bar: BusyBar, work, tick=None):
+    """work() on a worker thread while this, the GUI thread, keeps the window alive: the bar runs, the
+    pointer shows busy, clicks and paints are answered (tick(), if given, is called every 50 ms, e.g. to
+    show progress). Windows marks a window "Not Responding" when its thread stops answering for 5 s: a
+    cold camera driver, a first `import anthropic` (5 s here), training a dozen models or saving a big
+    calibration could each do that on this PC. Returns work()'s result; raises its exception. Called
+    again while already running (a click answered meanwhile), it just runs work() here: never two pumps."""
+    if _running[0]:
+        return work()
+    box: dict = {}
+
+    def job() -> None:
+        try:
+            box["result"] = work()
+        except BaseException as e:                # handed back to the caller below
+            box["error"] = e
+    worker = threading.Thread(target=job, daemon=True)
+    _running[0] = True
+    bar.start()
+    QApplication.setOverrideCursor(Qt.BusyCursor)
+    worker.start()
+    try:
+        while worker.is_alive():
+            QApplication.processEvents()
+            if tick is not None:
+                tick()
+            worker.join(0.05)
+    finally:
+        _running[0] = False
+        bar.stop()
+        QApplication.restoreOverrideCursor()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 def draw_check(p: QPainter, cx: float, cy: float, s: float, color: QColor, width: float = 2):
@@ -495,9 +662,16 @@ def side_list(on_open) -> QListWidget:
 def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
     """One item per dated file; name(path), if given, is shown after the date (full name in the tooltip)."""
     lst.clear()
+    if name and not lst.property("wrap"):         # a title: wrapped to the list's width, never cut at its edge
+        lst.setProperty("wrap", True)
+        lst.style().unpolish(lst)                 # the [wrap] rules apply from now on
+        lst.style().polish(lst)
+        lst.setWordWrap(True)
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lst.setResizeMode(QListWidget.Adjust)
     for path in paths:
         when = f"{file_date(path):%d %b %Y   %H:%M}"
-        item = QListWidgetItem(f"{file_date(path):%d %b %H:%M}  {name(path)[:22]}" if name else when)
+        item = QListWidgetItem(f"{file_date(path):%d %b %H:%M}  {name(path)}" if name else when)
         item.setToolTip(f"{when}\n{name(path)}" if name else when)
         item.setData(Qt.UserRole, str(path))
         lst.addItem(item)
@@ -669,7 +843,9 @@ class TestingPage(QWidget):
             col = QVBoxLayout()
             col.setSpacing(2)
             col.addWidget(label(title, "gh"))
-            col.addWidget(label(sub, "rowsub"))
+            note = label(sub, "rowsub")
+            note.setWordWrap(True)                 # unwrapped, the longest subtitle took its column's width from the others
+            col.addWidget(note)
             col.addWidget(lst, 1)
             cols.addLayout(col, 1)
         mv.addLayout(cols, 1)
@@ -708,7 +884,7 @@ class TestingPage(QWidget):
         self.main.addWidget(detail)
         self.detail_path: Path | None = None
         h.addWidget(self.main, 1)
-        self.side_nav.idClicked.connect(self.main.setCurrentIndex)
+        self.side_nav.idClicked.connect(lambda i: cross_fade(self.main, i))
         self.show_page(3)                                # Calibrations first: what the model learns from
 
     def show_page(self, i: int):
@@ -1037,6 +1213,7 @@ class SettingsWindow(QWidget):
         self.pages.addWidget(self.testing)
         self.pages.addWidget(self.settings_page)
         root.addWidget(self.pages, 1)
+        self.busy = BusyBar(self)                    # runs under the title bar while the app works (run_busy)
         self._before_page = None          # (was visible, was maximized) while a full-screen page runs
 
         G = 5
@@ -1084,7 +1261,7 @@ class SettingsWindow(QWidget):
         self.nav.button(0).setChecked(True)
         # Calibration (tab 2) runs full screen; the other tabs are pages in the stack
         self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 2
-                                   else self.pages.setCurrentIndex(PAGE_OF_TAB[i]))
+                                   else cross_fade(self.pages, PAGE_OF_TAB[i]))
         h.addSpacing(4)
 
         caps = QWidget(objectName="caps")
@@ -1115,7 +1292,7 @@ class SettingsWindow(QWidget):
         self.find.textChanged.connect(self.filter_rows)
         h.addWidget(self.find)
         h.addStretch(1)
-        reset = button(f"{I_RESET}  Reset to defaults", "outlined")
+        reset = SpinButton(I_RESET, "Reset to defaults", "outlined")
         reset.clicked.connect(lambda: self.load(DEFAULTS))   # keys stay: they are managed in their own list
         self.save_btn = button("Save changes", "filled")
         self.save_btn.clicked.connect(self.save)
@@ -1418,11 +1595,16 @@ class SettingsWindow(QWidget):
             self._note(f"That key is already saved, as {same['name']}.")
             self.key.clear()
             return same
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            models, error = list_models(provider, key)
-        finally:
-            QApplication.restoreOverrideCursor()
+        if busy():
+            return None                           # still asking about the last key: Enter pressed twice
+        self.place_busy()                         # the provider is asked on a worker thread, the bar running: a
+        models, error = run_busy(self.busy, lambda: list_models(provider, key))   # first `import anthropic` took 5 s here
+        keys = self.stored_keys()                 # again: a key removed, renamed or added during the wait counts
+        same = next((k for k in keys if self.entry_secret(k) == key), None)
+        if same is not None:
+            self._note(f"That key is already saved, as {same['name']}.")
+            self.key.clear()
+            return same
         entry = self._new_entry(key, provider, models, keys)
         self._save_keys(keys + [entry])
         self.key.clear()
@@ -1451,11 +1633,10 @@ class SettingsWindow(QWidget):
     def refresh_models(self, entry_id: str):
         """Ask the provider again which models this key can use."""
         entry = next(e for e in self.ai_entries() if e["id"] == entry_id)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            models, error = list_models(entry["provider"], self.entry_secret(entry))
-        finally:
-            QApplication.restoreOverrideCursor()
+        if busy():
+            return
+        self.place_busy()
+        models, error = run_busy(self.busy, lambda: list_models(entry["provider"], self.entry_secret(entry)))
         models = [list(m) for m in models]
         keys = self.stored_keys()
         if any(k["id"] == entry_id for k in keys):
@@ -1706,6 +1887,10 @@ class SettingsWindow(QWidget):
             edit.setPalette(pal)
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
         self.key_eye.setIcon(glyph_icon(I_EYE, c["onSurfaceVariant"]))
+        for b in self.findChildren(SpinButton):
+            b.set_color(c["primary"] if b.property("kind") == "text" else c["onSurface"])
+        self.busy.color, self.busy.track = QColor(c["primary"]), QColor(c["primary"])
+        self.busy.track.setAlphaF(.2)                # the bar's track: the same colour, faint
         self._dwm(34, int(c["outlineVariant"][5:7] + c["outlineVariant"][3:5] + c["outlineVariant"][1:3], 16))
         self.update()
 
@@ -1720,7 +1905,12 @@ class SettingsWindow(QWidget):
                 g.setVisible(not (self.isMaximized() or self.isFullScreen()))
         super().changeEvent(e)
 
+    def place_busy(self):
+        """The bar sits right under the title bar (at the very top on a full-screen page)."""
+        self.busy.setGeometry(0, self.titlebar.height() if self.titlebar.isVisible() else 0, self.width(), 3)
+
     def resizeEvent(self, e):
+        self.place_busy()
         G, w, h = self._grip, self.width(), self.height()
         for g, rect in zip(self.grips, [(0, G, G, h - 2 * G), (w - G, G, G, h - 2 * G), (G, 0, w - 2 * G, G),
                                         (G, h - G, w - 2 * G, G), (0, 0, G, G), (w - G, h - G, G, G),

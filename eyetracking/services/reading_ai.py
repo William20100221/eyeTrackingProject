@@ -35,7 +35,10 @@ MODELS = {
     "openai": "gpt-6-luna",
     "ollama": "",                  # filled in at start with the first model Ollama has installed
 }
-OLLAMA_URL = "http://localhost:11434"   # Ollama's default address
+OLLAMA_URL = "http://127.0.0.1:11434"   # Ollama's default address. Not "localhost": that tried ::1 first, and
+                                        # with Ollama off each address waited out its timeout (4 s at every start here)
+OLLAMA_PROBE_S = 0.5                     # a local server answers in milliseconds: is Ollama there?
+AI_TIMEOUT_S = 120                       # one AI call: a summary of a long text can take a minute
 KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": "OPENAI_API_KEY"}
 # the longer one first; Gemini: AI Studio issues "AQ." auth keys now, "AIza" was the older format
 KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("AQ.", "gemini"), ("sk-", "openai"))
@@ -65,7 +68,7 @@ def list_models(provider: str, key: str = "") -> tuple[list[tuple[str, str]], st
             client = anthropic.Anthropic(api_key=key, timeout=10.0, max_retries=0)
             return [(m.id, m.display_name) for m in client.models.list()], ""
         if provider == "ollama":
-            with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=2) as r:
+            with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=OLLAMA_PROBE_S) as r:
                 return [(m["name"], m["name"]) for m in json.load(r).get("models", [])], ""
         # ponytail: Gemini / OpenAI use the built-in list; ask them live once their package is installed and tested
         return KNOWN_MODELS[provider], "the live model list is only built for Claude and Ollama"
@@ -102,7 +105,7 @@ def key_from_environment() -> tuple[str, str] | None:
 def ollama_model() -> str | None:
     """The first model installed in a running Ollama, or None (not running, nothing installed)."""
     try:
-        with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=1) as r:
+        with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=OLLAMA_PROBE_S) as r:
             models = json.load(r).get("models", [])
     except (OSError, ValueError):
         return None
@@ -228,7 +231,7 @@ def _ask(provider: str, prompt: str, schema: dict | None = None) -> str:
     if provider == "claude":
         import anthropic
         extra = {"output_config": {"format": {"type": "json_schema", "schema": schema}}} if schema else {}
-        reply = anthropic.Anthropic().messages.create(
+        reply = anthropic.Anthropic(timeout=AI_TIMEOUT_S, max_retries=1).messages.create(
             model=model, max_tokens=16000, system=SYSTEM,
             messages=[{"role": "user", "content": prompt}], **extra)
         if reply.stop_reason in ("max_tokens", "refusal"):
@@ -242,9 +245,11 @@ def _ask(provider: str, prompt: str, schema: dict | None = None) -> str:
             system_instruction=SYSTEM,
             response_mime_type="application/json" if schema else None,
             response_json_schema=schema)
-        return genai.Client().models.generate_content(model=model, contents=prompt, config=config).text
+        return genai.Client(http_options=types.HttpOptions(timeout=AI_TIMEOUT_S * 1000)).models.generate_content(
+            model=model, contents=prompt, config=config).text
 
     from openai import OpenAI
     extra = {"text": {"format": {"type": "json_schema", "name": "result",
                                  "schema": schema, "strict": True}}} if schema else {}
-    return OpenAI().responses.create(model=model, instructions=SYSTEM, input=prompt, **extra).output_text
+    return OpenAI(timeout=AI_TIMEOUT_S, max_retries=1).responses.create(
+        model=model, instructions=SYSTEM, input=prompt, **extra).output_text
