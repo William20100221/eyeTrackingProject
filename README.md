@@ -50,6 +50,9 @@ are, with the measurements: `docs/model_improvements.md`.
 - **Blink test:** your blink scores in six eye states, with the cut-off they suggest.
 - **Data:** calibrations (by person > type > date; active / non-active / not usable; readable in words,
   samples removable), gaze checks (by person > type > date), blink scores, and a log of this run.
+  Ctrl- or Shift-click picks several files; right-click (or Delete) disables, enables, moves them to another
+  person (or a new one) or removes them. Removed calibrations are listed under **Removed**: right-click to
+  restore (an edited file's untouched original too, which undoes the edit).
   **Clear data…** (Calibrations page) moves everything of one person, or of everyone, into
   `data/trash/<date>_<time>/`; move it back to undo.
 

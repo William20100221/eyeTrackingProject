@@ -10,6 +10,8 @@ Self-check (no webcam):  python -m eyetracking.testing.test_lab_data
    the other branches' folders are never read or moved
 4. Folders cut out come back empty; person mode puts the same folders under data/<name>/
 5. Clear data: one person's files (or everyone's) go to data/trash/<date>_<time>/, their empty folders come back
+6. Editing several at once: Move to another person (disabled stays disabled, nothing overwritten), Remove,
+   then Restore from Removed (an edited file's original only after a yes)
 """
 import os
 import tempfile
@@ -99,7 +101,7 @@ assert texts(page.disabled_list)[0] == "Original 3×3" and files(page.disabled_l
 assert texts(page.inactive_list)[0] == "Original 3×3" and files(page.inactive_list) == [None, str(broken)]
 retrained = []
 page.data_changed.connect(lambda: retrained.append(True))
-page.set_enabled(off, True)                                     # Enable: back in the method's folder, the model retrains
+page.set_enabled([off], True)                                   # Enable: back in the method's folder, the model retrains
 assert storage.list_calibrations("original-3x3") == [path, broken] and storage.list_disabled("original-3x3") == [] and retrained
 assert texts(page.active_list)[::2] == ["Original 3×3", "Original 5×5"] and files(page.active_list) == [None, str(path), None, str(other)]
 assert texts(page.disabled_list) == ["None"]
@@ -199,7 +201,6 @@ assert storage.list_people() == ["Ann Lee"] and storage.list_disabled("original-
 storage.ensure_layout()
 assert storage.list_people() == ["Ann Lee", "Bo"]
 assert storage.use_person("") == tmp and storage.list_calibrations("original-4x4") == [path]    # back to data/ itself
-print("lab data ok")
 
 # ---- 5. clear data: one person's, or everyone's, into one dated trash folder ----------
 one = CalibrationRecording((), (), (sample(0.5, 0.5),))
@@ -212,3 +213,31 @@ assert "Ann" not in storage.list_people() and mine.exists()                     
 where = storage.clear_data(None)
 assert not mine.exists() and (where / "data" / "original-3x3" / mine.name).exists()
 assert (tmp / "original-3x3").is_dir() and storage.list_calibrations("original-3x3") == []   # the empty folders are back
+
+# ---- 6. several files at once: move to a person, remove, restore ---------------------------
+from PySide6.QtWidgets import QMessageBox
+cw.QMessageBox.question = lambda *a, **k: QMessageBox.Yes                     # every "are you sure" says yes
+a = storage.save_calibration(one, "original-3x3", tmp / "original-3x3" / "original-3x3_2026-10-18_160000.json")
+b = storage.save_calibration(one, "original-3x3", tmp / "original-3x3" / "original-3x3_2026-10-18_161000.json")
+b = storage.set_calibration_enabled(b, False)
+page.refresh()
+said = cw.move_all([a, b], "James")                                          # Settings never had a James: a new person
+assert said == "Moved 2 files to James." and storage.list_people() == ["James"], said
+assert storage.list_calibrations("original-3x3", tmp / "James") == [tmp / "James" / "original-3x3" / a.name]
+assert storage.list_disabled("original-3x3", tmp / "James") == [tmp / "James" / "original-3x3" / "disabled" / b.name]
+storage.save_calibration(one, "original-3x3", a)                              # the same name again here...
+assert "Already there, left in place: " + a.name in cw.move_all([a], "James") and a.exists()   # ...is never overwritten
+james = storage.list_calibrations("original-3x3", tmp / "James") + storage.list_disabled("original-3x3", tmp / "James")
+page.remove_files(james)                                                      # both at once, into their trash folder
+page.refresh()
+removed = [Path(page.removed_list.item(i).data(0x0100)) for i in range(page.removed_list.count())
+           if page.removed_list.item(i).data(0x0100)]
+assert sorted(p.name for p in removed) == sorted([a.name, b.name]) and all(p.parent.name == "trash" for p in removed)
+page.restore_files(removed)
+assert sorted(p.name for p in storage.list_calibrations("original-3x3", tmp / "James")) == sorted([a.name, b.name])
+edited = storage.save_calibration(CalibrationRecording((), (), (sample(0.5, 0.5), sample(0.2, 0.2))), "original-3x3")
+storage.remove_samples(edited, {0})                                           # an edit: the original waits in trash/
+assert len(storage.load_calibration(edited).dots) == 1 and storage.list_removed("original-3x3") == [edited.parent / "trash" / edited.name]
+page.restore_files(storage.list_removed("original-3x3"))                      # the original back, the edit undone
+assert len(storage.load_calibration(edited).dots) == 2 and storage.list_removed("original-3x3") == []
+print("lab data ok")

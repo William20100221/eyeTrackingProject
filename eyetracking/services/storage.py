@@ -33,6 +33,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
 import shutil
 import statistics
@@ -344,6 +345,31 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
     else:
         remove_calibration(path)        # no dots left: the file goes too
     return n - sum(len(v) for v in kept.values())
+
+
+def list_removed(method_id: str, root: Path | None = None) -> list[Path]:
+    """A method's calibrations in its trash/ (removed, or the untouched original of an edited one), newest first."""
+    return sorted((method_dir(method_id, root) / "trash").glob(f"{method_id}_*.json"), reverse=True)
+
+
+def restore(path: Path) -> Path:
+    """A file in a trash/ folder back into its folder. A file of the same name there is the edited
+    version of this original: it is replaced. Returns the new path."""
+    target = _method_folder(path) / path.name
+    os.replace(path, target)
+    return target
+
+
+def move_to_person(path: Path, person: str) -> Path:
+    """A file into the same folder of another person ('' = straight under data/): the same type,
+    and disabled/ or trash/ if it was there. Never overwrites: FileExistsError. Returns the new path."""
+    folder = _method_folder(path)
+    target = person_root(person) / folder.name / path.relative_to(folder)
+    if target.exists():
+        raise FileExistsError(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(path), str(target))
+    return target
 
 
 def remove_calibration(path: Path) -> Path:

@@ -15,6 +15,8 @@ where it was. The window reopens on the page, Testing entry and type it was left
                   Blink test   what the blink score is, Start
       Data        Calibrations by person > type > date, in three columns (active /
                                 Clear data…: everything of one person, or of everyone, to data/trash/
+                                several files at once (Ctrl / Shift-click, Delete), Move to a person,
+                                Removed: restore from the trash folders
                                non-active / not usable); double-click to read one in words and
                                remove samples, right-click to disable / enable / remove
                   Gaze checks  by person > type > date, each sample in words
@@ -38,7 +40,8 @@ from materialyoucolor.hct import Hct
 from materialyoucolor.scheme.scheme_fidelity import SchemeFidelity
 from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpression, QSettings, Qt, QTimer,
                             QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
+from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPainterPath, QPalette, QPen,
+                           QPixmap, QShortcut,
                            QRegularExpressionValidator)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
@@ -512,11 +515,48 @@ def method_picker(group: QButtonGroup) -> QWidget:
 
 
 def side_list(on_open) -> QListWidget:
-    """A list of dated files; double-click (or Enter) calls on_open(path)."""
+    """A list of dated files; double-click (or Enter) calls on_open(path). Ctrl / Shift-click picks several."""
     lst = QListWidget(objectName="sideList")
-    lst.setToolTip("Double-click to open")
+    lst.setToolTip("Double-click to open. Ctrl- or Shift-click to pick several, then right-click or Delete")
+    lst.setSelectionMode(QListWidget.ExtendedSelection)
     lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and on_open(Path(it.data(Qt.UserRole))))
     return lst
+
+
+def picked(lst: QListWidget, pos=None) -> list[Path]:
+    """The files picked in a list. A right-click on a file that isn't picked picks it alone first."""
+    item = lst.itemAt(pos) if pos is not None else None
+    if item is not None and item.data(Qt.UserRole) and not item.isSelected():
+        lst.clearSelection()
+        item.setSelected(True)
+    return [Path(it.data(Qt.UserRole)) for it in lst.selectedItems() if it.data(Qt.UserRole)]
+
+
+def count(paths: list[Path], what: str) -> str:
+    return f"{len(paths)} {what}s" if len(paths) != 1 else paths[0].name
+
+
+def add_move_menu(menu: QMenu, paths: list[Path], move) -> None:
+    """Move to > every other person, No person (data/), or a new name: move(person name)."""
+    sub = menu.addMenu(f"{I_PERSON}  Move to")
+    mine = {storage.person_of(p) for p in paths}
+    for name, _ in storage.person_roots():
+        if mine != {name}:
+            sub.addAction(name or "No person (data/)", lambda n=name: move(n))
+    sub.addAction("A new person…", lambda: (n := storage.person_name(QInputDialog.getText(
+        menu.parentWidget(), "Move to a new person", "Name (letters, digits, spaces, - and _):")[0])) and move(n))
+
+
+def move_all(paths: list[Path], person: str) -> str:
+    """Move files to a person; a file of the same name already there stays put. What happened, in words."""
+    clash = []
+    for p in paths:
+        try:
+            storage.move_to_person(p, person)
+        except FileExistsError:
+            clash.append(p.name)
+    done = f"Moved {len(paths) - len(clash)} file{'s' if len(paths) - len(clash) != 1 else ''} to {person or 'No person (data/)'}."
+    return done + (f" Already there, left in place: {', '.join(clash)}." if clash else "")
 
 
 def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
@@ -591,9 +631,12 @@ class DataPage(QWidget):
         text.setWordWrap(True)
         left.addWidget(text)
         self.files = QListWidget(objectName="sideList")
+        self.files.setSelectionMode(QListWidget.ExtendedSelection)    # Ctrl / Shift-click: several at once
         self.files.currentItemChanged.connect(lambda it, _: self._show(it))
         self.files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files.customContextMenuRequested.connect(self._menu)
+        QShortcut(QKeySequence.Delete, self.files, lambda: self.remove(picked(self.files)),
+                  context=Qt.WidgetShortcut)
         left.addWidget(self.files, 1)
         col = QWidget()
         col.setLayout(left)
@@ -624,13 +667,22 @@ class DataPage(QWidget):
                 self.lines.addItem(QListWidgetItem(line))
 
     def _menu(self, pos):
-        item = self.files.itemAt(pos)
-        if item is None or not item.data(Qt.UserRole):
+        paths = picked(self.files, pos)
+        if not paths:
             return
-        path = Path(item.data(Qt.UserRole))
         menu = QMenu(self.files)
-        menu.addAction(f"{I_DELETE}  Remove", lambda: (trash_file(path), self.refresh()))
+        add_move_menu(menu, paths, lambda person: (move_all(paths, person), self.refresh()))
+        menu.addAction(f"{I_DELETE}  Remove {count(paths, 'file')}", lambda: self.remove(paths))
         menu.exec(self.files.mapToGlobal(pos))
+
+    def remove(self, paths: list[Path]):
+        """Into the trash folder beside each file (move it back to undo); several only after a yes."""
+        if not paths or len(paths) > 1 and QMessageBox.question(
+                self, "Remove", f"Move {len(paths)} files to their trash folders?") != QMessageBox.Yes:
+            return
+        for p in paths:
+            trash_file(p)
+        self.refresh()
 
 
 # ---------------------------------------------------------------- testing page
@@ -710,8 +762,9 @@ class TestingPage(QWidget):
         mv.addWidget(self.lists_title)
         hint = label("Every calibration, by person, then by calibration type, then by date (data/<person>/<type>/). "
                      "Double-click one to read it in words. Right-click to disable it (kept, but it stops training), enable "
-                     "it again, or remove it. The person in use (Settings > Person mode) is the one whose active files "
-                     "train the models.", "sheetText")
+                     "it again, move it to another person, or remove it; Ctrl- or Shift-click picks several, Delete removes "
+                     "them. Removed files wait under Removed: right-click to restore. The person in use (Settings > Person "
+                     "mode) is the one whose active files train the models.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
         self.clear_btn = button(f"{I_DELETE}  Clear data…", "outlined")   # everything of one person, or of everyone
@@ -724,11 +777,16 @@ class TestingPage(QWidget):
         self.active_list = side_list(self.open_detail)
         self.disabled_list = side_list(self.open_detail)
         self.inactive_list = side_list(self.open_detail)
+        self.removed_list = side_list(self.open_detail)
         for title, sub, lst in [("Active", "Trains the models", self.active_list),
                                 ("Non-active", "Works, but you turned it off", self.disabled_list),
-                                ("Not usable", "Another version, or the file can't be read", self.inactive_list)]:
+                                ("Not usable", "Another version, or the file can't be read", self.inactive_list),
+                                ("Removed", "In the trash folders: right-click to restore", self.removed_list)]:
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
+            if lst is not self.removed_list:
+                QShortcut(QKeySequence.Delete, lst, lambda lst=lst: self.remove_files(picked(lst)),
+                          context=Qt.WidgetShortcut)
             col = QVBoxLayout()
             col.setSpacing(2)
             col.addWidget(label(title, "gh"))
@@ -739,7 +797,8 @@ class TestingPage(QWidget):
         self.main.addWidget(lists)
         self.gaze_checks = DataPage(
             "Gaze checks", "By person, then by calibration type, then by date. Each sample with the ring that was "
-            "lit and how far the model was from it. Right-click a file to remove it.",
+            "lit and how far the model was from it. Right-click a file (Ctrl- or Shift-click for several) to move it "
+            "to another person or remove it.",
             lambda: person_type_rows(storage.list_gaze_checks), gaze_check_lines, "No gaze check yet", tree=True)
         self.blink_scores = DataPage(
             "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
@@ -1064,7 +1123,7 @@ class TestingPage(QWidget):
                 item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
             removable |= dot is not None
             self.detail.addItem(item)
-        self.remove_btn.setVisible(removable)
+        self.remove_btn.setVisible(removable and path.parent.name != "trash")   # a removed file: restore it first
         self.main.setCurrentIndex(7)
 
     def remove_selected(self):
@@ -1105,42 +1164,63 @@ class TestingPage(QWidget):
         self.say(f"Cleared {who}'s data into {where.relative_to(storage.BASE_DIR.parent).as_posix()}/.")
 
     def _list_menu(self, lst: QListWidget, pos):
-        item = lst.itemAt(pos)
-        if item is None or not item.data(Qt.UserRole):
+        paths = picked(lst, pos)
+        if not paths:
             return
-        path = Path(item.data(Qt.UserRole))
         menu = QMenu(lst)
-        if lst is self.active_list:
-            menu.addAction("Disable (keep it, stop training on it)", lambda: self.set_enabled(path, False))
-        elif lst is self.disabled_list:
-            menu.addAction("Enable (train on it again)", lambda: self.set_enabled(path, True))
-        menu.addAction(f"{I_DELETE}  Remove this calibration", lambda: self.remove_file(path))
+        if lst is self.removed_list:
+            menu.addAction(f"Restore {count(paths, 'calibration')}", lambda: self.restore_files(paths))
+        else:
+            if lst is self.active_list:
+                menu.addAction("Disable (keep, stop training on it)", lambda: self.set_enabled(paths, False))
+            elif lst is self.disabled_list:
+                menu.addAction("Enable (train on it again)", lambda: self.set_enabled(paths, True))
+            add_move_menu(menu, paths, lambda person: self._changed(move_all(paths, person)))
+            menu.addAction(f"{I_DELETE}  Remove {count(paths, 'calibration')}", lambda: self.remove_files(paths))
         menu.exec(lst.mapToGlobal(pos))
 
-    def set_enabled(self, path: Path, enabled: bool):
-        set_calibration_enabled(path, enabled)
+    def _changed(self, text: str):
+        """Files moved, removed, restored, enabled or disabled: the lists, the models' status, the log."""
         self.refresh()
         self.data_changed.emit()
+        self.say(text)
 
-    def remove_file(self, path: Path):
-        """Right-click > Remove: the file moves to the method's trash folder (move it back to undo)."""
-        if QMessageBox.question(self, "Remove calibration", f"Move {path.name} to its trash folder?\n"
-                                "The model is retrained without it.") != QMessageBox.Yes:
+    def set_enabled(self, paths: list[Path], enabled: bool):
+        for p in paths:
+            set_calibration_enabled(p, enabled)
+        self._changed(f"{'Enabled' if enabled else 'Disabled'} {count(paths, 'calibration')}.")
+
+    def remove_files(self, paths: list[Path]):
+        """Right-click > Remove (or Delete): into each type's trash folder; Removed lists them to restore."""
+        if not paths or QMessageBox.question(self, "Remove calibrations", f"Move {count(paths, 'calibration')} to the "
+                                             "trash? Restore from Removed any time.") != QMessageBox.Yes:
             return
-        remove_calibration(path)
-        self.refresh()
-        self.data_changed.emit()
+        for p in paths:
+            remove_calibration(p)
+        self._changed(f"Removed {count(paths, 'calibration')}.")
+
+    def restore_files(self, paths: list[Path]):
+        """Removed > Restore. A trash file whose name is still in use is the original of an edited
+        calibration: restoring it undoes the edits, so that asks first."""
+        edited = [p for p in paths if (p.parent.parent / p.name).exists()]
+        if edited and QMessageBox.question(self, "Restore", f"{count(edited, 'calibration')}: the untouched original "
+                                           "of an edited calibration. Restore it in place of the edited one?"
+                                           ) != QMessageBox.Yes:
+            return
+        for p in paths:
+            storage.restore(p)
+        self._changed(f"Restored {count(paths, 'calibration')}.")
 
     def refresh(self):
         """Re-read data/. Runs whenever the page shows, the method changes, or a file was saved."""
         roots = storage.person_roots()
-        cols: tuple[list, list, list] = ([], [], [])          # active, non-active, not usable: rows for fill_tree
+        cols: tuple[list, ...] = ([], [], [], [])             # active, non-active, not usable, removed
         for name, root in roots:
-            mine: tuple[list, list, list] = ([], [], [])       # this person's rows, per column
+            mine: tuple[list, ...] = ([], [], [], [])            # this person's rows, per column
             for m in METHODS:                                   # every calibration type, under the person's name
                 usable = {p: calibration_usable(p) for p in list_calibrations(m.id, root)}
                 files = ([p for p, ok in usable.items() if ok], list_disabled(m.id, root),
-                         [p for p, ok in usable.items() if not ok])
+                         [p for p, ok in usable.items() if not ok], storage.list_removed(m.id, root))
                 for rows, paths in zip(mine, files):
                     if paths:
                         rows += [("type", m.name), *paths]
@@ -1148,8 +1228,8 @@ class TestingPage(QWidget):
             for col, rows in zip(cols, mine):
                 if rows:                                        # people exist: the name above its types
                     col += ([("person", heading)] if len(roots) > 1 else []) + rows
-        for lst, rows, empty in zip((self.active_list, self.disabled_list, self.inactive_list), cols,
-                                    ("None active: enable one, or calibrate", "None", "None")):
+        for lst, rows, empty in zip((self.active_list, self.disabled_list, self.inactive_list, self.removed_list), cols,
+                                    ("None active: enable one, or calibrate", "None", "None", "None")):
             fill_tree(lst, rows, empty)
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
