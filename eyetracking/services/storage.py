@@ -189,8 +189,8 @@ def load_calibration(path: Path) -> CalibrationRecording:
     return _load(path)[0]
 
 
-def _load(path: Path) -> tuple[CalibrationRecording, int, str | None]:
-    """(the recording, its grid size, the file its dots were reused from or None)."""
+def _load(path: Path) -> tuple[CalibrationRecording, int, str | None, str | None]:
+    """(the recording, its grid size, the file its dots were reused from or None, the file it is a copy of or None)."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict) or data.get("format") != FORMAT:
@@ -198,7 +198,23 @@ def _load(path: Path) -> tuple[CalibrationRecording, int, str | None]:
     # JSON has no tuples: features come back as a list, so turn it back
     parts = [tuple(CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
                    for s in data[part]) for part in PARTS]
-    return CalibrationRecording(*parts), int(data.get("grid", 5)), data.get("dots_from")
+    return CalibrationRecording(*parts), int(data.get("grid", 5)), data.get("dots_from"), data.get("same_as")
+
+
+def copy_as(path: Path, method_id: str) -> Path:
+    """The same recording saved as another type's calibration (Points <-> Line model, which run the same
+    procedure), in the same person's folder, with the same date and time and "same_as" naming the
+    original. Never overwrites: FileExistsError. Returns the new path."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    target = _method_folder(path).parent / method_id / f"{method_id}_{path.stem[-17:]}.json"
+    if target.exists():
+        raise FileExistsError(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data |= {"method": method_id, "same_as": path.name}
+    with open(target, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    return target
 
 
 def list_calibrations(method_id: str, root: Path | None = None) -> list[Path]:
@@ -278,12 +294,13 @@ def calibration_lines(path: Path) -> list[tuple[str, int | None, str | None]]:
     index (as remove_samples counts them) and its dot; a dot's summary line carries
     the dot only (= all of its samples); headings carry neither."""
     try:
-        rec, grid, dots_from = _load(path)
+        rec, grid, dots_from, same_as = _load(path)
     except (OSError, ValueError, KeyError, TypeError) as e:
         return [(f"Can't show this file: it was saved by a different version ({e}).", None, None)]
     method = METHOD_BY_ID.get(method_of(path))
     lines = [(f"{method.name if method else method_of(path)}, {file_date(path):%d %b %Y, %H:%M}"
-              + (f" (the dots reused from {dots_from})" if dots_from else ""), None, None)]
+              + (f" (the dots reused from {dots_from})" if dots_from else "")
+              + (f" (the same recording as {same_as})" if same_as else ""), None, None)]
     n = 0
     for part in PARTS:
         samples = getattr(rec, part)
@@ -332,7 +349,7 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
     """Drop the samples numbered `indexes` (as calibration_lines counts them) and
     rewrite the file in its own format. Returns how many were dropped."""
     keep_original(path)
-    rec, _, dots_from = _load(path)
+    rec, _, dots_from, _ = _load(path)
     n, kept = 0, {}
     for part in PARTS:
         kept[part] = []

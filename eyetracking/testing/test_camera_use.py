@@ -170,7 +170,11 @@ pump()
 app.testing.set_method("random-sweep")                                           # a random twin wants Random 4x4
 assert not app.testing.reuse_switch.isEnabled() and "No Random 4×4" in app.testing.reuse_note.text()
 app.testing.set_method("original-3x3")
-assert not app.testing.reuse_row.isVisibleTo(app.testing)
+assert not app.testing.reuse_row.isVisibleTo(app.testing) and not app.testing.share_row.isVisibleTo(app.testing)
+app.testing.set_method("points")                                                 # Points: saved as Line model too, by default
+assert app.testing.share_row.isVisibleTo(app.testing) and app.testing.share_partner and "Line model" in app.testing.share_note.text()
+app.testing.set_method("sweep")
+assert not app.testing.share_row.isVisibleTo(app.testing)
 
 fail = True                                                                    # a camera that can't open
 app.calibrate()

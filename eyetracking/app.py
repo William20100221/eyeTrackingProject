@@ -27,6 +27,7 @@ What talks to what:
          (every model at once on 36 rings; or in record mode the video + the presses, replayed
          through the tracker and the models afterwards: services/recording.py)
       Sweep / Points / Line model can reuse the person's Original / Random 4x4 as their dots
+      Points and Line model share every recording (one calibration is saved as both)
       -> BlinkWindow: blink scores in six eye states
 The camera is on only while one of those full-screen windows runs.
 """
@@ -43,7 +44,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.blink_scores import advice as blink_advice
 from eyetracking.core.calibration import GazeProfile
-from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, live_clock, train
+from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, live_clock, partner, train
 from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
@@ -254,6 +255,9 @@ class App(QObject):
         path = save_calibration(rec, method.id, dots_from=borrowed.name if borrowed else None)   # saved RAW: the checks rerun on loading
         note = f" Cleaned: {report.summary()}." if report.reasons else ""
         note += f" The dots were reused from {borrowed.name}." if borrowed else ""
+        twin = partner(method)
+        if twin is not None and self.testing.share_partner:    # Points <-> Line model: one recording trains both
+            note += f" Also saved as {twin.name} ({storage.copy_as(path, twin.id).name}): both train on it."
         self.testing.say(f"{method.name}: calibrated with {len(report.kept.dots)} good dot samples, saved as "
                          f"{path.name}.{note}")
         self.testing.refresh()

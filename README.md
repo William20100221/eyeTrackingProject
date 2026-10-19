@@ -27,7 +27,9 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is sav
 | Random 3×3 / 4×4 / 5×5 / Sweep / Points / Line model | each type above, its final dots in a new random order each time | the same as its in-order type |
 
 Every type records the same 12 numbers per frame, so their files can be compared. Sweep, Points and
-Line model end on a 4×4 grid on this branch, the same 16 dots as Original 4×4. The live point goes
+Line model end on a 4×4 grid on this branch, the same 16 dots as Original 4×4. Points and Line model run
+the same steps, so a calibration of one is saved as the other too (the switch "Save it as both", on by
+default): the two models train on the same recordings. Right-click > Copy to does the same for files already there. The live point goes
 through a 1€ filter (steady while the eyes rest, quick when they jump). Why the models are what they
 are, with the measurements: `docs/model_improvements.md`.
 

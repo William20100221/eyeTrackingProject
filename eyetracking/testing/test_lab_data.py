@@ -240,4 +240,16 @@ storage.remove_samples(edited, {0})                                           # 
 assert len(storage.load_calibration(edited).dots) == 1 and storage.list_removed("original-3x3") == [edited.parent / "trash" / edited.name]
 page.restore_files(storage.list_removed("original-3x3"))                      # the original back, the edit undone
 assert len(storage.load_calibration(edited).dots) == 2 and storage.list_removed("original-3x3") == []
+
+# ---- 7. Points <-> Line model: one recording, both types --------------------------------
+from eyetracking.core.methods import partner
+assert partner(METHOD_BY_ID["points"]).id == "line-model" and partner(METHOD_BY_ID["random-line-model"]).id == "random-points"
+assert partner(METHOD_BY_ID["sweep"]) is None and partner(METHOD_BY_ID["original-4x4"]) is None
+pts = storage.save_calibration(one, "points", tmp / "James" / "points" / "points_2026-10-18_171729.json")
+line = storage.copy_as(pts, "line-model")
+assert line == tmp / "James" / "line-model" / "line-model_2026-10-18_171729.json"
+assert storage.load_calibration(line) == storage.load_calibration(pts) and storage.list_calibrations("line-model", tmp / "James") == [line]
+assert "(the same recording as points_2026-10-18_171729.json)" in storage.calibration_lines(line)[0][0]
+page.copy_files([pts], "line-model")                                          # already there: left alone, said so
+assert "Already there: points_2026-10-18_171729.json" in page.log.item(0).text()
 print("lab data ok")

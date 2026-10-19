@@ -54,7 +54,7 @@ from eyetracking.services.storage import (blink_score_lines, calibration_lines, 
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_disabled,
                                           remove_calibration, remove_samples,
                                           set_calibration_enabled, trash_file)
-from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS
+from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS, partner
 
 DEFAULTS = {
     "seed": "#E5483B",          # the logo's red
@@ -891,6 +891,17 @@ class TestingPage(QWidget):
         reuse.addWidget(self.reuse_switch)
         reuse.addWidget(self.reuse_note, 1)
         v.addWidget(self.reuse_row)
+        self.share_row = QWidget()                       # Points <-> Line model: one recording saved as both
+        share = QHBoxLayout(self.share_row)
+        share.setContentsMargins(0, 0, 0, 0)
+        share.setSpacing(12)
+        self.share_switch = Switch("Save it as both")
+        self.share_switch.set_checked_now(True)
+        self.share_note = label("", "sheetText")
+        self.share_note.setWordWrap(True)
+        share.addWidget(self.share_switch)
+        share.addWidget(self.share_note, 1)
+        v.addWidget(self.share_row)
         go = button("Start the calibration", "filled")
         go.clicked.connect(lambda: self.command.emit("calibrate"))
         v.addSpacing(8)
@@ -916,8 +927,19 @@ class TestingPage(QWidget):
         """Sweep / Points / Line model: take the final dots from the person's 4x4 calibration instead."""
         return self.reuse_switch.isEnabled() and self.reuse_switch.isChecked()
 
+    @property
+    def share_partner(self) -> bool:
+        """Points / Line model: save the calibration as the other type too."""
+        return self.share_switch.isChecked()
+
     def _update_reuse(self):
         m = METHOD_BY_ID[self.method_id]
+        twin = partner(m)
+        self.share_row.setVisible(twin is not None)
+        if twin is not None:
+            self.share_note.setText(f"{m.name} and {twin.name} run the same steps, so this calibration is saved as "
+                                    f"a {twin.name} calibration too: both models train on the same data. Off: "
+                                    f"{m.name} only.")
         self.reuse_row.setVisible(m.kind != "grid")
         if m.kind == "grid":
             return
@@ -1176,6 +1198,11 @@ class TestingPage(QWidget):
             elif lst is self.disabled_list:
                 menu.addAction("Enable (train on it again)", lambda: self.set_enabled(paths, True))
             add_move_menu(menu, paths, lambda person: self._changed(move_all(paths, person)))
+            twins = {partner(METHOD_BY_ID[storage.method_of(p)]) if storage.method_of(p) in METHOD_BY_ID else None
+                     for p in paths}
+            if len(twins) == 1 and None not in twins:   # Points <-> Line model: train the other on the same data
+                twin = twins.pop()
+                menu.addAction(f"Copy to {twin.name} (the same data trains both)", lambda: self.copy_files(paths, twin.id))
             menu.addAction(f"{I_DELETE}  Remove {count(paths, 'calibration')}", lambda: self.remove_files(paths))
         menu.exec(lst.mapToGlobal(pos))
 
@@ -1189,6 +1216,18 @@ class TestingPage(QWidget):
         for p in paths:
             set_calibration_enabled(p, enabled)
         self._changed(f"{'Enabled' if enabled else 'Disabled'} {count(paths, 'calibration')}.")
+
+    def copy_files(self, paths: list[Path], method_id: str):
+        """Copy to > the same recordings as calibrations of the partner type (Points <-> Line model)."""
+        clash = []
+        for p in paths:
+            try:
+                storage.copy_as(p, method_id)
+            except FileExistsError:
+                clash.append(p.name)
+        done = len(paths) - len(clash)
+        self._changed(f"Copied {done} calibration{'s' if done != 1 else ''} to {METHOD_BY_ID[method_id].name}."
+                      + (f" Already there: {', '.join(clash)}." if clash else ""))
 
     def remove_files(self, paths: list[Path]):
         """Right-click > Remove (or Delete): into each type's trash folder; Removed lists them to restore."""

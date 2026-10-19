@@ -26,7 +26,9 @@ Two collections of six:
                 row, the same order for all, so the order is not one more difference
   Random order  a twin of each (randomised()): the same steps and model, the final grid
                 shuffled anew each time, so a type vs its twin measures what the order changes
-Sweep, Points and Line model end on 4x4 on this branch (5x5 on their own branches), so
+Points and Line model (and their random twins) share their recordings: a calibration of one is saved
+as the other too (partner()), so the two models train on the same data, as the reused 4x4 dots do for
+the grid. Sweep, Points and Line model end on 4x4 on this branch (5x5 on their own branches), so
 Original 4x4 and those three share the same 16 dot positions.
 
 Every type records the same 12 features per frame (core/features.py), so the files of
@@ -116,6 +118,15 @@ def randomised(m: Method) -> Method:
 # every in-order type gets a random twin, added after the six so saved choices (indexes) keep their type
 METHODS = METHODS + tuple(randomised(m) for m in METHODS)
 METHOD_BY_ID = {m.id: m for m in METHODS}
+# Points and Line model run the same procedure (line dots, head step, 4x4 dots): one recording trains both,
+# so a calibration of one is saved as the other too, and the two models are compared on the same data
+SHARED = {"points": "line-model", "line-model": "points", "random-points": "random-line-model",
+          "random-line-model": "random-points"}
+
+
+def partner(m: Method) -> Method | None:
+    """The type whose model trains on the same recordings as this one (Points <-> Line model), or None."""
+    return METHOD_BY_ID.get(SHARED.get(m.id, ""))
 DEFAULT_METHOD = "original-5x5"
 
 
