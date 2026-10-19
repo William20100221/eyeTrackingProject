@@ -276,7 +276,8 @@ def button(text: str, kind: str) -> QPushButton:
 class SpinButton(QPushButton):
     """A button whose glyph turns once when clicked (Refresh, Reset to defaults): the click is seen to
     land, like the turning arrows in Windows' and Android's refresh buttons. The glyph is drawn as an
-    icon so it can turn; set_color() follows the theme."""
+    icon so it can turn; set_color() follows the theme. It turns anticlockwise, the way its arrow
+    (Segoe's Reset, U+E777) points: turning clockwise, it ran against its own arrowhead (20 Oct)."""
 
     def __init__(self, glyph: str, text: str, kind: str):
         super().__init__(text)
@@ -284,7 +285,7 @@ class SpinButton(QPushButton):
         self.setProperty("kind", kind)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)
-        self._turn = QVariantAnimation(self, startValue=0.0, endValue=360.0, duration=550,
+        self._turn = QVariantAnimation(self, startValue=0.0, endValue=-360.0, duration=550,
                                        easingCurve=QEasingCurve.OutCubic)
         self._turn.valueChanged.connect(self._draw)
         self.clicked.connect(self._turn.start)
