@@ -173,6 +173,7 @@ class TrainedModel:
     def __init__(self, model: Model, inner, K: np.ndarray | None = None, ref: np.ndarray | None = None,
                  k_source: str = "") -> None:
         self.model, self.inner, self.K, self.ref, self.k_source = model, inner, K, ref, k_source
+        self.newest: CalibrationRecording | None = None   # the newest grid recording it learnt from, cleaned (train())
 
     def predict(self, features: Sequence[float] | None) -> tuple[float, float] | None:
         if features is None:
@@ -226,11 +227,15 @@ def pursuit_samples(sweep: Sequence[CalibrationSample]) -> list[CalibrationSampl
     moving dot (the pursuit lag) and the camera's picture is older than the dot's place when it is read.
     The shift is measured per pass (across, then down) as the one whose eye numbers line up best with the
     dot (|correlation|), as pursuit calibration does (Pfeuffer et al., UIST 2013). Frames are in time
-    order; a dropped frame (a blink) makes the shift a frame off there.
+    order; a dropped frame (a blink) makes the shift a frame off there. The passes are split by time (the
+    down pass starts at the first frame off the middle row), not by value: the down pass crosses the
+    centre, and a frame landing exactly on (0.5, 0.5) belongs to it.
+    Measured on the real sweeps (addendum 17): the shift picked is 3-5 frames across, 0-1 down, and it
+    changes the new-sitting error by 0.0 points; kept because the eye does trail a moving dot.
     ponytail: a shift in frames, not ms (the file has no times); store frame times if this matters."""
     out = []
-    for across in (True, False):
-        part = [s for s in sweep if (s.target_y == 0.5) == across]
+    down_from = next((i for i, s in enumerate(sweep) if s.target_y != 0.5), len(sweep))
+    for across, part in ((True, list(sweep[:down_from])), (False, list(sweep[down_from:]))):
         if len(part) <= MAX_LAG + 2:
             continue
         eye = np.array([(s.features[0] + s.features[1]) / 2 if across else (s.features[10] + s.features[11]) / 2
@@ -275,13 +280,16 @@ def train(model: Model, grids: Sequence[CalibrationRecording], specials: Sequenc
         head, extra = parts
     weights += [EXTRA_WEIGHT] * len(extra)
     if model.kind == "line":
-        return TrainedModel(model, LineModel(screen).fit(dots + extra, weights)), len(dots) + len(extra)
-    K, source = (fit_k(head), "its own head step") if head else (None, "")
-    if K is None:
-        K, source = DEFAULT_K, "the default"
-    ref = reference_angles(kept[0].dots)
-    samples = [CalibrationSample(corrected(s.features, K, ref), s.target_x, s.target_y) for s in dots + extra]
-    return TrainedModel(model, GazeModel().fit(samples, weights), K, ref, source), len(samples)
+        trained = TrainedModel(model, LineModel(screen).fit(dots + extra, weights))
+    else:
+        K, source = (fit_k(head), "its own head step") if head else (None, "")
+        if K is None:
+            K, source = DEFAULT_K, "the default"
+        ref = reference_angles(kept[0].dots)
+        samples = [CalibrationSample(corrected(s.features, K, ref), s.target_x, s.target_y) for s in dots + extra]
+        trained = TrainedModel(model, GazeModel().fit(samples, weights), K, ref, source)
+    trained.newest = kept[0]
+    return trained, len(dots) + len(extra)
 
 
 if __name__ == "__main__":
@@ -297,4 +305,10 @@ if __name__ == "__main__":
     trail = [CalibrationSample((x, x, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), t, 0.5) for x, t in zip(np.r_[[xs[0]] * 3, xs[:-3]], xs)]
     fixed = pursuit_samples(trail)
     assert len(fixed) == 117 and all(abs(s.features[0] - s.target_x) < 1e-12 for s in fixed)
+    # a down pass that crosses the centre exactly: that frame stays in the down pass, next to its neighbours
+    ys = [0.05 + 0.9 * i / 20 for i in range(21)]
+    down = [CalibrationSample((0,) * 10 + (y, y), 0.5, round(y, 4)) for y in ys]
+    assert (0.5, 0.5) in {(s.target_x, s.target_y) for s in down}
+    kept = pursuit_samples(trail + down)
+    assert sum(s.target_x == 0.5 for s in kept) == len(down) and all(s.target_x == 0.5 for s in kept[117:]), kept[117:]
     print("\n".join(f"{m.id:<26} {m.kind:<8} {m.name}" for m in MODELS))

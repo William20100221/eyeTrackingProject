@@ -79,6 +79,8 @@ w2.add_person()
 assert storage.DATA_DIR == tmp / "data" / "Bo" and w2.store.value("person") == "Bo" and w2.person_switch.isChecked()
 assert w2.store.value("person_mode", type=bool) and "Saving for Bo" in app2.testing.status.text()
 w2._fill_person_menu()
-next(a for a in w2.person_menu.actions() if a.text() == "Ann").trigger()   # the menu: Ann, saved at once
-assert storage.DATA_DIR == tmp / "data" / "Ann" and w2.store.value("person") == "Ann"
+w2.person_switch.setChecked(False)
+w2.save()
+next(a for a in w2.person_menu.actions() if a.text() == "Ann").trigger()   # the menu: Ann, in use and saved at once
+assert storage.DATA_DIR == tmp / "data" / "Ann" and w2.store.value("person") == "Ann" and w2.person_switch.isChecked()
 print("person mode ok")

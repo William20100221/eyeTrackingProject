@@ -723,21 +723,27 @@ class ClickAway(QObject):
     scroll bar), and are let go by a click anywhere else in the window: another column, the page, a
     heading. A plain click on a file in the list makes it the only one picked (Qt's ExtendedSelection
     does that itself). Not let go: a click on a button (it may act on the picked files, as Remove
-    selected does) or in a popup (the right-click menu, a question box: another window)."""
+    selected does), in a popup (the right-click menu, a question box: another window), or on the title
+    bar or a window edge (moving or resizing the window is not a click on the page). `views`: lists, or
+    tuples of a list and the panes that belong to it (a Data page's words of the picked file: reading or
+    scrolling them is not "elsewhere")."""
 
     def __init__(self, parent: QWidget, views):
         super().__init__(parent)
-        self.views = list(views)
+        self.views = [v if isinstance(v, tuple) else (v,) for v in views]
         QApplication.instance().installEventFilter(self)
 
     def eventFilter(self, obj, ev):
         if ev.type() == QEvent.MouseButtonPress:
             target = QApplication.widgetAt(ev.globalPosition().toPoint())
-            if target is not None and not isinstance(target, QAbstractButton):
-                for view in self.views:
+            frame = target
+            while frame is not None and not isinstance(frame, (TitleBar, Grip)):
+                frame = frame.parentWidget()
+            if target is not None and frame is None and not isinstance(target, QAbstractButton):
+                for view, *panes in self.views:
                     if (view.selectionModel() is not None and view.selectionModel().hasSelection()
                             and view.isVisible() and target.window() is view.window()
-                            and target is not view and not view.isAncestorOf(target)):
+                            and not any(w is target or w.isAncestorOf(target) for w in (view, *panes))):
                         view.clearSelection()
         return False
 
@@ -1094,12 +1100,14 @@ class TestingPage(QWidget):
         self.detail_path: Path | None = None
         from eyetracking.ui.check_table import CheckTablePage   # here: it uses this module's widgets
         self.check_table = CheckTablePage()
+        self.check_table.said.connect(self.say)
         self.main.addWidget(self.check_table)
         self.main.addWidget(self._train_page())
         h.addWidget(self.main, 1)
         self.side_nav.idClicked.connect(lambda i: cross_fade(self.main, i))
         self.click_away = ClickAway(self, [self.active_list, self.disabled_list, self.inactive_list, self.removed_list,
-                                           self.gaze_checks.files, self.blink_scores.files, self.detail,
+                                           (self.gaze_checks.files, self.gaze_checks.lines),
+                                           (self.blink_scores.files, self.blink_scores.lines), self.detail,
                                            self.train_table, self.check_table.table])
         self.set_method(method_id if method_id in METHOD_BY_ID else DEFAULT_METHOD, announce=False)
         self.refresh()                                   # the lists, read once now; again on show and after changes
@@ -1401,6 +1409,9 @@ class TestingPage(QWidget):
         self.main.setCurrentIndex(7)
 
     def remove_selected(self):
+        if not (self.detail_path and self.detail_path.exists()):
+            self.refresh()                               # gone meanwhile: back to the lists
+            return
         chosen = set()
         for item in self.detail.selectedItems():
             index, dot = item.data(Qt.UserRole), item.data(Qt.UserRole + 1)
@@ -1450,11 +1461,11 @@ class TestingPage(QWidget):
             elif lst is self.disabled_list:
                 menu.addAction("Enable (train on it again)", lambda: self.set_enabled(paths, True))
             add_move_menu(menu, paths, lambda person: self._changed(move_all(paths, person)))
-            kinds = {storage.method_of(p) for p in paths}
-            if len(kinds) == 1 and kinds <= METHOD_BY_ID.keys():   # Sweep / Points / Line model: the same data for all
-                for twin in partners(METHOD_BY_ID[kinds.pop()]):
-                    menu.addAction(f"Copy to {twin.name} (the same data trains both)",
-                                   lambda t=twin.id: self.copy_files(paths, t))
+            # Points <-> Line model (the same steps); an old type's file to the special its steps really are
+            targets = set.intersection(*(set(storage.copy_targets(p)) for p in paths))
+            for t in [m for m in METHOD_BY_ID if m in targets]:
+                menu.addAction(f"Copy to {METHOD_BY_ID[t].name} (the same recording trains both)",
+                               lambda t=t: self.copy_files(paths, t))
             menu.addAction(f"{I_DELETE}  Remove {count(paths, 'calibration')}", lambda: self.remove_files(paths))
         menu.exec(lst.mapToGlobal(pos))
 
@@ -1529,6 +1540,8 @@ class TestingPage(QWidget):
         self.set_check()
         self.refresh_train()
         self.check_table.refresh()
+        if self.main.currentIndex() == 7 and not (self.detail_path and self.detail_path.exists()):
+            self.main.setCurrentIndex(3)                 # the file on the detail page is gone (Undo, Clear, a move)
 
     def set_undo(self, what: str):
         """The Undo button under the status line: "Undo <what>", hidden when there is nothing to undo."""
@@ -1629,11 +1642,12 @@ class TestingPage(QWidget):
             ticked = item.checkState() == Qt.Checked
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | (Qt.ItemIsUserCheckable if not missing else Qt.NoItemFlags))
             item.setCheckState(Qt.Checked if ticked and not missing else Qt.Unchecked)
-            files = tuple(p.name for p in grids + specials)
+            files = tuple((p.name, p.stat().st_mtime_ns) for p in grids + specials)   # as App._job keys a model
             done = self.train_info.get((self.train_person, m.id))
             numbers = done[1] if done and done[0] == files else None
+            newest = f"the newest of {len(specials)}" if len(specials) > 1 else "1"   # train() takes the newest that passes
             texts = (f"{len(grids)} {m.grid.name}" if grids else "–",
-                     f"{len(specials)} {m.special.name}" if m.special and specials else "–",
+                     f"{newest} {m.special.name}" if m.special and specials else "–",
                      *(numbers or ("", "", "")),
                      missing or ("Trained" if numbers else "Ready: not trained yet"))
             for col, text in enumerate(texts, start=1):
@@ -1959,9 +1973,11 @@ class SettingsWindow(QWidget):
         self.person_menu.addAction("Add a person…", self.add_person)
 
     def pick_person(self, name: str):
-        """Another person from the menu: saved at once, as if Save changes were pressed (20 Oct: a person
-        picked but not saved left the files going to the one before, with nothing on screen saying so)."""
+        """Another person from the menu: person mode on and saved at once, as if Save changes were pressed
+        (20 Oct: a person picked but not saved left the files going to the one before, with nothing on screen
+        saying so). Picking a person means using them, as adding one does; turn the switch off to stop."""
         self.set_person(name)
+        self.person_switch.setChecked(True)
         self.save()
 
     def add_person(self):

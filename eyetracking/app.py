@@ -290,9 +290,9 @@ class App(QObject):
                 if key not in self.models:
                     self.models[key] = train(model, load_calibrations(grids), load_calibrations(specials), screen)
                 trained, n = self.models[key]
-                newest = load_calibrations(grids[:1])
-                error = dots_error(trained, newest[0]) if trained and newest else None
-                results[model.id] = (tuple(p.name for p in grids + specials),
+                # on the newest grid recording it really learnt from (train() skips one that fails the check)
+                error = dots_error(trained, trained.newest) if trained and trained.newest else None
+                results[model.id] = (key[2],                             # the files, as the model cache knows them
                                      (str(n), "" if error is None else f"{error:.1%}",
                                       (trained.k_source or "its own 3D line") if trained else "couldn't train"))
                 done[0] += 1

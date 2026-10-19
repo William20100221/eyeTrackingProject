@@ -265,7 +265,17 @@ short = storage.save_calibration(CalibrationRecording(line, head[:10], ()), "poi
 assert "a head step of only 10 frames" in storage.calibration_problem(short)
 old = storage.save_calibration(CalibrationRecording(glide, head, (sample(0.05, 0.05),)), "random-sweep",
                                tmp / "random-sweep" / "random-sweep_2026-10-19_184215.json")
-assert "an old type (Random Sweep (old))" in storage.calibration_problem(old) and '"grid":1' in old.read_text()
+assert "an old type (Random Sweep (old)); its steps are a real Sweep recording" in storage.calibration_problem(old)
+assert '"grid":1' in old.read_text() and storage.copy_targets(old) == ["sweep"] and storage.copy_targets(copy) == []
+page.copy_files([old], "sweep")                                                     # right-click > Copy to Sweep
+moved = tmp / "sweep" / "sweep_2026-10-19_184215.json"
+assert storage.calibration_usable(moved) and "(the same recording as random-sweep_2026-10-19_184215.json)" in storage.calibration_text(moved)
+assert storage.copy_targets(storage.save_calibration(CalibrationRecording(line, head, ()), "random-points",
+                                                     tmp / "random-points" / "random-points_2026-10-19_184319.json")) == ["points", "line-model"]
+four_old = storage.save_calibration(CalibrationRecording(line, head, tuple(sample(x, y) for x, y in point_grid(4))), "points",
+                                    tmp / "points" / "points_2026-10-18_120000.json", grid=4)   # an old Points file with 4x4 dots
+storage.remove_samples(four_old, {len(line) + len(head) + i for i in range(7)})      # 7 of its 16 dots gone
+assert '"grid":4' in four_old.read_text(), "an edit keeps the grid the file had"
 storage.remove_samples(sweep, set(range(100)))                                                     # step 1 gone, the head kept
 assert sweep.exists() and storage.load_calibration(sweep).sweep == () and "no step-1 frames" in storage.calibration_problem(sweep)
 page.refresh()
@@ -306,5 +316,23 @@ assert cw.picked(lst) == [], "a click elsewhere must let go of the picked files"
 QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at(rows[0]))
 QTest.mouseClick(page.lists_title, Qt.MouseButton.LeftButton)                       # ...or on the page itself
 assert cw.picked(lst) == []
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at(rows[0]))
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, at(rows[2]))
+bar = cw.TitleBar(page)                                                              # moving the window: not a click on the page
+bar.setGeometry(0, 0, 200, 20)
+bar.show()
+bar.mousePressEvent = lambda e: None                                                 # (offscreen: no window to move)
+QTest.mouseClick(bar, Qt.MouseButton.LeftButton)
+assert len(cw.picked(lst)) == 3, "a press on the title bar must not let go"
+bar.deleteLater()
+checks = page.gaze_checks                                                            # a Data page: the picked file and its words
+storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "original-5x5")
+page.show_page(4)
+checks.refresh()
+qt.processEvents()
+shown = checks.files.currentItem()
+assert shown is not None and shown.isSelected()
+QTest.mouseClick(checks.lines.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(10, 10))
+assert shown.isSelected(), "reading the file's words must not drop its highlight"
 page.hide()
 print("lab data ok")

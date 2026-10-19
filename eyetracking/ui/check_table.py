@@ -22,7 +22,7 @@ import csv
 import io
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QMenu, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
@@ -106,23 +106,27 @@ def everyone_long_csv() -> tuple[list, list]:
 
 
 class _Num(QTableWidgetItem):
-    """A cell that sorts by its number (an empty cell after every number), shown as a percentage."""
+    """A cell that sorts by its number, shown as a percentage (or as `text`). An empty cell (None) comes
+    after every number whichever way the column is sorted: nothing measured is never the best or the worst."""
 
-    def __init__(self, value: float | None, signed: bool = False):
-        super().__init__("" if value is None else f"{value:+.1%}" if signed else f"{value:.1%}")
+    def __init__(self, value: float | None, signed: bool = False, text: str | None = None):
+        super().__init__(text if text is not None else "" if value is None else f"{value:+.1%}" if signed
+                         else f"{value:.1%}")
         self.value = value
         self.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
     def __lt__(self, other):
-        key = lambda v: (v is None, v or 0)                  # empty cells after every number (sorted up)
-        return key(self.value) < key(getattr(other, "value", None))
+        a, b = self.value, getattr(other, "value", None)
+        if (a is None) != (b is None):                       # Qt sorts down by asking b < a: flip for "empty last"
+            table = self.tableWidget()
+            down = table is not None and table.horizontalHeader().sortIndicatorOrder() == Qt.DescendingOrder
+            return (a is None) == down
+        return a is not None and a < b
 
 
 class _Int(_Num):
-    def __init__(self, value: int):
-        super().__init__(None)
-        self.value = value
-        self.setText(str(value))
+    def __init__(self, value: int | None, text: str | None = None):
+        super().__init__(value, text=str(value) if text is None else text)
 
 
 def heat(value: float, lo: float, hi: float, alpha: int = 90) -> QColor:
@@ -134,6 +138,8 @@ def heat(value: float, lo: float, hi: float, alpha: int = 90) -> QColor:
 
 
 class CheckTablePage(QWidget):
+    said = Signal(str)                # a line for the app's status line (a download saved, or why not)
+
     def __init__(self):
         from eyetracking.ui.control_window import I_CHEVRON, I_DOWNLOAD, I_TABLE, button, label
         super().__init__()
@@ -180,7 +186,10 @@ class CheckTablePage(QWidget):
         self._chevron = I_CHEVRON
 
     def show_person(self, person: str | None):
+        """Another tester, or Everyone: the columns change, so a sort picked before (by column number) would
+        land on another column: back to the table's own order, the lowest mean first."""
         self.person = person
+        self.table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.refresh()
 
     def default_name(self) -> str:
@@ -191,13 +200,20 @@ class CheckTablePage(QWidget):
         return group_csv() if self.person is EVERYONE else one_csv(self.person)
 
     def save(self, header, rows, name: str, path: str | None = None) -> Path | None:
-        """Ask where (a Save dialog in Downloads), then write the csv. Returns the file, or None if cancelled."""
+        """Ask where (a Save dialog in Downloads), then write the csv; say what happened in the status line.
+        Returns the file, or None if cancelled or it couldn't be written (a file open in Excel is locked)."""
         if path is None:
             path, _ = QFileDialog.getSaveFileName(self, "Download the table", str(Path.home() / "Downloads" / name),
                                                   "CSV (*.csv)")
         if not path:
             return None
-        Path(path).write_text(csv_text(header, rows), encoding="utf-8-sig")   # the BOM: Excel reads ×, é right
+        try:
+            Path(path).write_text(csv_text(header, rows), encoding="utf-8-sig")   # the BOM: Excel reads ×, é right
+        except OSError as e:
+            self.said.emit(f"Couldn't save {Path(path).name} ({e.strerror or e}). Is it open in Excel? Close it and "
+                           "try again, or pick another name.")
+            return None
+        self.said.emit(f"Saved {len(rows)} rows as {path}.")
         return Path(path)
 
     def refresh(self):
@@ -219,9 +235,9 @@ class CheckTablePage(QWidget):
         self.table.setRowCount(len(rows))
         means = [r[4] for r in rows if r[4] is not None]
         for i, (m, used, n, last, mean, best, vs) in enumerate(rows):
-            cells = [QTableWidgetItem(model_name(m)), QTableWidgetItem(used), _Int(n), _Num(last), _Num(mean),
+            grids = int(used.split()[0]) if used[:1].isdigit() else None          # "2 + 1 of 2": sorts by the 2
+            cells = [QTableWidgetItem(model_name(m)), _Int(grids, used), _Int(n), _Num(last), _Num(mean),
                      _Num(best), _Num(vs, signed=True)]
-            cells[1].setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if mean is not None and len(means) > 1:
                 cells[4].setBackground(heat(mean, min(means), max(means)))
             if vs is not None:
@@ -284,4 +300,28 @@ if __name__ == "__main__":
     text = csv_text(*group_csv())
     assert text.splitlines()[0] == "Model,Ann,Bo,Mean over testers,Spread,Best model for", text
     assert "Sweep (old),,0.5,0.5,,0" in text, text
+
+    # the page: numbers sort as numbers, empty cells last both ways, a new tester starts unsorted, downloads say so
+    from PySide6.QtWidgets import QApplication
+    from eyetracking.core.models import CalibrationRecording, CalibrationSample
+    storage.save_calibration(CalibrationRecording((), (), (CalibrationSample((0.5,) * 12, 0.5, 0.5),)), "original-4x4",
+                             storage.person_root("Ann") / "original-4x4" / "original-4x4_2026-10-20_100000.json")
+    app = QApplication([])                                              # Ann's Original 4x4: a row with no check yet
+    page = CheckTablePage()
+    said = []
+    page.said.connect(said.append)
+    page.show_person("Ann")
+    column = lambda c: [page.table.item(r, c).text() for r in range(page.table.rowCount())]
+    page.table.sortByColumn(4, Qt.DescendingOrder)                                  # mean error, worst first
+    assert column(4)[:3] == ["30.0%", "20.0%", "10.0%"] and set(column(4)[3:]) == {""}, column(4)
+    page.table.sortByColumn(4, Qt.AscendingOrder)
+    assert column(4)[:3] == ["10.0%", "20.0%", "30.0%"] and set(column(4)[3:]) == {""}, column(4)
+    a, b = _Int(10, "10"), _Int(2, "2 + 1")
+    assert b < a and not a < b                                                       # 2 before 10, not as text
+    page.show_person(EVERYONE)
+    assert page.table.horizontalHeader().sortIndicatorSection() == -1 and column(0)[0] == "Sweep + Original 4×4"
+    out = page.save(*page.current_csv(), "x.csv", str(tmp / "everyone.csv"))
+    assert out.read_text(encoding="utf-8-sig").startswith("Model,Ann,Bo") and said[-1].startswith("Saved 4 rows")
+    assert page.save(*page.current_csv(), "x.csv", str(tmp / "no-such-folder" / "x.csv")) is None
+    assert said[-1].startswith("Couldn't save x.csv"), said
     print("ok")

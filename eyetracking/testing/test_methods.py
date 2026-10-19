@@ -120,4 +120,10 @@ print(f"3. Sweep vs Points + Original 4x4: their points differ by {gap('sweep', 
 wrong = train(model_for("original-4x4", "sweep"), [grids["original-4x4"]], [specials["points"]], screen)
 assert wrong == (None, 0), "a Points recording must not train a Sweep model"
 assert METHOD_BY_ID["line-model"].kind == "points"                                  # the Points procedure
+# trained.newest: the newest grid recording train() really kept (a newer one that fails the check is skipped)
+stare = CalibrationRecording((), (), tuple(s for t in cal.point_grid(4) for s in frames((0.5, 0.5), 25)
+                                             for s in [CalibrationSample(s.features, *t)]))
+kept = train(model_for("original-4x4"), [stare, grids["original-4x4"]], [], screen)[0]
+assert kept.newest is not None and len(kept.newest.dots) <= len(grids["original-4x4"].dots) and kept.newest.dots[0].features in \
+    {s.features for s in grids["original-4x4"].dots}, "the eyes-on-the-centre file must not be the newest kept"
 print("methods ok")

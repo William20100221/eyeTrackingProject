@@ -50,7 +50,7 @@ from pathlib import Path
 from eyetracking.core import blink_scores
 from eyetracking.core.calibration import describe_target, grid_positions
 from eyetracking.core.features import describe_features, head_degrees
-from eyetracking.core.methods import LEGACY, METHOD_BY_ID, MODEL_BY_ID, MODELS, Model, model_name
+from eyetracking.core.methods import LEGACY, METHOD_BY_ID, MODEL_BY_ID, MODELS, Model, model_name, partners
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from eyetracking.core.quality import MIN_HEAD_FRAMES, step_one_problem
 from path import DATA_DIR
@@ -173,17 +173,19 @@ def method_dir(method_id: str, root: Path | None = None) -> Path:
 
 
 def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | None = None,
-                     dots_from: str | None = None) -> Path:
+                     dots_from: str | None = None, grid: int | None = None) -> Path:
     """Write one calibration to its method's folder (or `path`). Returns the path.
     Nothing is written without dot samples (a grid) or head-step frames (a special). `dots_from`:
-    the file the dots were reused from (an old Sweep / Points / Line model file that skipped its own)."""
+    the file the dots were reused from (an old Sweep / Points / Line model file that skipped its own).
+    `grid`: the grid size to keep (an edited file keeps the one it had)."""
     if not rec.dots and not rec.head:
         raise ValueError("no dot samples and no head step: nothing worth saving")
     now = datetime.now()
     if path is None:
         path = method_dir(method_id) / f"{method_id}_{now:{STAMP}}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    grid = METHOD_BY_ID[method_id].grid if method_id in METHOD_BY_ID else 0
+    if grid is None:
+        grid = METHOD_BY_ID[method_id].grid if method_id in METHOD_BY_ID else 0
     if rec.dots and not grid:                       # an older special / old type's file (it ended on dots): their size
         grid = round(len({(s.target_x, s.target_y) for s in rec.dots}) ** 0.5)
     data = {"format": FORMAT, "method": method_id, "grid": grid, "saved_at": now.isoformat(timespec="seconds")}
@@ -276,15 +278,41 @@ def calibration_problem(path: Path) -> str | None:
     return _problem(str(path), st.st_size, st.st_mtime_ns)
 
 
+def steps_kind(rec: CalibrationRecording) -> str | None:
+    """What a recording's steps are, whatever folder it is in: "sweep" (a gliding dot + a head step),
+    "points" (still line dots + a head step) or None (no head step to speak of)."""
+    if len(rec.head) < MIN_HEAD_FRAMES or not rec.sweep:
+        return None
+    return "sweep" if step_one_problem(rec.sweep, "sweep") is None else "points"
+
+
+def copy_targets(path: Path) -> list[str]:
+    """The types a calibration can be copied to as the same recording: Points <-> Line model, and an old
+    type's file (random-sweep ...) to the special its steps really are (the old random twins only
+    shuffled their dots: their steps are what Sweep / Points / Line model record today)."""
+    kind = method_of(path)
+    if kind in METHOD_BY_ID:
+        return [p.id for p in partners(METHOD_BY_ID[kind])]
+    try:
+        steps = steps_kind(load_calibration(path))
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return {"sweep": ["sweep"], "points": ["points", "line-model"]}.get(steps, [])
+
+
 @functools.lru_cache(maxsize=4096)
 def _problem(path: str, size: int, mtime_ns: int) -> str | None:
     kind = method_of(Path(path))
-    if kind not in METHOD_BY_ID:
-        return f"an old type ({LEGACY.get(kind, kind)}): since 20 Oct a special is its own calibration, paired with a grid"
     try:
         rec = load_calibration(Path(path))
     except (OSError, ValueError, KeyError, TypeError) as e:
         return f"it can't be read ({e})"
+    if kind not in METHOD_BY_ID:
+        steps = steps_kind(rec)
+        names = {"sweep": "Sweep", "points": "Points or Line model"}
+        return (f"an old type ({LEGACY.get(kind, kind)}); its steps are a real {names[steps].split()[0]} recording: "
+                f"right-click > Copy to {names[steps]} to use them" if steps else
+                f"an old type ({LEGACY.get(kind, kind)}): since 20 Oct a special is its own calibration, paired with a grid")
     method = METHOD_BY_ID[kind]
     if method.kind == "grid":
         return None if rec.dots else "no dot samples"
@@ -390,7 +418,7 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
     """Drop the samples numbered `indexes` (as calibration_lines counts them) and
     rewrite the file in its own format. Returns how many were dropped."""
     keep_original(path)
-    rec, _, dots_from, _ = _load(path)
+    rec, grid, dots_from, _ = _load(path)
     n, kept = 0, {}
     for part in PARTS:
         kept[part] = []
@@ -399,7 +427,8 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
                 kept[part].append(s)
             n += 1
     if kept["dots"] or kept["head"]:
-        save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), method_of(path), path, dots_from)
+        save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), method_of(path), path, dots_from,
+                         grid)
     else:
         remove_calibration(path)        # no dots and no head step left: the file goes too
     return n - sum(len(v) for v in kept.values())
@@ -568,7 +597,9 @@ def model_results(root: Path | None = None, everything: bool = False) -> list[tu
         grids, specials = model_files(m, root)
         errors = check_errors(m.id, root)
         if everything or errors or (grids and (specials or m.special is None)):
-            used = f"{len(grids)}" + (f" + {len(specials)}" if m.special else "")
+            # a special: train() takes the newest that passes its check, so "+ 1" (of how many there are)
+            used = f"{len(grids)}" + (f" + 1 of {len(specials)}" if len(specials) > 1 else f" + {len(specials)}"
+                                      if m.special else "")
             out.append((m.id, used, errors))
     for old in LEGACY:
         errors = check_errors(old, root)

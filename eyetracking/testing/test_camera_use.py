@@ -192,7 +192,10 @@ assert len(saved) == 2 and page.undo_btn.isVisibleTo(page) and "Undo the Points 
     (saved, page.status.text())
 app._calibrated(Done(), METHOD_BY_ID["sweep"], points)             # still dots are not a Sweep: rejected, nothing saved
 assert "rejected (its step 1 is still dots" in page.status.text() and storage.list_calibrations("sweep") == []
+page.open_detail(saved[0])                                         # its words open on the detail page...
+assert page.main.currentIndex() == 7
 page.undo_btn.click()                                              # Undo: both files into their trash folders
+assert page.main.currentIndex() == 3                               # ...and the page goes back to the lists: the file is gone
 assert storage.list_calibrations("points") == storage.list_calibrations("line-model") == [] and not page.undo_btn.isVisibleTo(page)
 assert [p.name for p in storage.list_removed("points")] == [saved[0].name] and "Undid the Points calibration: 2 files" in page.status.text()
 checks = [storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], m, tmp / "data" / "William" / m) for m in ("original-3x3", "original-4x4")]
@@ -211,6 +214,10 @@ assert page.ticked() == ["original-3x3", "original-4x4"], page.ticked()
 app.train_models("William", page.ticked())
 assert page.train_table.item(row["original-3x3"], 6).text() == "Trained" and page.train_table.item(row["original-3x3"], 4).text().endswith("%")
 assert page.train_table.item(row["original-3x3"], 5).text() == "the default" and "2 models trained" in page.status.text()
+three = storage.list_calibrations("original-3x3", tmp / "data" / "William")[0]
+storage.remove_samples(three, {0, 1})                                           # edited in place, same name
+page.refresh_train()
+assert page.train_table.item(row["original-3x3"], 6).text() == "Ready: not trained yet"   # not the old numbers
 fail = True                                                                    # a camera that can't open
 app.calibrate()
 assert app.tracker is None and not app.camera_users and app.fullscreen is None
