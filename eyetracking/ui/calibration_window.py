@@ -35,7 +35,7 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import CalibrationSession, HeadStep, HeadStill, point_grid, sweep_points
-from eyetracking.core.models import CalibrationRecording, CalibrationSample
+from eyetracking.core.models import NO_FRAME, CalibrationRecording, CalibrationSample
 from eyetracking.services.storage import save_calibration
 from eyetracking.services.tracker import EyeTracker
 
@@ -49,7 +49,7 @@ SETTLE_MS = 1000   # dot appears, eyes travel to it: DON'T record yet
 COLLECT_MS = 1500  # eyes resting on the dot: record features
 DOT_SAMPLES = 25   # good frames each dot needs; a blink costs frames, so the dot waits longer
 MAX_COLLECT_MS = 4000  # ...but never longer than this (face lost, eyes closed for ages)
-TICK_MS = 33       # check about 30 times a second, like a webcam
+TICK_MS = 16       # the ring shrinks at the screen's pace; each camera frame (~30 a second) is recorded once
 
 RING_START = 40    # px: ring radius when a dot first appears
 RING_END = 12      # px: ring radius once it has shrunk onto the dot
@@ -131,7 +131,12 @@ class CalibrationWindow(QWidget):
         # Read on EVERY tick, settle included, and throw settle frames away.
         # A webcam keeps a few frames buffered: if we stop reading while the
         # eye travels, the first "collect" frames could be those stale ones.
+        # From the camera's thread (app.py) most ticks come before the next frame: NO_FRAME. The
+        # dots keep their timing, but nothing is recorded, and it isn't a blink: `fresh`.
         features = self._get_features()
+        fresh = features is not NO_FRAME
+        if not fresh:
+            features = None
         elapsed = self._clock.elapsed()
 
         if self._phase == "head":                     # step 2: centre dot, head moves
@@ -143,7 +148,7 @@ class CalibrationWindow(QWidget):
                 self._clock.restart()
             else:
                 self._prompt, record = step
-                if record:
+                if record and fresh:
                     self._head.add_sample(features)
 
         elif self._phase == "settle" and elapsed >= SETTLE_MS:
@@ -156,9 +161,10 @@ class CalibrationWindow(QWidget):
             # back just before it: see CalibrationSession.add_sample
             # a head that turned since the dot's first frame: the frame is left out and
             # the dot waits (like for a blink), with "keep your head still" under it
-            self._head_moved = features is not None and self._still.moved(features)
-            if not self._head_moved:
-                self._active.add_sample(features)
+            if fresh:
+                self._head_moved = features is not None and self._still.moved(features)
+                if not self._head_moved:
+                    self._active.add_sample(features)
 
             # move on after COLLECT_MS once the dot has enough good frames;
             # blinks extend the dot, up to MAX_COLLECT_MS

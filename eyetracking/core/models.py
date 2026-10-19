@@ -46,3 +46,8 @@ class CalibrationRecording:
     sweep: tuple[CalibrationSample, ...]   # eyes on still dots across + down the middle, head still
     head: tuple[CalibrationSample, ...]    # eyes on the centre dot, head moving
     dots: tuple[CalibrationSample, ...]    # the 25-dot grid: the model's training data
+
+
+# A frame source's answer when no new camera frame has come since the last ask (services/tracker.py
+# FrameFeed). Not a blink, not a lost face: nothing happened yet. A window draws on and records nothing.
+NO_FRAME = object()
