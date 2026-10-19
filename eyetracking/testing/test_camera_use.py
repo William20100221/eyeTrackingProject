@@ -112,7 +112,7 @@ page.set_check_count(1)
 app.check()
 assert app.fullscreen.names == ["original-3x3"] and app.fullscreen.folders == {"original-3x3": tmp / "data" / "William" / "original-3x3"}
 assert app.fullscreen.calibrations == {"original-3x3": 1} and app.fullscreen.show_dot
-said = app.testing.log.item(0).text()
+said = app.testing.status.text()
 assert "William's Original 3×3: model trained on " in said and "from the newest 1 calibration." in said, said
 assert storage.DATA_DIR == tmp / "data"                                        # the person in use didn't change
 app.fullscreen.close()
@@ -180,5 +180,5 @@ assert "saved as Random Points and Random Line model too" in app.testing.share_n
 fail = True                                                                    # a camera that can't open
 app.calibrate()
 assert app.tracker is None and not app.camera_users and app.fullscreen is None
-assert "didn't start" in app.testing.status.text() and "didn't start" in app.testing.log.item(0).text()
+assert "didn't start" in app.testing.status.text()
 print("camera use ok:", log)

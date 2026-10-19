@@ -9,7 +9,8 @@ The window (ui/control_window.py) has three tabs:
     Testing      Calibration: pick one of the 12 types (core/methods.py) and start it
                  Gaze check: pick a person, a type and how many calibrations, start the check;
                  or every type at once (6x6 rings); or record the camera and run the models later
-                 Blink test, and the data: calibrations, gaze checks, blink scores, the log
+                 Sample text: read a short text with that model; which paragraphs did it see you read?
+                 Blink test, and the data: calibrations, gaze checks, blink scores
     Calibration  starts the chosen type full screen
     Settings     theme, camera, person mode (whose folder the calibrations go into)
 
@@ -28,14 +29,18 @@ What talks to what:
          through the tracker and the models afterwards: services/recording.py)
       Sweep / Points / Line model can reuse the person's Original / Random 4x4 as their dots
       Sweep, Points and Line model share every recording (one calibration is saved as all three)
+      -> ReadingWindow: the sample text, a paragraph read once the gaze stayed on it long enough
       -> BlinkWindow: blink scores in six eye states
-The camera is on only while one of those full-screen windows runs.
+The camera is on only while one of those full-screen windows runs. Slow work (the camera opening,
+training, checking and saving a calibration, a replay) runs on a worker thread while a thin bar
+runs under the title bar (App._busy), so the window never stops answering.
 """
 from __future__ import annotations
 
 import argparse
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer
@@ -49,14 +54,30 @@ from eyetracking.core.models import CalibrationRecording
 from eyetracking.core.quality import check_recording
 from eyetracking.services.camera import camera_names
 from eyetracking.services.recording import Recorder, replay
-from eyetracking.services.storage import (ensure_layout, load_all_calibrations, load_calibration, save_blink_scores,
+from eyetracking.services.storage import (ensure_layout, load_calibration, save_blink_scores,
                                           save_calibration, save_gaze_check, use_person)
 from eyetracking.services import storage
 from eyetracking.services.tracker import EyeTracker
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, pick_camera
+from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, busy, pick_camera, run_busy
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
+from eyetracking.ui.reading_window import ReadingWindow, summary as reading_summary
+
+
+STILL_WORKING = "Still working on the last one…"   # a second start while slow work runs
+
+
+def open_tracker(index: int, closing: threading.Thread | None = None) -> EyeTracker:
+    """The camera opened and made ready, on the worker thread (App._busy). `closing`, the camera closed
+    last, is waited for first, so the device is free. Then the first frame is read here: the stream
+    really starting and MediaPipe's first run would otherwise land on the GUI thread, in the first tick
+    of the calibration or the check."""
+    if closing is not None:
+        closing.join()
+    tracker = EyeTracker(index)
+    tracker.read()
+    return tracker
 
 
 class App(QObject):
@@ -66,16 +87,18 @@ class App(QObject):
         self.control = SettingsWindow()
         self.testing = self.control.testing
         self.control.saved.connect(self.apply_settings)
-        self.control.calibrate_requested.connect(self.calibrate)
-        self.testing.command.connect(lambda c: {"calibrate": self.calibrate, "check": self.check, "check-all": self.check_all,
-                                                "blink": self.blink_test}[c]())
-        self.testing.replay_requested.connect(lambda p: self._replay(Path(p)))
+        self.control.calibrate_requested.connect(lambda: self._command(self.calibrate))
+        self.testing.command.connect(lambda c: self._command({"calibrate": self.calibrate, "check": self.check,
+                                                               "check-all": self.check_all, "sample": self.sample_text,
+                                                               "blink": self.blink_test}[c]))
+        self.testing.replay_requested.connect(lambda p: self._command(lambda: self._replay(Path(p))))
         self.testing.method_changed.connect(lambda _: self.testing.status.setText(self._model_status()))
         self.testing.data_changed.connect(self._retrain)
         settings = self.control.read_store()
 
         self.tracker: EyeTracker | None = None     # opened by _use_camera(), only while a window needs the gaze
-        self._opening = False                     # a camera open in progress: a second start meanwhile is ignored
+        self._working = False                      # slow work running (App._busy): a second start meanwhile is ignored
+        self._closing: threading.Thread | None = None   # the last camera, closing on its own thread
         self.camera_users: set[str] = set()
         self.camera = settings["camera"]
         self.fullscreen: QWidget | None = None     # the calibration / check / blink page while it runs
@@ -89,6 +112,36 @@ class App(QObject):
     @property
     def method(self) -> Method:
         return METHOD_BY_ID[self.testing.method_id]
+
+    # ---- slow work: off the GUI thread, with the progress bar ------------------
+    def _command(self, run) -> None:
+        """A start button. Ignored while slow work runs (its window would open on top of it)."""
+        if self._working or busy():
+            self.testing.say(STILL_WORKING)
+            return
+        run()
+
+    def _busy(self, text: str, work, status=None):
+        """work() on a worker thread while this one keeps the window alive: the progress bar runs, the
+        status line says `text` (or `status()`, asked again every 50 ms), the pointer waits, and clicks
+        are answered. Windows shows "Not Responding" when the GUI thread stops for 5 s, which a cold
+        camera driver, training a dozen models or saving a big calibration could do on this PC.
+        Returns work()'s result; raises its exception."""
+        before, shown = self.testing.status.text(), [text]
+        self.testing.status.setText(text)
+
+        def tick() -> None:
+            if status is not None:
+                shown[0] = status()
+                self.testing.status.setText(shown[0])
+        self.control.place_busy()
+        was, self._working = self._working, True     # nested (a click answered meanwhile): the outer job still runs
+        try:
+            return run_busy(self.control.busy, work, tick)
+        finally:
+            self._working = was
+            if self.testing.status.text() in (shown[0], STILL_WORKING):   # nothing else said meanwhile
+                self.testing.status.setText(before)
 
     # ---- settings + camera -------------------------------------------
     def _camera_index(self) -> int:
@@ -125,7 +178,8 @@ class App(QObject):
         self.person = person
         root = use_person(person)
         ensure_layout()                           # a new person / folders cut out: made empty
-        self.testing.set_method(self.testing.method_id, announce=False)   # lists + "Saved as" path
+        self.testing.set_method(self.testing.method_id, announce=False)   # the "Saved as" path
+        self.testing.refresh()                    # the lists: "in use" moves to this person
         self.testing.set_check(person=person)     # the gaze check tests the person in use, unless picked
         where = root.relative_to(storage.BASE_DIR.parent).as_posix()
         self.testing.say(f"Saving for {person} in {where}/." if person else f"Saving straight under {where}/.")
@@ -144,54 +198,38 @@ class App(QObject):
     def _release_camera(self, *users: str) -> None:
         self.camera_users.difference_update(users)
         if not self.camera_users and self.tracker is not None:
-            self.tracker.close()                  # camera light off, MediaPipe freed
-            self.tracker = None
+            # camera light off, MediaPipe freed: on its own thread (a driver's release can block for a second);
+            # the next open waits for it (open_tracker), so the camera is free again before it's asked for
+            old, self.tracker = self.tracker, None
+            self._closing = threading.Thread(target=old.close, daemon=True)
+            self._closing.start()
+            self._closing.join(0.25)              # usually done by now: the camera is off when this returns
 
     def _open_camera(self) -> bool:
         """Open the chosen camera and MediaPipe on a worker thread, this one painting meanwhile."""
-        if self._opening:
-            return False                          # the driver is still starting from the last click
         try:
             index = self._camera_index()          # may ask with the popup first
         except RuntimeError as e:
             self.testing.say(f"The camera didn't start ({e}).")
             return False
-        self.testing.status.setText("Opening the camera…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        # the open runs on another thread while this one keeps painting: the camera driver can take
-        # a minute the first time on some PCs, and a GUI thread stuck that long shows "Not Responding"
-        box: dict = {}
-
-        def job() -> None:
-            try:
-                box["tracker"] = EyeTracker(index)
-            except Exception as e:                # camera busy, MediaPipe failed
-                box["error"] = e
-        worker = threading.Thread(target=job, daemon=True)
-        self._opening = True
-        worker.start()
+        # the camera driver can take a minute the first time on some PCs: on a worker thread, the bar running
         try:
-            while worker.is_alive():
-                QApplication.processEvents()      # paint, answer clicks (a second start is ignored meanwhile)
-                worker.join(0.05)
-            self._opening = False
-            if "error" in box:
-                self.testing.say(f"The camera didn't start ({box['error']}). Pick another in Settings > Camera.")
-                return False
-            self.tracker = box["tracker"]
+            self.tracker = self._busy("Opening the camera…", lambda: open_tracker(index, self._closing))
             return True
-        finally:
-            QApplication.restoreOverrideCursor()
+        except Exception as e:                    # camera busy, MediaPipe failed
+            self.testing.say(f"The camera didn't start ({e}). Pick another in Settings > Camera.")
+            return False
 
     # ---- the models: trained when a check needs one, kept while its files stay the same -------
     def _model(self, method: Method, root: Path, newest: int | None) -> tuple[TrainedModel | None, int]:
         """A person's model of one type, trained on their newest `newest` calibrations (None: all),
         or the one already trained on exactly those files. (model, samples used)."""
-        files = storage.list_calibrations(method.id, root)[:newest]
+        files = [p for p in storage.list_calibrations(method.id, root) if storage.calibration_usable(p)][:newest]
         key = (method.id, str(root), newest, tuple((p.name, p.stat().st_mtime_ns) for p in files))
         if key not in self.models:
-            self.models[key] = train(method, load_all_calibrations(method.id, root)[:newest], screen_geometry())
+            screen = screen_geometry()            # Qt: here, on the GUI thread; the training itself on a worker
+            self.models[key] = self._busy(f"Training the {method.name} model…",
+                                          lambda: train(method, storage.load_calibrations(files), screen))
         return self.models[key]
 
     def _retrain(self, quiet: bool = False) -> None:
@@ -219,7 +257,7 @@ class App(QObject):
 
     def _fullscreen_closed(self) -> None:
         self.fullscreen = None
-        self._release_camera("calibration", "check", "blink")
+        self._release_camera("calibration", "check", "blink", "sample")
 
     def calibrate(self) -> None:
         if not self._use_camera("calibration"):
@@ -242,28 +280,30 @@ class App(QObject):
         if not rec.dots:
             self.testing.say(f"{method.name}: no samples. Was your face in view? Try again.")
             return
-        report = check_recording(rec)             # impossible data -> reject, don't save
-        if not report.ok:
-            self.testing.say(f"{method.name}: calibration rejected ({report.summary()}). Try again.")
-            return
-        if method.model != "ridge":
-            try:
-                GazeProfile.from_recording(report.kept)   # an unusable sweep / head step -> don't save it
-            except ValueError as e:
-                self.testing.say(f"{method.name}: calibration didn't work ({e}). Try again.")
-                return
-        path = save_calibration(rec, method.id, dots_from=borrowed.name if borrowed else None)   # saved RAW: the checks rerun on loading
-        note = f" Cleaned: {report.summary()}." if report.reasons else ""
-        note += f" The dots were reused from {borrowed.name}." if borrowed else ""
         others = partners(method) if self.testing.share_partner else []   # Sweep / Points / Line model: one recording
-        if others:
+        # the file's place is fixed now: a person switched in Settings while the checks run must not move it
+        target = storage.method_dir(method.id) / f"{method.id}_{datetime.now():{storage.STAMP}}.json"
+
+        def check_and_save():                     # on a worker thread: the checks and big files take seconds here
+            report = check_recording(rec)         # impossible data -> reject, don't save
+            if not report.ok:
+                return f"{method.name}: calibration rejected ({report.summary()}). Try again."
+            if method.model != "ridge":
+                try:
+                    GazeProfile.from_recording(report.kept)   # an unusable sweep / head step -> don't save it
+                except ValueError as e:
+                    return f"{method.name}: calibration didn't work ({e}). Try again."
+            path = save_calibration(rec, method.id, target, dots_from=borrowed.name if borrowed else None)   # saved RAW
+            note = f" Cleaned: {report.summary()}." if report.reasons else ""
+            note += f" The dots were reused from {borrowed.name}." if borrowed else ""
             for m in others:
                 storage.copy_as(path, m.id)
-            note += f" Also saved as {' and '.join(m.name for m in others)}: all of them train on it."
-        self.testing.say(f"{method.name}: calibrated with {len(report.kept.dots)} good dot samples, saved as "
-                         f"{path.name}.{note}")
+            if others:
+                note += f" Also saved as {' and '.join(m.name for m in others)}: all of them train on it."
+            return f"{method.name}: calibrated with {len(report.kept.dots)} good dot samples, saved as {path.name}.{note}"
+        said = self._busy("Checking and saving the calibration…", check_and_save)
         self.testing.refresh()
-        self.testing.status.setText(self._model_status())
+        self.testing.say(said)                    # last: "saved as …" or why it was rejected stays in view
 
     # ---- the gaze check: one model, every model, or a recording ----------------
     def check(self) -> None:
@@ -302,14 +342,14 @@ class App(QObject):
                  {m: n for m, n in self.testing.multi_counts.items() if n}
         models, counts = {}, {}
         for m, newest in wanted.items():
-            recordings = load_all_calibrations(m, root)[:newest]
+            used = min(newest or 10 ** 6, storage.usable_calibrations(m, root))   # how many files train it (cached)
             if self.mouse:                               # no models in mouse mode: the mouse plays each type that has data
-                if recordings:
-                    models[m], counts[m] = None, len(recordings)
+                if used:
+                    models[m], counts[m] = None, used
                 continue
             model, _ = self._model(METHOD_BY_ID[m], root, newest)
             if model is not None:
-                models[m], counts[m] = model, len(recordings)
+                models[m], counts[m] = model, used
         return models, counts
 
     def check_all(self) -> None:
@@ -370,18 +410,15 @@ class App(QObject):
         if not models:
             self.testing.say(f"{who}: no usable calibration to run over the recording. Calibrate first.")
             return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            def progress(done: float) -> None:
-                self.testing.status.setText(f"Running {len(models)} models over the recording: {done:.0%}")
-                QApplication.processEvents()
-            # ponytail: on the GUI thread (a minute's video takes ~30 s); a QThread if that annoys
-            logs = replay(meta, {m: model.tracker() for m, model in models.items()}, progress)
+        done = [0.0]
+        try:                                          # a minute's video takes ~30 s: on a worker thread, the bar running
+            logs = self._busy("Running the models over the recording…",
+                              lambda: replay(meta, {m: model.tracker() for m, model in models.items()},
+                                             lambda d: done.__setitem__(0, d)),
+                              status=lambda: f"Running {len(models)} models over the recording: {done[0]:.0%}")
         except Exception as e:                        # a damaged or moved recording
             self.testing.say(f"The recording couldn't be run ({e}).")
             return
-        finally:
-            QApplication.restoreOverrideCursor()
         stamp = meta.stem[-17:]
         paths = [save_gaze_check(log, m, storage.method_dir(m, root), counts[m], f"video-{stamp}")
                  for m, log in logs.items() if log]
@@ -393,6 +430,30 @@ class App(QObject):
     def _checked(self, who: str, paths: list[Path]) -> None:
         self.testing.refresh()
         self.testing.say(f"{who}: gaze check saved as {', '.join(p.name for p in paths)}. See Data > Gaze checks.")
+
+    def sample_text(self) -> None:
+        """Tests > Sample text: read a short text with the model picked on the Gaze check page (the
+        person, the type, the newest N), and see which paragraphs it says you read."""
+        method = METHOD_BY_ID[self.testing.check_method]
+        person = self.testing.check_person
+        root = storage.person_root(person)
+        who = f"{person or 'No person'}'s {method.name}"
+        track = None
+        if not self.mouse:
+            model, n = self._model(method, root, self.testing.check_count)
+            if model is None:
+                self.testing.say(f"{who}: no usable calibration yet. Calibrate first.")
+                return
+            track = model.tracker()                   # the smoothed live point, as in the gaze check
+        if not self._use_camera("sample"):
+            return
+
+        def get():
+            return fake_point_from_mouse() if self.mouse else track(self.tracker.read_features(), live_clock())
+        window = ReadingWindow(get)
+        window.finished.connect(lambda results: self.testing.say(f"{who}, sample text: {reading_summary(results)}"))
+        self.testing.say(f"{who}: read the text at your own pace; Esc finishes.")
+        self._open_fullscreen(window)
 
     def blink_test(self) -> None:
         if not self._use_camera("blink"):

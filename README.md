@@ -50,9 +50,13 @@ are, with the measurements: `docs/model_improvements.md`.
     runs any model (even a later one) over an old recording.
 - **Calibration, Sweep / Points / Line model:** a switch reuses the person's newest Original 4×4
   (Random 4×4 for the random twins) as the final 16 dots, so only the first steps are recorded.
+- **Sample text:** read a short text with the model picked on the Gaze check page; a paragraph turns green once
+  your gaze has stayed on it 0.1 s a word, and the result (paragraphs read, seconds on each) shows in the status line.
 - **Blink test:** your blink scores in six eye states, with the cut-off they suggest.
 - **Data:** calibrations (by person > type > date; active / non-active / not usable; readable in words,
-  samples removable), gaze checks (by person > type > date), blink scores, and a log of this run.
+  samples removable), gaze checks (by person > type > date) and blink scores. What the app just did shows in the
+  status line at the bottom of the sidebar; slow work (opening the camera, training, saving) runs a thin bar
+  under the title bar while the window keeps answering.
   Ctrl- or Shift-click picks several files; right-click (or Delete) disables, enables, moves them to another
   person (or a new one) or removes them. Removed calibrations are listed under **Removed**: right-click to
   restore (an edited file's untouched original too, which undoes the edit).

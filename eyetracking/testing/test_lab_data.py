@@ -252,5 +252,5 @@ assert line == tmp / "James" / "line-model" / "line-model_2026-10-18_171729.json
 assert storage.load_calibration(line) == storage.load_calibration(pts) and storage.list_calibrations("line-model", tmp / "James") == [line]
 assert "(the same recording as points_2026-10-18_171729.json)" in storage.calibration_lines(line)[0][0]
 page.copy_files([pts], "line-model")                                          # already there: left alone, said so
-assert "Already there: points_2026-10-18_171729.json" in page.log.item(0).text()
+assert "Already there: points_2026-10-18_171729.json" in page.status.text()
 print("lab data ok")

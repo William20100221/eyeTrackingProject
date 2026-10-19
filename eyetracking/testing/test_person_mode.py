@@ -42,12 +42,12 @@ w.person_switch.setChecked(True)
 w.save()
 assert storage.DATA_DIR == tmp / "data" / "Ann" and (tmp / "data" / "Ann" / "sweep").is_dir()
 texts = lambda lst: [lst.item(i).text() for i in range(lst.count())]
-assert texts(page.active_list)[:2] == ["No person (data/)", "      Original 3×3"] and len(texts(page.active_list)) == 3   # name, then type
+assert texts(page.active_list)[:2] == ["No person (data/)", "   Original 3×3"] and len(texts(page.active_list)) == 3   # name, then type
 assert page.active_list.item(2).data(0x0100) == str(mine)
 assert page.active_list.item(0).flags() == page.active_list.item(1).flags() == Qt.NoItemFlags   # headings: inert
 ann = storage.save_calibration(rec, "original-3x3")              # Ann's first calibration
 page.refresh()
-assert texts(page.active_list)[3:5] == ["Ann   · in use", "      Original 3×3"], texts(page.active_list)
+assert texts(page.active_list)[3:5] == ["Ann   · in use", "   Original 3×3"], texts(page.active_list)
 assert page.active_list.item(5).data(0x0100) == str(ann)
 assert storage.set_calibration_enabled(mine, False).parent == tmp / "data" / "original-3x3" / "disabled"   # in ITS folder
 page.refresh()

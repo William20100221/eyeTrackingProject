@@ -31,6 +31,7 @@ A gaze check is a csv of index, x, y (where the model said), target_x, target_y 
 from __future__ import annotations
 
 import csv
+import functools
 import json
 import math
 import os
@@ -180,7 +181,7 @@ def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | Non
         data["dots_from"] = dots_from
     data |= {part: [asdict(s) for s in getattr(rec, part)] for part in PARTS}
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, separators=(",", ":"))   # compact: no indent (0.78 -> 0.46 MB, 84 -> 23 ms for a Sweep)
     return path
 
 
@@ -213,7 +214,7 @@ def copy_as(path: Path, method_id: str) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     data |= {"method": method_id, "same_as": path.name}
     with open(target, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, separators=(",", ":"))
     return target
 
 
@@ -230,11 +231,17 @@ def list_disabled(method_id: str, root: Path | None = None) -> list[Path]:
 def load_all_calibrations(method_id: str, root: Path | None = None) -> list[CalibrationRecording]:
     """Every readable active calibration of a method (of the person in use, or under `root`), NEWEST
     FIRST. Unreadable files are skipped, with a message."""
+    return load_calibrations(list_calibrations(method_id, root))
+
+
+def load_calibrations(paths) -> list[CalibrationRecording]:
+    """These files, read in order. One that can't be read (damaged, hand-edited, or moved or removed on
+    the Data page while a model trains) is skipped, with a message."""
     recordings = []
-    for path in list_calibrations(method_id, root):
+    for path in paths:
         try:
             recordings.append(load_calibration(path))
-        except (OSError, ValueError, KeyError, TypeError) as e:   # damaged, hand-edited
+        except (OSError, ValueError, KeyError, TypeError) as e:
             print(f"Skipping {path.name}: {e}")
     return recordings
 
@@ -250,9 +257,20 @@ def dots_source(method, root: Path | None = None) -> Path | None:
 
 
 def calibration_usable(path: Path) -> bool:
-    """True if the lab can train on the file: the current format."""
+    """True if the lab can train on the file: the current format. Remembered per file version (its
+    size and modification time), so the lists, the chips and the reuse switch don't parse every file
+    again on each click: 42 files were ~0.5 s a click on 19 Oct (several seconds on a cold start)."""
     try:
-        load_calibration(path)
+        st = path.stat()
+    except OSError:
+        return False
+    return _usable(str(path), st.st_size, st.st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=4096)
+def _usable(path: str, size: int, mtime_ns: int) -> bool:
+    try:
+        load_calibration(Path(path))
     except (OSError, ValueError, KeyError, TypeError):
         return False
     return True
