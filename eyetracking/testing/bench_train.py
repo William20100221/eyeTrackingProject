@@ -3,7 +3,7 @@ The app's own train(): the new-sitting error per calibration type, on the real f
 
     python -m eyetracking.testing.bench_train <data folder>
 
-For every person and every pair of their calibrations: train(method of the TRAINING file,
+For every person and every pair of their grid calibrations: train(the grid's model of the TRAINING file,
 [that file]) exactly as the app does, predict the other file's dots (TrainedModel.predict,
 the head correction included), mean distance to the dot as a fraction of the screen.
 """
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from eyetracking.core.line_model import ScreenGeometry
-from eyetracking.core.methods import METHOD_BY_ID, train
+from eyetracking.core.methods import MODEL_BY_ID, train
 from eyetracking.services.storage import load_calibration, method_of, person_of
 
 warnings.filterwarnings("ignore")
@@ -27,7 +27,7 @@ def main() -> int:
     data = Path(sys.argv[1])
     files = []
     for path in sorted(data.rglob("*.json")):
-        if "trash" in path.parts or "disabled" in path.parts or method_of(path) not in METHOD_BY_ID:
+        if "trash" in path.parts or "disabled" in path.parts or method_of(path) not in MODEL_BY_ID:   # the grids
             continue
         try:
             files.append((person_of(path) or "data", method_of(path), load_calibration(path)))
@@ -37,7 +37,7 @@ def main() -> int:
     for person in sorted({f[0] for f in files}):
         mine = [f for f in files if f[0] == person]
         for i, (_, mtype, train_rec) in enumerate(mine):
-            model, n = train(METHOD_BY_ID[mtype], [train_rec], ScreenGeometry(34.4, 19.4))
+            model, n = train(MODEL_BY_ID[mtype], [train_rec], [], ScreenGeometry(34.4, 19.4))
             if model is None:
                 print(f"  {person}/{mtype}: unusable")
                 continue

@@ -29,7 +29,7 @@ assert w.pages.currentWidget() is w.testing and w.testing.main.currentIndex() ==
 assert app.method.id == "original-5x5"
 
 w.testing.side_nav.button(5).click()                         # Data > Blink scores
-w.testing.method_chips.button(3).click()                     # the Sweep method
+w.testing.method_chips.button(6).click()                     # Sweep: the third row's first chip
 assert app.method.id == "sweep" and "Sweep" in w.testing.status.text()
 w.hide()
 w.show_last()
@@ -44,5 +44,5 @@ w.store.sync()
 w2 = cw.SettingsWindow()                                     # a restart: the same settings file
 w2.show_last()
 assert w2.pages.currentWidget() is w2.settings_page and w2.testing.main.currentIndex() == 5
-assert w2.testing.method_id == "sweep" and w2.testing.method_chips.checkedId() == 3
+assert w2.testing.method_id == "sweep" and w2.testing.method_chips.checkedId() == 6
 print("window memory ok")

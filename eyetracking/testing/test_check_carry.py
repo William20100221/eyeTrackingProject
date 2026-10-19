@@ -31,7 +31,7 @@ points = iter([(0.2, 0.2), (0.6, 0.4), (0.62, 0.41)])
 appmod.fake_point_from_mouse = lambda: next(points)                         # where the "eyes" look
 
 app = appmod.App(mouse=True)
-app.testing.set_check(method_id="original-3x3")
+app.testing.set_check(model_id="original-3x3")
 app.check()
 win = app.fullscreen
 assert win._targets == point_grid(4) and win.names == ["original-3x3"]      # the same 16 rings for every type

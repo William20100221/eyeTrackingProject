@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication
 
 import eyetracking.services.storage as storage
 import eyetracking.ui.control_window as cw
-from eyetracking.core.calibration import describe_target, point_grid
+from eyetracking.core.calibration import describe_target, grid_positions, point_grid
 from eyetracking.core.features import N_FEATURES
 from eyetracking.core.methods import METHOD_BY_ID
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
@@ -113,17 +113,14 @@ assert storage.remove_samples(path, {0}) == 1 and "1 sample," in storage.calibra
 assert (storage.method_dir("original-3x3") / "trash" / path.name).exists()
 storage.remove_calibration(path)
 assert storage.list_calibrations("original-3x3") == [broken] and not path.exists()
-# Sweep with its dots reused from an Original 4x4: remembered in the file, shown in words, kept through an edit
-assert storage.dots_source(METHOD_BY_ID["sweep"]) is None and storage.dots_source(METHOD_BY_ID["original-4x4"]) is None
-four = storage.save_calibration(CalibrationRecording((), (), (sample(*point_grid(4)[0]),)), "original-4x4")
-assert storage.dots_source(METHOD_BY_ID["sweep"]) == four and storage.dots_source(METHOD_BY_ID["random-sweep"]) is None
+# an old Sweep file (before 20 Oct) whose dots were reused from an Original 4x4: still shown, kept through an edit
+four = "original-4x4_2026-10-18_170000.json"
 reused = storage.save_calibration(CalibrationRecording((sample(0.05, 0.5),) * 2, (sample(0.5, 0.5),), (sample(0.5, 0.5),) * 2),
-                                  "sweep", dots_from=four.name)
-assert f"(the dots reused from {four.name})" in storage.calibration_text(reused)
+                                  "sweep", dots_from=four)
+assert f"(the dots reused from {four})" in storage.calibration_text(reused)
 storage.remove_samples(reused, {0})
-assert f"(the dots reused from {four.name})" in storage.calibration_text(reused)
+assert f"(the dots reused from {four})" in storage.calibration_text(reused)
 reused.unlink()
-four.unlink()
 try:                                                            # an empty calibration is never written
     storage.save_calibration(CalibrationRecording((), (), ()), "sweep")
     raise AssertionError("an empty calibration was saved")
@@ -145,10 +142,10 @@ assert storage.list_gaze_checks("original-3x3") == [check] and storage.list_gaze
 older = check.with_name("gaze-check_original-3x3_2026-01-01_000000.csv")      # from before the lit rings
 older.write_text("index,x,y\n0,0.3,0.26\n")
 assert storage.read_gaze_check(older) == [(0, 0.3, 0.26, 0.35, 0.35)]        # the nearest 4x4 ring as its target
-results = {m: r for m, *r in storage.method_results()}                          # the comparison, per type
-calibs, checks, latest, mean = results["original-3x3"]
-assert checks == 2 and abs(latest - 0.01) < 1e-6 and mean > latest, results["original-3x3"]   # latest = the newest file
-assert results["sweep"][1:] == [0, None, None]
+results = {m: errors for m, _, errors in storage.model_results()}               # the comparison, per model
+errors = results["original-3x3"]
+assert len(errors) == 2 and abs(errors[0] - 0.01) < 1e-6 and sum(errors) / 2 > errors[0], errors   # latest = the newest file
+assert "sweep-original-3x3" not in results and "sweep" not in results           # no Sweep calibration, no old check
 older.unlink()
 two = storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "original-3x3", calibrations=2)
 assert two.name.startswith("gaze-check_original-3x3_2-calibrations_20") and storage.file_date(two).year >= 2026, two.name
@@ -192,8 +189,10 @@ assert storage.use_person("Ann Lee") == tmp / "Ann Lee" and storage.list_calibra
 storage.ensure_layout()
 ann = storage.save_calibration(CalibrationRecording((), (), (sample(0.5, 0.5),)), "original-4x4")
 assert ann.parent == tmp / "Ann Lee" / "original-4x4", ann
-assert storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "sweep").parent == tmp / "Ann Lee" / "sweep"
-assert storage.method_results(tmp / "Ann Lee")[3][2] == 1 and storage.method_results(tmp)[3][2] == 0   # per person
+assert storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "sweep-original-4x4").parent == tmp / "Ann Lee" / "sweep-original-4x4"
+ann_results = {m: e for m, _, e in storage.model_results(tmp / "Ann Lee")}
+assert len(ann_results["sweep-original-4x4"]) == 1 and "sweep-original-4x4" not in {m for m, *_ in storage.model_results(tmp)}   # per person
+assert storage.list_people() == ["Ann Lee"]                    # a paired model's folder counts as a person's folder
 assert storage.save_blink_scores(rows).parent == tmp / "Ann Lee" / "blink-test"
 assert storage.set_calibration_enabled(ann, False).parent == tmp / "Ann Lee" / "original-4x4" / "disabled"
 storage.use_person("Bo")
@@ -241,11 +240,10 @@ assert len(storage.load_calibration(edited).dots) == 1 and storage.list_removed(
 page.restore_files(storage.list_removed("original-3x3"))                      # the original back, the edit undone
 assert len(storage.load_calibration(edited).dots) == 2 and storage.list_removed("original-3x3") == []
 
-# ---- 7. Sweep / Points / Line model: one recording, all three types --------------------------
+# ---- 7. Points and Line model: one recording, both types --------------------------------------
 from eyetracking.core.methods import partners
-assert [m.id for m in partners(METHOD_BY_ID["points"])] == ["sweep", "line-model"]
-assert [m.id for m in partners(METHOD_BY_ID["random-sweep"])] == ["random-points", "random-line-model"]
-assert partners(METHOD_BY_ID["original-4x4"]) == []
+assert [m.id for m in partners(METHOD_BY_ID["points"])] == ["line-model"] and partners(METHOD_BY_ID["sweep"]) == []
+assert "random-sweep" not in METHOD_BY_ID and partners(METHOD_BY_ID["original-4x4"]) == []
 pts = storage.save_calibration(one, "points", tmp / "James" / "points" / "points_2026-10-18_171729.json")
 line = storage.copy_as(pts, "line-model")
 assert line == tmp / "James" / "line-model" / "line-model_2026-10-18_171729.json"
@@ -253,4 +251,60 @@ assert storage.load_calibration(line) == storage.load_calibration(pts) and stora
 assert "(the same recording as points_2026-10-18_171729.json)" in storage.calibration_lines(line)[0][0]
 page.copy_files([pts], "line-model")                                          # already there: left alone, said so
 assert "Already there: points_2026-10-18_171729.json" in page.status.text()
+# ---- 8. specials since 20 Oct: no dots, a step 1 of their own kind; the old random twins --------------
+storage.use_person("")
+head = tuple(sample(0.5, 0.5) for _ in range(70))
+line = tuple(sample(x, 0.5) for x in grid_positions(7) for _ in range(3))                           # still dots
+glide = tuple(sample(round(0.05 + 0.9 * i / 99, 4), 0.5) for i in range(100))                      # a gliding dot
+sweep = storage.save_calibration(CalibrationRecording(glide, head, ()), "sweep")                   # saved without dots
+assert storage.calibration_usable(sweep) and storage.load_calibration(sweep).dots == ()
+assert '"grid":0' in sweep.read_text()
+copy = storage.save_calibration(CalibrationRecording(line, head, ()), "sweep", tmp / "sweep" / "sweep_2026-10-19_183838.json")
+assert "a Points recording" in storage.calibration_problem(copy)                                   # a copy of Points
+short = storage.save_calibration(CalibrationRecording(line, head[:10], ()), "points")
+assert "a head step of only 10 frames" in storage.calibration_problem(short)
+old = storage.save_calibration(CalibrationRecording(glide, head, (sample(0.05, 0.05),)), "random-sweep",
+                               tmp / "random-sweep" / "random-sweep_2026-10-19_184215.json")
+assert "an old type (Random Sweep (old))" in storage.calibration_problem(old) and '"grid":1' in old.read_text()
+storage.remove_samples(sweep, set(range(100)))                                                     # step 1 gone, the head kept
+assert sweep.exists() and storage.load_calibration(sweep).sweep == () and "no step-1 frames" in storage.calibration_problem(sweep)
+page.refresh()
+unusable = [x.strip() for x in texts(page.inactive_list)]
+assert "Random Sweep (old)" in unusable and "Sweep" in unusable and "Points" in unusable, unusable
+tip = next(page.inactive_list.item(i).toolTip() for i in range(page.inactive_list.count())
+           if page.inactive_list.item(i).data(0x0100) == str(copy))
+assert "Not usable: its step 1 is still dots (a Points recording)" in tip, tip
+words = storage.calibration_text(old)
+assert words.startswith("Random Sweep (old), ") and "Not usable: an old type" in words, words
+
+# ---- 9. picking several: Shift-click a range, scrolling keeps it, a click elsewhere lets go ----------
+from PySide6.QtCore import QPoint
+from PySide6.QtTest import QTest
+page.resize(1100, 700)
+page.show()
+page.show_page(3)
+for i in range(6):
+    storage.save_calibration(one, "original-5x5", tmp / "original-5x5" / f"original-5x5_2026-10-19_10000{i}.json")
+page.refresh()
+qt.processEvents()
+lst = page.active_list
+rows = [i for i in range(lst.count()) if lst.item(i).data(0x0100)]
+at = lambda i: lst.visualItemRect(lst.item(i)).center()
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at(rows[0]))
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, at(rows[3]))
+assert len(cw.picked(lst)) == 4, len(cw.picked(lst))                                 # Shift-click: the range
+lst.verticalScrollBar().setValue(lst.verticalScrollBar().maximum())                 # scrolling keeps them
+QTest.mouseClick(lst.verticalScrollBar(), Qt.MouseButton.LeftButton)
+assert len(cw.picked(lst)) == 4
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at(rows[1]))
+assert [str(p) for p in cw.picked(lst)] == [lst.item(rows[1]).data(0x0100)]          # a plain click: that one alone
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, at(rows[2]))
+assert len(cw.picked(lst)) == 2
+other = page.disabled_list                                                           # a click in another column...
+QTest.mouseClick(other.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(5, other.height() - 5))
+assert cw.picked(lst) == [], "a click elsewhere must let go of the picked files"
+QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at(rows[0]))
+QTest.mouseClick(page.lists_title, Qt.MouseButton.LeftButton)                       # ...or on the page itself
+assert cw.picked(lst) == []
+page.hide()
 print("lab data ok")

@@ -190,6 +190,71 @@ def check_recording(rec: CalibrationRecording) -> QualityReport:
     return QualityReport(True, CalibrationRecording(tuple(sweep), tuple(head), tuple(dots)), reasons)
 
 
+# --- a special calibration: step 1 + the head step, no dots ----------------------
+STILL_DOTS_MAX = 20             # Points' step 1 has 13 places (14 dots, the centre twice); a gliding dot one per frame
+MIN_HEAD_FRAMES = 60            # the head step that measures the head matrix (as head_correction.MIN_HEAD_FRAMES)
+MIN_STEP_FRAMES = 30            # per line (across, down): fewer means the face was lost most of the time
+
+
+def step_one_problem(sweep, kind: str) -> str | None:
+    """Cheap (no geometry): does step 1 hold what a `kind` calibration records? A gliding dot for a
+    Sweep, still dots for Points / Line model. A copy saved under the other type (before 20 Oct one
+    recording was saved as all three) is caught here."""
+    if not sweep:
+        return "no step-1 frames"
+    gliding = len({(s.target_x, s.target_y) for s in sweep}) > STILL_DOTS_MAX
+    if gliding != (kind == "sweep"):
+        return ("its step 1 is a gliding dot (a Sweep recording), not still dots" if gliding else
+                "its step 1 is still dots (a Points recording), not a gliding dot")
+    return None
+
+
+def check_special(rec: CalibrationRecording, kind: str) -> QualityReport:
+    """A special calibration (kind "sweep" or "points"): impossible frames out of both steps (layer 1);
+    for still dots the glances away out of each (layer 2); then did the eyes follow the dot along both
+    lines (layer 3, rank order as for the grid), and is the head step long enough to measure the head
+    matrix? Its dots, if an older file has some, are not looked at: the grid calibration brings those."""
+    if not rec.head or len(rec.head[0].features) != N_FEATURES:
+        return QualityReport(False, rec, ["no head-step data, or features of another size"])
+    why = step_one_problem(rec.sweep, kind)
+    if why:
+        return QualityReport(False, rec, [why])
+    reasons, counts = [], {}
+    f = np.array([s.features for s in rec.sweep + rec.head])
+    d = IRIS_DOWN.start
+    eye_gap = (float(np.median(f[:, 0] - f[:, 1])), float(np.median(f[:, d] - f[:, d + 1])))
+    sweep, head = (_possible(part, eye_gap, counts) for part in (rec.sweep, rec.head))
+    if counts:
+        reasons.append("impossible frames removed: " + ", ".join(f"{n} {why}" for why, n in counts.items()))
+    if kind != "sweep":
+        sweep, n_glance = _on_target(sweep)
+        if n_glance:
+            reasons.append(f"{n_glance} frames where the eyes left a line dot removed")
+        per_dot: dict = {}
+        for s in sweep:
+            per_dot.setdefault((s.target_x, s.target_y), []).append(s)
+        thin = {dot for dot, g in per_dot.items() if len(g) < MIN_DOT_FRAMES}
+        if thin:
+            reasons.append(f"{len(thin)} line dots dropped (not looked at steadily)")
+            sweep = [s for s in sweep if (s.target_x, s.target_y) not in thin]
+    if len(head) < MIN_HEAD_FRAMES:
+        return QualityReport(False, rec, reasons + [f"only {len(head)} head-step frames (need {MIN_HEAD_FRAMES})"])
+    across = [s for s in sweep if s.target_y == 0.5 and s.target_x != 0.5]
+    down = [s for s in sweep if s.target_x == 0.5 and s.target_y != 0.5]
+    if len(across) < MIN_STEP_FRAMES or len(down) < MIN_STEP_FRAMES:
+        return QualityReport(False, rec, reasons + [f"too few step-1 frames ({len(across)} across, {len(down)} down)"])
+    follow = []
+    for part, axis, col in ((across, 0, 0), (down, 1, 1)):
+        g = np.array([gaze(s.features)[col] for s in part])
+        r = spearmanr(g, [(s.target_x, s.target_y)[axis] for s in part])[0]
+        follow.append(0.0 if np.isnan(r) else abs(r))
+    if follow[0] < MIN_FOLLOW_X or follow[1] < MIN_FOLLOW_Y:
+        return QualityReport(False, rec, reasons + [
+            f"the eyes didn't follow the dot (left/right {follow[0]:.2f}, up/down {follow[1]:.2f}; "
+            f"need {MIN_FOLLOW_X} / {MIN_FOLLOW_Y})"])
+    return QualityReport(True, CalibrationRecording(tuple(sweep), tuple(head), ()), reasons)
+
+
 if __name__ == "__main__":
     # self-check on a simulated person (core/line_model.features_for)
     from eyetracking.core.calibration import point_grid
@@ -221,4 +286,19 @@ if __name__ == "__main__":
     r = check_recording(CalibrationRecording(tuple(good[:50]), tuple(head), tuple(lazy)))
     print("3. eyes never followed:", r.ok, "|", r.summary())
     assert not r.ok
+
+    # a special: still line dots (Points) or a gliding dot (Sweep), the head step, no dots
+    from eyetracking.core.calibration import sweep_points
+    line = [s for t in sweep_points() for s in frames(t, 20)]
+    glide = [s for x in np.linspace(0.05, 0.95, 60) for s in frames((round(float(x), 4), 0.5), 1)] + \
+            [s for y in np.linspace(0.05, 0.95, 60) for s in frames((0.5, round(float(y), 4)), 1)]
+    r = check_special(CalibrationRecording(tuple(line), tuple(head), ()), "points")
+    print("4. Points special:", r.ok, "|", r.summary())
+    assert r.ok and r.kept.dots == () and len(r.kept.sweep) > 0.9 * len(line)
+    r = check_special(CalibrationRecording(tuple(glide), tuple(head), ()), "sweep")
+    print("5. Sweep special:", r.ok, "|", r.summary())
+    assert r.ok and len(r.kept.sweep) > 100
+    assert not check_special(CalibrationRecording(tuple(line), tuple(head), ()), "sweep").ok    # a Points copy as Sweep
+    assert "a Sweep recording" in check_special(CalibrationRecording(tuple(glide), tuple(head), ()), "points").summary()
+    assert not check_special(CalibrationRecording(tuple(line), tuple(head[:30]), ()), "points").ok   # head step too short
     print("ok")

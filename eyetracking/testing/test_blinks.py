@@ -5,7 +5,7 @@ Self-check for blink handling (no webcam):  python -m eyetracking.testing.test_b
    of reopening; a rise that never becomes a blink (looking down) is let
    through again after 200 ms
 2. CalibrationSession drops the frames just BEFORE a blink
-3. A whole calibration (Sweep, the longest method) with frequent blinks: every dot still
+3. Two whole calibrations (Sweep's steps, then Original 4x4's dots) with frequent blinks: every dot still
    gets enough good frames, and no closing-lid frame is saved
 """
 import os
@@ -69,19 +69,24 @@ def get_features():
     if k >= 8:
         return None                                       # blink (tracker gives None)
     return (-1.0 if k >= 6 else 1.0,) + (0.5,) * 11       # 6, 7 = lids closing
-win = cw.CalibrationWindow(METHOD_BY_ID["sweep"], get_features=get_features)
-out = []
-win.finished.connect(lambda rec: (out.append(rec), qt.quit()))
-win.resize(800, 600); win.show(); win.start()
-QTimer.singleShot(120000, qt.quit)
-qt.exec()
-rec = out[0]
+def calibrate(method_id):
+    win = cw.CalibrationWindow(METHOD_BY_ID[method_id], get_features=get_features)
+    out = []
+    win.finished.connect(lambda rec: (out.append(rec), qt.quit()))
+    win.resize(800, 600); win.show(); win.start()
+    QTimer.singleShot(120000, qt.quit)
+    qt.exec()
+    return out[0]
+
+
+sweep, grid = calibrate("sweep"), calibrate("original-4x4")          # a special's steps (no dots), a grid's dots
 counts = {}
-for x in rec.dots:
+for x in grid.dots:
     counts[(x.target_x, x.target_y)] = counts.get((x.target_x, x.target_y), 0) + 1
-closing = sum(x.features[0] < 0 for part in (rec.sweep, rec.head, rec.dots) for x in part)
+closing = sum(x.features[0] < 0 for rec in (sweep, grid) for part in (rec.sweep, rec.head, rec.dots) for x in part)
 print(f"3. calibration: {len(counts)} dots, fewest samples {min(counts.values())} "
-      f"(need {cw.DOT_SAMPLES}); closing-lid frames saved: {closing}")
-assert len(counts) == METHOD_BY_ID["sweep"].dots and min(counts.values()) >= cw.DOT_SAMPLES and closing == 0
+      f"(need {cw.DOT_SAMPLES}); sweep {len(sweep.sweep)} + head {len(sweep.head)} frames; closing-lid frames saved: {closing}")
+assert len(counts) == METHOD_BY_ID["original-4x4"].dots and min(counts.values()) >= cw.DOT_SAMPLES and closing == 0
+assert sweep.sweep and sweep.head and not sweep.dots
 
 print("ok")

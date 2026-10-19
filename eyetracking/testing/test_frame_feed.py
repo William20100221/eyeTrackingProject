@@ -90,23 +90,27 @@ def get_features():
     return (float(frame[0]),) + (0.5,) * 11
 
 
-win = cw.CalibrationWindow(METHOD_BY_ID["sweep"], get_features=get_features)
-out = []
-win.finished.connect(lambda rec: (out.append(rec), qt.quit()))
-win.resize(800, 600)
-win.show()
-win.start()
-QTimer.singleShot(60000, qt.quit)
-qt.exec()
-assert out, "the calibration didn't finish"
-rec = out[0]
-ids = [s.features[0] for part in (rec.sweep, rec.head, rec.dots) for s in part]
+def calibrate(method_id):
+    win = cw.CalibrationWindow(METHOD_BY_ID[method_id], get_features=get_features)
+    out = []
+    win.finished.connect(lambda rec: (out.append(rec), qt.quit()))
+    win.resize(800, 600)
+    win.show()
+    win.start()
+    QTimer.singleShot(60000, qt.quit)
+    qt.exec()
+    assert out, f"the {method_id} calibration didn't finish"
+    return out[0]
+
+
+sweep, grid = calibrate("sweep"), calibrate("original-4x4")       # a special's steps (no dots), a grid's dots
+ids = [s.features[0] for rec in (sweep, grid) for part in (rec.sweep, rec.head, rec.dots) for s in part]
 per_dot = {}
-for s in rec.dots:
+for s in grid.dots:
     per_dot[(s.target_x, s.target_y)] = per_dot.get((s.target_x, s.target_y), 0) + 1
 assert len(ids) == len(set(ids)), "a frame recorded twice"
-assert len(rec.sweep) >= 20 and len(rec.head) >= 20, ("NO_FRAME taken for a blink?", len(rec.sweep), len(rec.head))
-assert len(per_dot) == METHOD_BY_ID["sweep"].dots and min(per_dot.values()) >= cw.DOT_SAMPLES, per_dot
+assert len(sweep.sweep) >= 20 and len(sweep.head) >= 20, ("NO_FRAME taken for a blink?", len(sweep.sweep), len(sweep.head))
+assert len(per_dot) == METHOD_BY_ID["original-4x4"].dots and min(per_dot.values()) >= cw.DOT_SAMPLES, per_dot
 print(f"2. calibration ok: {len(ids)} frames recorded once each over {ticks[0]} ticks")
 
 seq = iter([NO_FRAME, (0.2, 0.3), NO_FRAME, NO_FRAME, None, NO_FRAME])

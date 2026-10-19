@@ -61,8 +61,8 @@ def point_grid(n: int = 5, margin: float = 0.05) -> list[tuple[float, float]]:
 def describe_target(x: float, y: float, n: int = 5) -> str:
     """A dot position in words: "dot (2, 1) of the 5x5 grid" (column, row,
     counted from the top left), or "the point 43% across, 61% down" when it
-    isn't on the grid."""
-    positions = grid_positions(n)
+    isn't on the grid (or there is no grid: a special's steps, n = 0)."""
+    positions = grid_positions(n) if n >= 2 else []
     if round(x, 4) in positions and round(y, 4) in positions:
         return f"dot ({positions.index(round(x, 4)) + 1}, {positions.index(round(y, 4)) + 1}) of the {n}x{n} grid"
     return f"the point {x:.0%} across, {y:.0%} down"

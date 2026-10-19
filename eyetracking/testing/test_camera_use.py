@@ -77,7 +77,7 @@ app.fullscreen.close()
 pump()
 assert log == ["open", "close"] and app.tracker is None                        # done: off
 app.check()                                                                    # no model yet: refused, camera stays off
-assert log[-1] == "close" and "no usable calibration yet" in app.testing.status.text(), app.testing.status.text()
+assert log[-1] == "close" and "needs a usable Original 5×5 calibration" in app.testing.status.text(), app.testing.status.text()
 app.blink_test()                                                               # the blink test: on
 assert log[-1] == "open" and app.camera_users == {"blink"}
 app.fullscreen.close()
@@ -93,7 +93,7 @@ frames = lambda t: [CalibrationSample(features_for(ScreenGeometry(27.7, 18.9), t
                                                   (2, -1), 0.9, rng), *t) for _ in range(20)]
 storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(3) for s in frames(t))), "original-3x3",
                          tmp / "data" / "William" / "original-3x3" / "original-3x3_2026-10-18_120000.json")
-app.testing.set_check(person="William", method_id="original-3x3")
+app.testing.set_check(person="William", model_id="original-3x3")
 page = app.testing
 assert (page.check_count, page.check_most) == (1, 1) and page.check_count_btn.isEnabled()   # most = what's recorded
 storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(3) for s in frames(t))), "original-3x3",
@@ -104,16 +104,16 @@ page._fill_check_count_menu()
 assert [a.text() for a in page.check_count_menu.actions()] == ["1", "2 (all)"]   # 1 up to what's recorded
 page.check_count_menu.actions()[1].trigger()
 assert page.check_count == 2 and page.check_count_btn.text().startswith("2 (all)")
-app.testing.set_check(method_id="original-4x4")                                 # none of this type: None
+app.testing.set_check(model_id="original-4x4")                                  # none of this type: None
 assert page.check_count_btn.text() == "None" and not page.check_count_btn.isEnabled() and page.check_most == 0
-app.testing.set_check(method_id="original-3x3")                                 # another type: back to all of them
+app.testing.set_check(model_id="original-3x3")                                  # another type: back to all of them
 assert page.check_count == 2
 page.set_check_count(1)
 app.check()
 assert app.fullscreen.names == ["original-3x3"] and app.fullscreen.folders == {"original-3x3": tmp / "data" / "William" / "original-3x3"}
 assert app.fullscreen.calibrations == {"original-3x3": 1} and app.fullscreen.show_dot
 said = app.testing.status.text()
-assert "William's Original 3×3: model trained on " in said and "from the newest 1 calibration." in said, said
+assert "William's Original 3×3: model trained on " in said and "from the newest 1 Original 3×3 calibration." in said, said
 assert storage.DATA_DIR == tmp / "data"                                        # the person in use didn't change
 app.fullscreen.close()
 pump()
@@ -130,10 +130,14 @@ storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_gri
 dlg = cw.MultiCheckDialog("William", {"original-3x3": 3, "original-4x4": 1})
 assert dlg.chosen() == {"original-3x3": 3, "original-4x4": 1}                   # all ticked, all calibrations
 dlg.set_count("original-3x3", 1)
-dlg.rows["original-4x4"][0].setChecked(False)                                   # 4x4 left out
-assert dlg.chosen() == {"original-3x3": 1} and dlg.rows["original-3x3"][1].text().startswith("1  ")
+dlg.chips["original-4x4"].setChecked(False)                                     # 4x4 left out
+assert dlg.chosen() == {"original-3x3": 1} and dlg.picks["original-3x3"].text().startswith("1  ")
 again = cw.MultiCheckDialog("William", {"original-3x3": 3, "original-4x4": 1}, {"original-3x3": 1, "original-4x4": 0})
 assert again.chosen() == {"original-3x3": 1}                                     # remembered: the count and the tick
+pair = cw.MultiCheckDialog("William", {"original-3x3": 3, "sweep-original-3x3": 3})   # a grid's row: alone, + Sweep
+assert set(pair.chips) == {"original-3x3", "sweep-original-3x3"} and pair.chosen() == {"original-3x3": 3, "sweep-original-3x3": 3}
+pair.set_count("original-3x3", 2)                                               # one count per grid: both follow
+assert pair.chosen() == {"original-3x3": 2, "sweep-original-3x3": 2}
 page.multi_counts = {"original-3x3": 1, "original-4x4": 0}                       # as if the popup was answered so
 app.check_all()
 win = app.fullscreen
@@ -159,24 +163,54 @@ assert "no face was found in the recording" in app.testing.status.text(), app.te
 assert page.recordings_btn.text().startswith("Recordings (1)")
 page.record_switch.setChecked(False)
 
-# Sweep with the dots reused from the person in use's newest Original 4x4
-storage.save_calibration(CalibrationRecording((), (), tuple(s for t in point_grid(4) for s in frames(t))), "original-4x4")
+# the specials: Sweep records its own steps, no dots; Points and Line model are saved as both
+from eyetracking.core.calibration import sweep_points
+from eyetracking.core.methods import METHOD_BY_ID
 app.testing.set_method("sweep")
-assert app.testing.reuse_row.isVisibleTo(app.testing) and app.testing.reuse_dots and "reused from the newest one" in app.testing.reuse_note.text()
+assert not app.testing.share_row.isVisibleTo(app.testing)                       # Sweep shares nothing (20 Oct)
 app.calibrate()
-assert app.fullscreen._borrowed is not None and len(app.fullscreen._borrowed) == 16 * 20 and app.fullscreen._dots_from.startswith("original-4x4_")
+assert app.fullscreen._session is None and app.fullscreen._sweep is not None    # no dots: a special ends after the head step
 app.fullscreen.close()
 pump()
-app.testing.set_method("random-sweep")                                           # a random twin wants Random 4x4
-assert not app.testing.reuse_switch.isEnabled() and "No Random 4×4" in app.testing.reuse_note.text()
-app.testing.set_method("original-3x3")
-assert not app.testing.reuse_row.isVisibleTo(app.testing) and not app.testing.share_row.isVisibleTo(app.testing)
-app.testing.set_method("points")                                                 # Points: saved as Sweep and Line model too
+app.testing.set_method("points")
 assert app.testing.share_row.isVisibleTo(app.testing) and app.testing.share_partner
-assert "saved as Sweep and Line model too" in app.testing.share_note.text(), app.testing.share_note.text()
-app.testing.set_method("random-sweep")
-assert "saved as Random Points and Random Line model too" in app.testing.share_note.text()
+assert "saved as Line model too" in app.testing.share_note.text(), app.testing.share_note.text()
+app.testing.set_method("original-3x3")
+assert not app.testing.share_row.isVisibleTo(app.testing)
 
+
+class Done:                                                       # the finished calibration window (it closes later)
+    def close(self):
+        pass
+
+
+head = [s for _ in range(4) for s in frames((0.5, 0.5))]           # 80 head-step frames
+points = CalibrationRecording(tuple(s for t in sweep_points() for s in frames(t)), tuple(head), ())
+app._calibrated(Done(), METHOD_BY_ID["points"], points)            # saved as Points and as Line model
+saved = storage.list_calibrations("points") + storage.list_calibrations("line-model")
+assert len(saved) == 2 and page.undo_btn.isVisibleTo(page) and "Undo the Points calibration" in page.undo_btn.text(), \
+    (saved, page.status.text())
+app._calibrated(Done(), METHOD_BY_ID["sweep"], points)             # still dots are not a Sweep: rejected, nothing saved
+assert "rejected (its step 1 is still dots" in page.status.text() and storage.list_calibrations("sweep") == []
+page.undo_btn.click()                                              # Undo: both files into their trash folders
+assert storage.list_calibrations("points") == storage.list_calibrations("line-model") == [] and not page.undo_btn.isVisibleTo(page)
+assert [p.name for p in storage.list_removed("points")] == [saved[0].name] and "Undid the Points calibration: 2 files" in page.status.text()
+checks = [storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], m, tmp / "data" / "William" / m) for m in ("original-3x3", "original-4x4")]
+app._checked("William", checks)                                    # a multiple check: one file per model, one undo
+assert "Undo the gaze check (2 files)" in page.undo_btn.text()
+app.undo()
+assert not any(p.exists() for p in checks) and all((p.parent / "trash" / p.name).exists() for p in checks)
+
+# Data > Train: the ready models of a person trained now; one without its special can't be ticked
+page.set_train_person("William")
+row = {page.train_table.item(r, 0).data(Qt.ItemDataRole.UserRole): r for r in range(page.train_table.rowCount())}
+assert page.train_table.item(row["sweep-original-3x3"], 0).flags() & Qt.ItemFlag.ItemIsUserCheckable == Qt.ItemFlag(0)
+assert "needs a usable Sweep calibration" in page.train_table.item(row["sweep-original-3x3"], 6).text()
+page.tick_models(True)
+assert page.ticked() == ["original-3x3", "original-4x4"], page.ticked()
+app.train_models("William", page.ticked())
+assert page.train_table.item(row["original-3x3"], 6).text() == "Trained" and page.train_table.item(row["original-3x3"], 4).text().endswith("%")
+assert page.train_table.item(row["original-3x3"], 5).text() == "the default" and "2 models trained" in page.status.text()
 fail = True                                                                    # a camera that can't open
 app.calibrate()
 assert app.tracker is None and not app.camera_users and app.fullscreen is None

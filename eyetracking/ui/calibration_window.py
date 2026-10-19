@@ -1,12 +1,11 @@
 """
 Calibration page, full screen (PySide6), for every type in core/methods.py:
 
-  Original 3x3 / 4x4 / 5x5   intro -> the dots -> done
-  Sweep                      intro -> gliding dot (across, down) -> head step -> the 4x4 dots -> done
-  Points, Line model         intro -> 14 still dots along a line -> head step -> the 4x4 dots -> done
-  Random twins               the same steps; the final dots shuffled anew each time
-  (Sweep / Points / Line model with `dots` given reuse those as the grid and end after the head step)
-The In-order types run their final grid row by row (the same order for all of them).
+  Original 3x3 / 4x4 / 5x5   intro -> the dots, row by row -> done
+  Random 3x3 / 4x4 / 5x5     intro -> the same dots, shuffled anew each time -> done
+  Sweep                      intro -> gliding dot (across, down) -> head step -> done
+  Points, Line model         intro -> 14 still dots along a line -> head step -> done
+A special (Sweep, Points, Line model) records no dots: a grid calibration brings them (core/methods.py).
 
 Only drawing and timing live here. What each step means is in core/calibration.py
 (the dot bookkeeping, the sweep motion, the head step with its gauge, the head-still
@@ -34,7 +33,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from eyetracking.core.calibration import CalibrationSession, HeadStep, HeadStill, point_grid, sweep_points, sweep_target
 from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, Method
-from eyetracking.core.models import NO_FRAME, CalibrationRecording, CalibrationSample
+from eyetracking.core.models import NO_FRAME, CalibrationRecording
 
 SETTLE_MS = 1000       # dot appears, eyes travel to it: DON'T record yet
 COLLECT_MS = 1500      # eyes resting on the dot: record features
@@ -52,17 +51,13 @@ class CalibrationWindow(QWidget):
     cancelled = Signal()        # Esc
 
     def __init__(self, method: Method, get_features: Callable[[], Sequence[float] | None],
-                 parent: QWidget | None = None, dots: Sequence[CalibrationSample] | None = None,
-                 dots_from: str = "") -> None:
-        """`dots`: reuse these as the final grid (from the person's Original / Random 4x4 calibration,
-        `dots_from` its name) and skip that step: the window ends after the head step."""
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.method = method
         self._get_features = get_features
-        self._borrowed = tuple(dots) if dots else None
-        self._dots_from = dots_from
-        grid = point_grid(method.grid)                                 # row by row...
-        self._session = CalibrationSession(random.sample(grid, len(grid)) if method.random_order else grid)   # ...or shuffled
+        grid = point_grid(method.grid) if method.kind == "grid" else []          # row by row...
+        self._session = CalibrationSession(random.sample(grid, len(grid)) if method.random_order else grid) \
+            if grid else None                                                     # ...or shuffled; none for a special
         # steps 1-2 also go through a CalibrationSession, for its blink handling
         # (frames just before a blink are dropped): one long "dot" for the sweep and the head step
         self._line = CalibrationSession(sweep_points()) if method.kind == "points" else None
@@ -74,7 +69,8 @@ class CalibrationWindow(QWidget):
         self._active = self._line or self._session  # whose dots settle / collect runs on now
         self._target = (0.5, 0.5)                   # where the dot is drawn in the sweep and head steps
         self._prompt = ""                           # the head step's instruction
-        # intro -> [sweep] -> [(settle -> collect) x line dots] -> [head] -> (settle -> collect) x grid -> done
+        # a grid: intro -> (settle -> collect) x dots -> done
+        # a special: intro -> sweep | (settle -> collect) x line dots -> head -> done
         self._phase = "intro"
         self.paused = False
         self._clock = QElapsedTimer()               # time spent in the current phase
@@ -174,13 +170,9 @@ class CalibrationWindow(QWidget):
         elif self._phase == "head":                   # step 2: centre dot, the head moves
             step = self._head_step.feed(features, elapsed)
             if step is None:
-                self._head.next_target()              # step over: flush the session
-                if self._borrowed is not None:        # the dots are reused: every step is done
-                    self._finish()
-                    return
-                self._active = self._session          # on to the grid
-                self._phase = "settle"
-                self._clock.restart()
+                self._head.next_target()              # step over: flush the session; a special ends here
+                self._finish()
+                return
             else:
                 self._target = (0.5, 0.5)
                 self._prompt, record = step
@@ -221,11 +213,11 @@ class CalibrationWindow(QWidget):
         self._timer.stop()
         self._phase = "done"
         self.update()
-        first = self._sweep or self._line             # the sweep's frames, or the line dots' (the eye range)
+        first = self._sweep or self._line             # the sweep's frames, or the line dots'
         # the window doesn't close itself: whoever listens to `finished` decides
         self.finished.emit(CalibrationRecording(tuple(first.samples()) if first else (),
                                                 tuple(self._head.samples()) if self._head else (),
-                                                self._borrowed or tuple(self._session.samples())))
+                                                tuple(self._session.samples()) if self._session else ()))
 
     # ---- drawing ---------------------------------------------------
     def _text(self, p: QPainter, size: int, colour: QColor = QColor("white")) -> None:
@@ -267,10 +259,7 @@ class CalibrationWindow(QWidget):
             if self._phase == "done":
                 text = "Calibration done."
             else:
-                steps = list(self.method.steps)
-                if self._borrowed is not None:
-                    steps[-1] = f"{steps[-1]} Skipped: the dots are reused from {self._dots_from}."
-                steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(steps))
+                steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(self.method.steps))
                 text = (f"{self.method.name}\n\n{steps}\n\n"
                         "Press Space to start, Space again to pause,\nEsc to leave at any time.")
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
@@ -333,10 +322,7 @@ class CalibrationWindow(QWidget):
                        "keep looking...")
 
         n, total = self._active.progress()
-        if self.method.kind == "grid":
-            step = "Dot"
-        else:
-            step = "Step 1: line dot" if self._active is self._line else "Step 3: dot"
+        step = "Dot" if self.method.kind == "grid" else "Step 1: line dot"
         self._text(p, 12, GREY)
         p.drawText(20, 34, f"{self.method.name}     {step} {n} / {total}     Space: pause     Esc: leave")
 
@@ -369,7 +355,7 @@ def main() -> int:
         print(f"{method.name}: {len(rec.sweep)} step-1 frames, {len(rec.head)} head frames, {len(rec.dots)} dot samples")
         if tracker is None:
             print("--mouse mode: fake data, not saved")
-        elif rec.dots:
+        elif rec.dots or rec.head:
             print(f"Saved to {save_calibration(rec, method.id)}")
         QTimer.singleShot(800, window.close)
 

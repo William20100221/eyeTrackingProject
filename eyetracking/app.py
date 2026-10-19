@@ -6,29 +6,32 @@ to find out which method gives the most accurate gaze model for each person.
     python main.py --mouse         (no camera: the mouse plays the eyes; nothing is saved)
 
 The window (ui/control_window.py) has three tabs:
-    Testing      Calibration: pick one of the 12 types (core/methods.py) and start it
-                 Gaze check: pick a person, a type and how many calibrations, start the check;
-                 or every type at once (6x6 rings); or record the camera and run the models later
+    Testing      Calibration: pick one of the 9 types (core/methods.py: three grids in order, three in
+                 random order, three specials) and start it
+                 Gaze check: pick a person, a model (a grid's dots, alone or with a special) and how
+                 many calibrations, start the check; or several models at once (6x6 rings); or record
+                 the camera and run the models later
                  Sample text: read a short text with that model; which paragraphs did it see you read?
-                 Blink test, and the data: calibrations, gaze checks, blink scores
+                 Blink test, and the data: calibrations, Train (any of the 24 models, now), gaze checks,
+                 the gaze check table (every model, one tester or everyone), blink scores
     Calibration  starts the chosen type full screen
     Settings     theme, camera, person mode (whose folder the calibrations go into)
 
-Each type keeps its own model, trained from its own folder: data/<person>/<type>/
-(data/<type>/ with person mode off; services/storage.py). A model is trained when a gaze
-check (or a replay) needs it, from the picked person's newest N calibrations of that type,
-and kept until those files change (App.models): nothing trains at start, after a
-calibration or on the Data pages. Training is 0.3-1 s per model (core/gaze_model.py).
+Each calibration type has its folder: data/<person>/<type>/ (data/<type>/ with person mode off;
+services/storage.py). A model learns from a grid's folder, and a paired model also from a special's
+(Sweep + Original 4x4: the person's Original 4x4 calibrations and their newest Sweep). A model is
+trained when a gaze check (a replay, Data > Train) needs it, from the picked person's newest N
+calibrations of its grid, and kept until those files change (App.models): nothing trains at start,
+after a calibration or on the Data pages. Training is 0.3-1 s per model (core/gaze_model.py).
 
 What talks to what:
     camera -> tracker (services/tracker.py) -> 12 features per frame (core/features.py)
-      -> CalibrationWindow(type) -> recording -> quality check -> saved -> models retrained
-      -> GazeWindow: the picked person's model of the picked type says where you look;
-         one of 16 rings (4x4) is lit, Enter records the point against it -> error per sample
-         (every model at once on 36 rings; or in record mode the video + the presses, replayed
-         through the tracker and the models afterwards: services/recording.py)
-      Sweep / Points / Line model can reuse the person's Original / Random 4x4 as their dots
-      Sweep, Points and Line model share every recording (one calibration is saved as all three)
+      -> CalibrationWindow(type) -> recording -> quality check -> saved (Undo takes it back)
+      -> GazeWindow: the picked person's model says where you look; one of 16 rings (4x4) is
+         lit, Enter records the point against it -> error per sample (several models at once on
+         36 rings; or in record mode the video + the presses, replayed through the tracker and
+         the models afterwards: services/recording.py)
+      Points and Line model record the same steps: one calibration is saved as both
       -> ReadingWindow: the sample text, a paragraph read once the gaze stayed on it long enough
       -> BlinkWindow: blink scores in six eye states
 The camera is on only while one of those full-screen windows runs, read on a thread of its own
@@ -49,13 +52,12 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.blink_scores import advice as blink_advice
-from eyetracking.core.calibration import GazeProfile
-from eyetracking.core.methods import METHOD_BY_ID, Method, TrainedModel, partners, train
+from eyetracking.core.methods import METHOD_BY_ID, MODEL_BY_ID, Method, Model, TrainedModel, dots_error, partners, train
 from eyetracking.core.models import NO_FRAME, CalibrationRecording
-from eyetracking.core.quality import check_recording
+from eyetracking.core.quality import check_recording, check_special
 from eyetracking.services.camera import camera_names
 from eyetracking.services.recording import Recorder, replay
-from eyetracking.services.storage import (ensure_layout, load_calibration, save_blink_scores,
+from eyetracking.services.storage import (ensure_layout, load_calibrations, save_blink_scores,
                                           save_calibration, save_gaze_check, use_person)
 from eyetracking.services import storage
 from eyetracking.services.tracker import EyeTracker, FrameFeed
@@ -95,6 +97,9 @@ class App(QObject):
         self.testing.replay_requested.connect(lambda p: self._command(lambda: self._replay(Path(p))))
         self.testing.method_changed.connect(lambda _: self.testing.status.setText(self._model_status()))
         self.testing.data_changed.connect(self._retrain)
+        self.testing.train_requested.connect(lambda person, ids: self._command(lambda: self.train_models(person, ids)))
+        self.testing.undo_requested.connect(self.undo)
+        self.undo_stack: list[tuple[str, list[Path]]] = []   # (what, the files it made): the newest last
         settings = self.control.read_store()
 
         self.tracker: EyeTracker | None = None     # opened by _use_camera(), only while a window needs the gaze
@@ -184,6 +189,7 @@ class App(QObject):
         self.testing.set_method(self.testing.method_id, announce=False)   # the "Saved as" path
         self.testing.refresh()                    # the lists: "in use" moves to this person
         self.testing.set_check(person=person)     # the gaze check tests the person in use, unless picked
+        self.testing.set_train_person(person)     # ...and Data > Train trains theirs
         where = root.relative_to(storage.BASE_DIR.parent).as_posix()
         self.testing.say(f"Saving for {person} in {where}/." if person else f"Saving straight under {where}/.")
 
@@ -254,21 +260,55 @@ class App(QObject):
             return False
 
     # ---- the models: trained when a check needs one, kept while its files stay the same -------
-    def _model(self, method: Method, root: Path, newest: int | None) -> tuple[TrainedModel | None, int]:
-        """A person's model of one type, trained on their newest `newest` calibrations (None: all),
-        or the one already trained on exactly those files. (model, samples used)."""
-        files = [p for p in storage.list_calibrations(method.id, root) if storage.calibration_usable(p)][:newest]
-        key = (method.id, str(root), newest, tuple((p.name, p.stat().st_mtime_ns) for p in files))
+    def _job(self, model: Model, root: Path, newest: int | None):
+        """(cache key, grid files, special files) for a person's model on their newest `newest` grid
+        calibrations: the key is the files themselves, so the same files never train twice."""
+        grids, specials = storage.model_files(model, root, newest)
+        key = (model.id, str(root), tuple((p.name, p.stat().st_mtime_ns) for p in grids + specials))
+        return key, grids, specials
+
+    def _model(self, model: Model, root: Path, newest: int | None) -> tuple[TrainedModel | None, int]:
+        """A person's model, trained on their newest `newest` calibrations of its grid (None: all) and its
+        special's, or the one already trained on exactly those files. (model, samples used)."""
+        key, grids, specials = self._job(model, root, newest)
         if key not in self.models:
             screen = screen_geometry()            # Qt: here, on the GUI thread; the training itself on a worker
-            self.models[key] = self._busy(f"Training the {method.name} model…",
-                                          lambda: train(method, storage.load_calibrations(files), screen))
+            self.models[key] = self._busy(f"Training the {model.name} model…", lambda: train(
+                model, load_calibrations(grids), load_calibrations(specials), screen))
         return self.models[key]
+
+    def train_models(self, person: str, ids: list[str]) -> None:
+        """Data > Train: the ticked models of a person, on all their calibrations, trained now (one job on the
+        worker thread, the status counting), so their gaze checks start at once. Each row then says what
+        the model learnt from: its samples, its error on its newest grid calibration's dots, its head matrix."""
+        root, screen = storage.person_root(person), screen_geometry()
+        jobs = [(MODEL_BY_ID[m], *self._job(MODEL_BY_ID[m], root, None)) for m in ids]
+        done, results = [0], {}
+
+        def work():
+            for model, key, grids, specials in jobs:
+                if key not in self.models:
+                    self.models[key] = train(model, load_calibrations(grids), load_calibrations(specials), screen)
+                trained, n = self.models[key]
+                newest = load_calibrations(grids[:1])
+                error = dots_error(trained, newest[0]) if trained and newest else None
+                results[model.id] = (tuple(p.name for p in grids + specials),
+                                     (str(n), "" if error is None else f"{error:.1%}",
+                                      (trained.k_source or "its own 3D line") if trained else "couldn't train"))
+                done[0] += 1
+        self._busy("Training…", work, status=lambda: f"Training {min(done[0] + 1, len(jobs))} of {len(jobs)}: "
+                                                     f"{jobs[min(done[0], len(jobs) - 1)][0].name}…")
+        self.testing.show_trained(person, results)
+        failed = [MODEL_BY_ID[m].name for m, (_, nums) in results.items() if nums[2] == "couldn't train"]
+        self.testing.say(f"{person or 'No person'}: {len(results) - len(failed)} model"
+                         f"{'s' if len(results) - len(failed) != 1 else ''} trained."
+                         + (f" Couldn't train {', '.join(failed)} (the data didn't pass the quality check)." if failed else ""))
 
     def _retrain(self, quiet: bool = False) -> None:
         """Calibrations changed (removed, disabled, enabled, cleared; from the Data page): the status
         line follows; a model trains again by itself when a check asks for the changed files."""
         self.testing.status.setText(self._model_status())
+        self.testing.refresh_train()
         if not quiet:
             self.testing.say(self._model_status())
 
@@ -279,7 +319,34 @@ class App(QObject):
         n = storage.usable_calibrations(m.id)
         if not n:
             return f"{m.name}: no calibration yet. Start one from Calibration."
-        return f"{m.name}: {n} usable calibration{'s' if n != 1 else ''}; the model trains when a gaze check starts."
+        pairs = (f"; it pairs with each grid calibration of this person: the {m.name} + <grid> models"
+                 if m.kind != "grid" else "; its model trains when a gaze check starts")
+        return f"{m.name}: {n} usable calibration{'s' if n != 1 else ''}{pairs}."
+
+    # ---- undo: the last calibration or gaze check, its files into the trash ----------
+    def _did(self, what: str, paths: list[Path]) -> None:
+        """A calibration or gaze check just saved these files: Undo can take them back."""
+        self.undo_stack.append((what, list(paths)))
+        self.testing.set_undo(what)
+
+    def undo(self) -> None:
+        """Undo the newest calibration or gaze check: its files (a calibration's copy, a multiple check's
+        one file per model) go into their trash folders, so even an undo can be undone (Data >
+        Calibrations > Removed restores a calibration). Never during a full-screen page."""
+        if not self.undo_stack or self.fullscreen is not None or self._working:
+            return
+        what, paths = self.undo_stack.pop()
+        gone = [p for p in paths if not p.exists()]          # moved or removed on the Data pages since
+        for p in paths:
+            if p.exists():
+                (storage.remove_calibration if p.suffix == ".json" else storage.trash_file)(p)
+        self.testing.set_undo(self.undo_stack[-1][0] if self.undo_stack else "")
+        self.testing.refresh()
+        self._retrain(quiet=True)
+        left = len(paths) - len(gone)
+        self.testing.say(f"Undid {what}: {left} file{'s' if left != 1 else ''} moved to the trash"
+                         + (" (Data > Calibrations > Removed restores it)" if any(p.suffix == ".json" for p in paths) else "")
+                         + (f"; already gone: {', '.join(p.name for p in gone)}" if gone else "") + ".")
 
     # ---- full-screen windows (they read the camera themselves) ----------
     def _open_fullscreen(self, window: QWidget) -> None:
@@ -297,86 +364,88 @@ class App(QObject):
             return
         method = self.method
         get = fake_features_from_mouse if self.mouse else self._frames()
-        # Sweep / Points / Line model: the final dots reused from the person's 4x4 calibration (the switch)
-        borrowed = storage.dots_source(method) if self.testing.reuse_dots else None
-        window = CalibrationWindow(method, get, dots=load_calibration(borrowed).dots if borrowed else None,
-                                   dots_from=borrowed.name if borrowed else "")
-        window.finished.connect(lambda rec: self._calibrated(window, method, rec, borrowed))
+        window = CalibrationWindow(method, get)
+        window.finished.connect(lambda rec: self._calibrated(window, method, rec))
         self._open_fullscreen(window)
 
-    def _calibrated(self, window: CalibrationWindow, method: Method, rec: CalibrationRecording,
-                    borrowed: Path | None = None) -> None:
+    def _calibrated(self, window: CalibrationWindow, method: Method, rec: CalibrationRecording) -> None:
         QTimer.singleShot(800, window.close)      # show "done" briefly
         if self.mouse:
             self.testing.say(f"{method.name}: mouse mode, calibration not saved.")
             return
-        if not rec.dots:
+        if not (rec.dots if method.kind == "grid" else rec.head):
             self.testing.say(f"{method.name}: no samples. Was your face in view? Try again.")
             return
-        others = partners(method) if self.testing.share_partner else []   # Sweep / Points / Line model: one recording
+        others = partners(method) if self.testing.share_partner else []   # Points / Line model: one recording
         # the file's place is fixed now: a person switched in Settings while the checks run must not move it
         target = storage.method_dir(method.id) / f"{method.id}_{datetime.now():{storage.STAMP}}.json"
+        made: list[Path] = []
 
         def check_and_save():                     # on a worker thread: the checks and big files take seconds here
-            report = check_recording(rec)         # impossible data -> reject, don't save
+            # impossible data -> reject, don't save; a special: its step 1 followed, a head step long enough
+            report = check_recording(rec) if method.kind == "grid" else check_special(rec, method.kind)
             if not report.ok:
                 return f"{method.name}: calibration rejected ({report.summary()}). Try again."
-            if method.model != "ridge":
-                try:
-                    GazeProfile.from_recording(report.kept)   # an unusable sweep / head step -> don't save it
-                except ValueError as e:
-                    return f"{method.name}: calibration didn't work ({e}). Try again."
-            path = save_calibration(rec, method.id, target, dots_from=borrowed.name if borrowed else None)   # saved RAW
+            path = save_calibration(rec, method.id, target)   # saved RAW
+            made.append(path)
             note = f" Cleaned: {report.summary()}." if report.reasons else ""
-            note += f" The dots were reused from {borrowed.name}." if borrowed else ""
             for m in others:
-                storage.copy_as(path, m.id)
+                made.append(storage.copy_as(path, m.id))
             if others:
-                note += f" Also saved as {' and '.join(m.name for m in others)}: all of them train on it."
-            return f"{method.name}: calibrated with {len(report.kept.dots)} good dot samples, saved as {path.name}.{note}"
+                note += f" Also saved as {' and '.join(m.name for m in others)}: both train on it."
+            kept = (f"{len(report.kept.dots)} good dot samples" if method.kind == "grid" else
+                    f"{len(report.kept.sweep)} good step-1 and {len(report.kept.head)} head-step frames")
+            return f"{method.name}: calibrated with {kept}, saved as {path.name}.{note}"
         said = self._busy("Checking and saving the calibration…", check_and_save)
+        if made:
+            self._did(f"the {method.name} calibration", made)
         self.testing.refresh()
         self.testing.say(said)                    # last: "saved as …" or why it was rejected stays in view
 
     # ---- the gaze check: one model, every model, or a recording ----------------
     def check(self) -> None:
-        """The gaze check of the person and calibration type picked on its page: that person's
-        model of that type, trained from that person's files only (the newest N)."""
-        method = METHOD_BY_ID[self.testing.check_method]
+        """The gaze check of the person and model picked on its page: that person's model, trained
+        from that person's files only (the newest N of its grid, and its special's)."""
+        model_spec = MODEL_BY_ID[self.testing.check_model]
         person = self.testing.check_person
         root = storage.person_root(person)
-        who = f"{person or 'No person'}'s {method.name}"
+        who = f"{person or 'No person'}'s {model_spec.name}"
         if self.testing.record_mode:
-            self._record_check(storage.CHECK_GRID, [method.id])
+            self._record_check(storage.CHECK_GRID, [model_spec.id])
             return
-        model, count = None, self.testing.check_count             # the newest `count` calibrations train it
+        model, count = None, self.testing.check_count             # the newest `count` grid calibrations train it
         if not self.mouse:
-            model, n = self._model(method, root, count)
+            missing = storage.model_ready(model_spec, root)
+            model, n = (None, 0) if missing else self._model(model_spec, root, count)
             if model is None:
-                self.testing.say(f"{who}: no usable calibration yet. Calibrate first.")
+                self.testing.say(f"{who}: {missing or 'its calibrations did not pass the quality check'}. Calibrate first.")
                 return
-            self.testing.say(f"{who}: model trained on {n} samples from the newest {count} "
-                             f"calibration{'s' if count != 1 else ''}. Look at the lit ring, press Enter.")
+            self.testing.say(f"{who}: model trained on {n} samples from the newest {count} {model_spec.grid.name} "
+                             f"calibration{'s' if count != 1 else ''}"
+                             + (f" and the {model_spec.special.name}" if model_spec.special else "")
+                             + ". Look at the lit ring, press Enter.")
         if not self._use_camera("check"):
             return
         get = self._live(None if self.mouse else model.tracker())   # the smoothed live point
-        window = GazeWindow.single(get, method.id, storage.method_dir(method.id, root), count or None)
+        window = GazeWindow.single(get, model_spec.id, storage.method_dir(model_spec.id, root), count or None)
         window.logged.connect(lambda paths: self._checked(who, paths))
         self._open_fullscreen(window)
 
-    def _models_for(self, root: Path, types: list[str] | None) -> tuple[dict, dict[str, int]]:
-        """A person's models: of `types`, each trained on the page's newest N; or, for None, the
-        types ticked in the multiple-check popup, each on the N chosen there. (models, calibrations used)."""
-        wanted = {m: self.testing.check_count or None for m in types} if types else \
+    def _models_for(self, root: Path, ids: list[str] | None) -> tuple[dict, dict[str, int]]:
+        """A person's models: of `ids`, each trained on the page's newest N; or, for None, the
+        models ticked in the multiple-check popup, each on the N chosen there. (models, grid calibrations used)."""
+        wanted = {m: self.testing.check_count or None for m in ids} if ids else \
                  {m: n for m, n in self.testing.multi_counts.items() if n}
         models, counts = {}, {}
         for m, newest in wanted.items():
-            used = min(newest or 10 ** 6, storage.usable_calibrations(m, root))   # how many files train it (cached)
-            if self.mouse:                               # no models in mouse mode: the mouse plays each type that has data
-                if used:
-                    models[m], counts[m] = None, used
+            spec = MODEL_BY_ID[m]
+            if storage.model_ready(spec, root):          # its data is missing (moved or removed meanwhile)
                 continue
-            model, _ = self._model(METHOD_BY_ID[m], root, newest)
+            used = len(storage.model_files(spec, root, newest)[0])   # how many grid files train it (cached)
+            if self.mouse:                               # no models in mouse mode: the mouse plays each model that has data
+                models[m], counts[m] = None, used
+                continue
+            model, _ = self._model(spec, root, newest)
             if model is not None:
                 models[m], counts[m] = model, used
         return models, counts
@@ -395,7 +464,7 @@ class App(QObject):
             return
         if not self._use_camera("check"):
             return
-        self.testing.say(f"{who}: {len(models)} models ready ({', '.join(METHOD_BY_ID[m].name for m in models)}). "
+        self.testing.say(f"{who}: {len(models)} models ready ({', '.join(MODEL_BY_ID[m].name for m in models)}). "
                          "Look at the lit ring, press Enter.")
 
         tracks = {} if self.mouse else {m: model.tracker() for m, model in models.items()}
@@ -412,7 +481,7 @@ class App(QObject):
         window.logged.connect(lambda paths: self._checked(who, paths))
         self._open_fullscreen(window)
 
-    def _record_check(self, grid: int, types: list[str] | None) -> None:
+    def _record_check(self, grid: int, ids: list[str] | None) -> None:
         """Record mode: the camera is recorded with the presses; on Esc the models run over it."""
         person = self.testing.check_person
         who = person or "No person"
@@ -424,19 +493,19 @@ class App(QObject):
         recorder = Recorder(self.tracker.camera, storage.person_root(person) / storage.VIDEOS, grid)
         window = GazeWindow(lambda: (recorder.frame(), {})[1], {}, grid=grid, show_dot=False, recorder=recorder)
         # the models run once the full-screen page has closed (it takes a while: a wait cursor and a count)
-        window.recorded.connect(lambda meta: QTimer.singleShot(0, lambda: self._replay(meta, types)))
+        window.recorded.connect(lambda meta: QTimer.singleShot(0, lambda: self._replay(meta, ids)))
         self.testing.say(f"{who}: recording the camera. Look at the lit ring, press Enter; Esc stops and runs the models.")
         self._open_fullscreen(window)
 
-    def _replay(self, meta: Path, types: list[str] | None = None) -> None:
-        """Run the person's models of `types` (None: every type) over a recording, as if they had
-        been live: one gaze check per type, named after the recording."""
+    def _replay(self, meta: Path, ids: list[str] | None = None) -> None:
+        """Run the person's models `ids` (None: the ones ticked in the popup) over a recording, as if they had
+        been live: one gaze check per model, named after the recording."""
         person = self.testing.check_person
         root, who = storage.person_root(person), person or "No person"
         if self.mouse:
             self.testing.say("Running a recording needs the models (not --mouse).")
             return
-        models, counts = self._models_for(root, types)
+        models, counts = self._models_for(root, ids)
         if not models:
             self.testing.say(f"{who}: no usable calibration to run over the recording. Calibrate first.")
             return
@@ -458,21 +527,23 @@ class App(QObject):
             self.testing.say(f"{who}: no face was found in the recording, nothing to save.")
 
     def _checked(self, who: str, paths: list[Path]) -> None:
+        self._did("the gaze check" if len(paths) == 1 else f"the gaze check ({len(paths)} files)", paths)
         self.testing.refresh()
         self.testing.say(f"{who}: gaze check saved as {', '.join(p.name for p in paths)}. See Data > Gaze checks.")
 
     def sample_text(self) -> None:
         """Tests > Sample text: read a short text with the model picked on the Gaze check page (the
-        person, the type, the newest N), and see which paragraphs it says you read."""
-        method = METHOD_BY_ID[self.testing.check_method]
+        person, the model, the newest N), and see which paragraphs it says you read."""
+        spec = MODEL_BY_ID[self.testing.check_model]
         person = self.testing.check_person
         root = storage.person_root(person)
-        who = f"{person or 'No person'}'s {method.name}"
+        who = f"{person or 'No person'}'s {spec.name}"
         track = None
         if not self.mouse:
-            model, n = self._model(method, root, self.testing.check_count)
+            missing = storage.model_ready(spec, root)
+            model, n = (None, 0) if missing else self._model(spec, root, self.testing.check_count)
             if model is None:
-                self.testing.say(f"{who}: no usable calibration yet. Calibrate first.")
+                self.testing.say(f"{who}: {missing or 'its calibrations did not pass the quality check'}. Calibrate first.")
                 return
             track = model.tracker()                   # the smoothed live point, as in the gaze check
         if not self._use_camera("sample"):

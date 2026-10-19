@@ -28,4 +28,8 @@ for step in (w.open_sheet, w.cancel_sheet, w.open_sheet):
     qt.processEvents()
     viewport, inner = scroll.viewport().width(), scroll.widget().width()
     assert inner <= viewport, f"settings content {inner} px wider than its {viewport} px viewport: rows are clipped"
+# the turning arrows (Reset to defaults, Refresh) turn anticlockwise, the way the arrow points (20 Oct)
+for spin in w.findChildren(cw.SpinButton):
+    spin._turn.setCurrentTime(275)                                  # halfway through the turn
+    assert spin._turn.endValue() == -360.0 and spin.angle < 0, (spin.text(), spin.angle)
 print("settings layout ok")

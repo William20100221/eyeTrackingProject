@@ -38,16 +38,16 @@ from string import Template
 from materialyoucolor.dynamiccolor.material_dynamic_colors import MaterialDynamicColors
 from materialyoucolor.hct import Hct
 from materialyoucolor.scheme.scheme_fidelity import SchemeFidelity
-from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpression, QSettings, Qt, QTimer,
+from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPointF, QRectF, QRegularExpression, QSettings, Qt, QTimer,
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPainterPath, QPalette, QPen,
                            QPixmap, QShortcut,
                            QRegularExpressionValidator)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QInputDialog,
+                               QHeaderView, QInputDialog,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
 import eyetracking.services.storage as storage
@@ -55,7 +55,8 @@ from eyetracking.services.storage import (blink_score_lines, calibration_lines, 
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_disabled,
                                           remove_calibration, remove_samples,
                                           set_calibration_enabled, trash_file)
-from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, METHODS, partners
+from eyetracking.core.methods import (DEFAULT_METHOD, DEFAULT_MODEL, GRIDS, LEGACY, METHOD_BY_ID, METHODS, MODEL_BY_ID,
+                                      MODELS, model_for, model_name, partners)
 
 DEFAULTS = {
     "seed": "#E5483B",          # the logo's red
@@ -83,6 +84,7 @@ I_KEY = "\uE8D7"   # Permissions (key)
 I_TESTING = "\uE9D9"   # Diagnostic
 I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
 I_BACK, I_DELETE = "\uE72B", "\uE74D"
+I_TABLE, I_TRAIN, I_UNDO, I_DOWNLOAD = "\uE80A", "\uE9F5", "\uE7A7", "\uE896"   # a grid table, gears, Undo, Download
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
 
@@ -239,6 +241,13 @@ QPushButton[kind="go"]:pressed { background: $primaryPress; }
 QLineEdit#answer { border: none; background: transparent; font-size: 15px; min-height: 40px;
     selection-background-color: $primary; selection-color: $onPrimary; }
 
+/* tables (Data > Train, Data > Gaze check table): an Excel-like grid in the theme */
+QTableWidget#table { background: $surfaceContainerLowest; border: 1px solid $outlineVariant; border-radius: 8px;
+    gridline-color: $outlineVariant; selection-background-color: $selected; selection-color: $onSurface; font-size: 13px; }
+QHeaderView::section { background: $surfaceContainer; color: $onSurfaceVariant; border: none; padding: 4px 8px;
+    border-right: 1px solid $outlineVariant; border-bottom: 1px solid $outlineVariant; font-size: 12px; font-weight: 600; }
+QTableCornerButton::section { background: $surfaceContainer; border: none; }
+
 /* side sheet */
 #sheet { background: $surfaceContainerLow; border-left: 1px solid $outlineVariant; border-top-left-radius: 12px; }
 #sheetTitle { font-size: 16px; font-weight: 600; }
@@ -283,7 +292,8 @@ def button(text: str, kind: str) -> QPushButton:
 class SpinButton(QPushButton):
     """A button whose glyph turns once when clicked (Refresh, Reset to defaults): the click is seen to
     land, like the turning arrows in Windows' and Android's refresh buttons. The glyph is drawn as an
-    icon so it can turn; set_color() follows the theme."""
+    icon so it can turn; set_color() follows the theme. It turns anticlockwise, the way its arrow
+    (Segoe's Reset, U+E777) points: turning clockwise, it ran against its own arrowhead (20 Oct)."""
 
     def __init__(self, glyph: str, text: str, kind: str):
         super().__init__(text)
@@ -291,7 +301,7 @@ class SpinButton(QPushButton):
         self.setProperty("kind", kind)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)
-        self._turn = QVariantAnimation(self, startValue=0.0, endValue=360.0, duration=550,
+        self._turn = QVariantAnimation(self, startValue=0.0, endValue=-360.0, duration=550,
                                        easingCurve=QEasingCurve.OutCubic)
         self._turn.valueChanged.connect(self._draw)
         self.clicked.connect(self._turn.start)
@@ -657,20 +667,20 @@ class Grip(QWidget):
 
 # ---------------------------------------------------------------- dated file lists
 
-def method_picker(group: QButtonGroup) -> QWidget:
-    """The calibration types as chips, a block per collection ("In order", "Random order"), each
-    labelled: the grids on one line, Sweep / Points / Line model on the next. Three chips a line, not
-    six: six (~770 px) didn't fit beside the sidebar in a 920 px window, so the layout squeezed the
-    chips below their text and cut it (19 Oct). A chip's id in `group` is its index in METHODS."""
+def method_picker(group: QButtonGroup, methods=METHODS) -> QWidget:
+    """Calibration types as chips, a labelled line per row ("In order", "Random order", "Special
+    steps"): three chips a line. Six (~770 px) didn't fit beside the sidebar in a 920 px window, so the
+    layout squeezed the chips below their text and cut it (19 Oct). A chip's id in `group` is its index
+    in METHODS; `methods` picks which types (the gaze check's dots: the grids only)."""
     box = QWidget()
     grid = QGridLayout(box)
     grid.setContentsMargins(0, 0, 0, 0)
     grid.setHorizontalSpacing(8)
     grid.setVerticalSpacing(8)
     row = 0
-    for collection in dict.fromkeys(m.collection for m in METHODS):
-        mine = [(i, m) for i, m in enumerate(METHODS) if m.collection == collection]
-        grid.addWidget(label(collection, "rowsub"), row, 0, Qt.AlignTop)
+    for name in dict.fromkeys(m.row for m in methods):
+        mine = [(METHODS.index(m), m) for m in methods if m.row == name]
+        grid.addWidget(label(name, "rowsub"), row, 0, Qt.AlignTop)
         for k, (i, m) in enumerate(mine):
             b = CheckButton(m.name, "chip")
             group.addButton(b, i)
@@ -680,26 +690,56 @@ def method_picker(group: QButtonGroup) -> QWidget:
     return box
 
 
+WITH = (None, "sweep", "points", "line-model")      # the gaze check's "With" chips: the grid alone, or a special
+
+
 def results_table(results, chosen: str, colors: tuple[str, str]) -> str:
-    """The gaze-check comparison as rich text: per type its calibrations, checks, latest and mean error,
-    a bar for the mean (the worst so far the longest) and, once two or more types have been checked,
-    the lowest mean marked in colors[0] (the others' bars in colors[1]): which method is the most
-    accurate for this person, at a glance."""
+    """The gaze-check comparison as rich text (storage.model_results): per model what it trains on, its
+    checks, latest and mean error, a bar for the mean (the worst so far the longest) and, once two or
+    more models have been checked, the lowest mean marked in colors[0] (the others' bars in colors[1]):
+    which model is the most accurate for this person, at a glance."""
     pct = lambda e: "–" if e is None else f"{e:.1%}"
-    means = {m: mean for m, _, n, _, mean in results if n and mean is not None}
+    means = {m: sum(errors) / len(errors) for m, _, errors in results if errors}
     best = min(means, key=means.get) if len(means) >= 2 else None
     worst = max(means.values(), default=0) or 1
     rows = []
-    for m, cal, n, last, mean in results:
-        name = f"<b>{METHOD_BY_ID[m].name}</b>" if m == chosen else METHOD_BY_ID[m].name
+    for m, used, errors in results:
+        name = f"<b>{model_name(m)}</b>" if m == chosen else model_name(m)
         tag = f"&nbsp; <span style='color:{colors[0]}'><b>lowest</b></span>" if m == best else ""
         bar = (f"<table cellspacing=0 cellpadding=0><tr><td bgcolor='{colors[0] if m == best else colors[1]}' "
-               f"width={max(3, round(120 * mean / worst))} style='font-size:6px'>&nbsp;</td></tr></table>"
+               f"width={max(3, round(120 * means[m] / worst))} style='font-size:6px'>&nbsp;</td></tr></table>"
                if m in means else "")
-        rows.append(f"<tr><td>{name}{tag}</td><td align=right>{cal}</td><td align=right>{n}</td>"
-                    f"<td align=right>{pct(last)}</td><td align=right>{pct(mean)}</td><td valign=middle>{bar}</td></tr>")
-    return ("<table cellspacing=0 cellpadding=4><tr><th align=left>Calibration type</th><th>Calibrations</th>"
+        rows.append(f"<tr><td>{name}{tag}</td><td align=right>{used}</td><td align=right>{len(errors)}</td>"
+                    f"<td align=right>{pct(errors[0] if errors else None)}</td><td align=right>{pct(means.get(m))}</td>"
+                    f"<td valign=middle>{bar}</td></tr>")
+    if not rows:
+        return "No calibrations or gaze checks for this person yet."
+    return ("<table cellspacing=0 cellpadding=4><tr><th align=left>Model</th><th>Calibrations</th>"
             "<th>Gaze checks</th><th>Latest error</th><th>Mean error</th><th></th></tr>" + "".join(rows) + "</table>")
+
+
+class ClickAway(QObject):
+    """Several files picked with Ctrl- / Shift-click stay picked while the list scrolls (the wheel, its
+    scroll bar), and are let go by a click anywhere else in the window: another column, the page, a
+    heading. A plain click on a file in the list makes it the only one picked (Qt's ExtendedSelection
+    does that itself). Not let go: a click on a button (it may act on the picked files, as Remove
+    selected does) or in a popup (the right-click menu, a question box: another window)."""
+
+    def __init__(self, parent: QWidget, views):
+        super().__init__(parent)
+        self.views = list(views)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.MouseButtonPress:
+            target = QApplication.widgetAt(ev.globalPosition().toPoint())
+            if target is not None and not isinstance(target, QAbstractButton):
+                for view in self.views:
+                    if (view.selectionModel() is not None and view.selectionModel().hasSelection()
+                            and view.isVisible() and target.window() is view.window()
+                            and target is not view and not view.isAncestorOf(target)):
+                        view.clearSelection()
+        return False
 
 
 def side_list(on_open) -> QListWidget:
@@ -760,17 +800,19 @@ def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
         lst.addItem(QListWidgetItem(empty))   # no path: clicking does nothing
 
 
-def fill_tree(lst: QListWidget, rows: list, empty: str):
+def fill_tree(lst: QListWidget, rows: list, empty: str, why=None):
     """Headings and dated files in order. A row is ("person", name), ("type", method name)
     or a Path. Headings can't be clicked or opened; a person's is larger than a type's,
-    types sit under names and dates under types (indented, so the levels read at a glance)."""
+    types sit under names and dates under types (indented, so the levels read at a glance).
+    why(path), if given, adds a line to the file's tooltip (why a calibration is not usable)."""
     lst.clear()
     indent = "   " if any(not isinstance(r, Path) and r[0] == "person" for r in rows) else ""
     for row in rows:
         if isinstance(row, Path):
             when = f"{file_date(row):%d %b  %H:%M}" if lst.property("dense") else f"{file_date(row):%d %b %Y  %H:%M}"
             item = QListWidgetItem(f"{indent}   {when}")
-            item.setToolTip(f"{file_date(row):%d %b %Y, %H:%M}\n{row.name}")
+            reason = why(row) if why else None
+            item.setToolTip(f"{file_date(row):%d %b %Y, %H:%M}\n{row.name}" + (f"\nNot usable: {reason}" if reason else ""))
             item.setData(Qt.UserRole, str(row))
         else:
             kind, text = row
@@ -786,17 +828,20 @@ def fill_tree(lst: QListWidget, rows: list, empty: str):
         lst.addItem(QListWidgetItem(empty))
 
 
-def person_type_rows(list_for) -> list:
-    """fill_tree rows of every person's files: list_for(method id, person folder) -> paths.
-    Person headings only once people exist; a type only when it has files."""
+CHECK_IDS = [m.id for m in MODELS] + list(LEGACY)       # every model a gaze check can be of, the old types last
+
+
+def person_type_rows(list_for, ids=CHECK_IDS) -> list:
+    """fill_tree rows of every person's files: list_for(model id, person folder) -> paths.
+    Person headings only once people exist; a model only when it has files."""
     roots = storage.person_roots()
     rows = []
     for name, root in roots:
         mine = []
-        for m in METHODS:
-            paths = list_for(m.id, root)
+        for m in ids:
+            paths = list_for(m, root)
             if paths:
-                mine += [("type", m.name), *paths]
+                mine += [("type", model_name(m)), *paths]
         if mine:
             heading = (name or "No person (data/)") + ("   · in use" if root == storage.DATA_DIR else "")
             rows += ([("person", heading)] if len(roots) > 1 else []) + mine
@@ -887,6 +932,8 @@ class TestingPage(QWidget):
     replay_requested = Signal(str) # Recordings > one of them: run the models over it (its json path)
     method_changed = Signal(str)   # another method chosen: its id
     data_changed = Signal()        # samples or a file removed / disabled / enabled: the app retrains
+    train_requested = Signal(str, list)   # Data > Train: (person, model ids) to train now
+    undo_requested = Signal()      # the Undo button (or Ctrl+Z): the last calibration / gaze check goes
 
     def __init__(self, method_id: str = DEFAULT_METHOD):
         super().__init__()
@@ -903,7 +950,8 @@ class TestingPage(QWidget):
         self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
         sections = [("Calibrate", [(I_EYE, "Calibration", 0)]),
                     ("Tests", [(I_CHART, "Gaze check", 1), (I_READ, "Sample text", 6), (I_BLINK, "Blink test", 2)]),
-                    ("Data", [(I_LINES, "Calibrations", 3), (I_CHART, "Gaze checks", 4), (I_BLINK, "Blink scores", 5)])]
+                    ("Data", [(I_LINES, "Calibrations", 3), (I_TRAIN, "Train", 9), (I_CHART, "Gaze checks", 4),
+                              (I_TABLE, "Gaze check table", 8), (I_BLINK, "Blink scores", 5)])]
         for section, items in sections:
             sv.addWidget(label(section, "sideTitle"))
             for glyph, text, i in items:
@@ -916,17 +964,24 @@ class TestingPage(QWidget):
         self.status = label("", "rowsub")                # the latest word from the app (the model, the camera)
         self.status.setWordWrap(True)
         sv.addWidget(self.status)
+        # Undo the last calibration or gaze check (a snackbar's action, M3): shown while there is one to undo
+        self.undo_btn = button(f"{I_UNDO}  Undo", "text")
+        self.undo_btn.clicked.connect(self.undo_requested.emit)
+        self.undo_btn.hide()
+        sv.addWidget(self.undo_btn, 0, Qt.AlignLeft)
+        QShortcut(QKeySequence.Undo, self, lambda: self.undo_btn.isVisible() and self.undo_requested.emit(),
+                  context=Qt.WidgetWithChildrenShortcut)
         h.addWidget(side)
 
         # 0: calibration (the method chooser); 1: gaze check; 2: blink test; 3: calibrations; 4: gaze checks;
         # 5: blink scores; 6: sample text (where the log was, so a saved page index still fits);
-        # 7: one calibration's detail (from 3)
+        # 7: one calibration's detail (from 3); 8: the gaze check table; 9: train
         self.main = QStackedWidget()
         self.main.addWidget(self._calibrate_page())
         self.check_person = ""                   # whose model the check tests (the app sets the person in use)
-        self.results: list = []                  # storage.method_results of that person: the comparison table
+        self.results: list = []                  # storage.model_results of that person: the comparison table
         self.bar_colors = (DEFAULTS["seed"], mix(DEFAULTS["seed"], "#FFFFFF", .35))   # (lowest, others): apply_theme
-        self.check_method = method_id                                     # ...and which calibration type
+        self.check_model = DEFAULT_MODEL                                  # ...and which model
         check = QScrollArea()                     # nine types + the table: taller than a small window
         check.setWidget(self._check_page())
         check.setWidgetResizable(True)
@@ -970,7 +1025,8 @@ class TestingPage(QWidget):
         self.removed_list = side_list(self.open_detail)
         for title, sub, lst in [("Active", "Trains the models", self.active_list),
                                 ("Non-active", "Works, but you turned it off", self.disabled_list),
-                                ("Not usable", "Another version, or the file can't be read", self.inactive_list),
+                                ("Not usable", "Point at one to see why (another version, a copy of another type, an old type)",
+                                 self.inactive_list),
                                 ("Removed", "In the trash folders: right-click to restore", self.removed_list)]:
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
@@ -992,9 +1048,9 @@ class TestingPage(QWidget):
         mv.addLayout(cols, 1)
         self.main.addWidget(lists)
         self.gaze_checks = DataPage(
-            "Gaze checks", "By person, then by calibration type, then by date. Each sample with the ring that was "
-            "lit and how far the model was from it. Right-click a file (Ctrl- or Shift-click for several) to move it "
-            "to another person or remove it.",
+            "Gaze checks", "By person, then by model, then by date. Each sample with the ring that was lit and how "
+            "far the model was from it. Right-click a file (Ctrl- or Shift-click for several) to move it to another "
+            "person or remove it. \"(old)\": a type from before 20 Oct.",
             lambda: person_type_rows(storage.list_gaze_checks), gaze_check_lines, "No gaze check yet", tree=True)
         self.blink_scores = DataPage(
             "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
@@ -1036,15 +1092,22 @@ class TestingPage(QWidget):
         dv.addWidget(self.remove_btn, 0, Qt.AlignLeft)
         self.main.addWidget(detail)
         self.detail_path: Path | None = None
+        from eyetracking.ui.check_table import CheckTablePage   # here: it uses this module's widgets
+        self.check_table = CheckTablePage()
+        self.main.addWidget(self.check_table)
+        self.main.addWidget(self._train_page())
         h.addWidget(self.main, 1)
         self.side_nav.idClicked.connect(lambda i: cross_fade(self.main, i))
-        self.set_method(method_id, announce=False)
+        self.click_away = ClickAway(self, [self.active_list, self.disabled_list, self.inactive_list, self.removed_list,
+                                           self.gaze_checks.files, self.blink_scores.files, self.detail,
+                                           self.train_table, self.check_table.table])
+        self.set_method(method_id if method_id in METHOD_BY_ID else DEFAULT_METHOD, announce=False)
         self.refresh()                                   # the lists, read once now; again on show and after changes
         self.show_page(0)
 
     def show_page(self, i: int):
-        """Open sidebar entry `i` (0-6; the calibration detail, 7, opens as its list)."""
-        i = 3 if i == 7 else max(0, min(i, 6))
+        """Open sidebar entry `i` (0-6, 8, 9; the calibration detail, 7, opens as its list)."""
+        i = 3 if i == 7 else i if 0 <= i <= 9 else 0
         self.side_nav.button(i).setChecked(True)
         self.main.setCurrentIndex(i)
 
@@ -1060,8 +1123,10 @@ class TestingPage(QWidget):
         v.setContentsMargins(24, 20, 24, 24)
         v.setSpacing(12)
         v.addWidget(label(f"{I_EYE}   Calibration", "sheetTitle"))
-        lead = label("Pick a method. Every method records the same 12 numbers per frame, so their files can be "
-                     "compared; each keeps its own model, trained from its own folder.", "lead")
+        lead = label("Pick a calibration. A grid (In order, Random order) records dots; a special (Sweep, Points, Line "
+                     "model) records its own first step and the head step, and pairs with any grid of the same person: "
+                     "every pair is a model of its own (Data > Train). All of them record the same 12 numbers per frame.",
+                     "lead")
         lead.setWordWrap(True)
         v.addWidget(lead)
         self.method_chips = QButtonGroup(self)
@@ -1073,23 +1138,11 @@ class TestingPage(QWidget):
         self.method_steps = label("", "sheetText")
         self.method_steps.setWordWrap(True)
         v.addWidget(self.method_steps)
-        self.reuse_row = QWidget()                       # Sweep / Points / Line model: skip the dots, reuse the 4x4's
-        reuse = QHBoxLayout(self.reuse_row)
-        reuse.setContentsMargins(0, 0, 0, 0)
-        reuse.setSpacing(12)
-        self.reuse_switch = Switch("Reuse the 4×4 dots")
-        self._reuse_wanted = True                        # the user's choice; the switch shows it only when a 4x4 exists
-        self.reuse_switch.clicked.connect(lambda: setattr(self, "_reuse_wanted", self.reuse_switch.isChecked()))
-        self.reuse_note = label("", "sheetText")
-        self.reuse_note.setWordWrap(True)
-        reuse.addWidget(self.reuse_switch)
-        reuse.addWidget(self.reuse_note, 1)
-        v.addWidget(self.reuse_row)
-        self.share_row = QWidget()                       # Sweep / Points / Line model: one recording saved as all
+        self.share_row = QWidget()                       # Points / Line model: one recording saved as both
         share = QHBoxLayout(self.share_row)
         share.setContentsMargins(0, 0, 0, 0)
         share.setSpacing(12)
-        self.share_switch = Switch("Save it for all three")
+        self.share_switch = Switch("Save it as both")
         self.share_switch.set_checked_now(True)
         self.share_note = label("", "sheetText")
         self.share_note.setWordWrap(True)
@@ -1112,42 +1165,40 @@ class TestingPage(QWidget):
         self.method_steps.setText("\n".join(f"{i + 1}.  {s}" for i, s in enumerate(m.steps))
                                   + f"\n\nSaved as {storage.method_dir(m.id).relative_to(storage.BASE_DIR.parent).as_posix()}"
                                     f"/{m.id}_<date>_<time>.json")
-        self._update_reuse()                     # the lists don't depend on the type: no need to re-read data/
+        self._update_share()                     # the lists don't depend on the type: no need to re-read data/
         if announce:
             self.method_changed.emit(method_id)
 
     @property
-    def reuse_dots(self) -> bool:
-        """Sweep / Points / Line model: take the final dots from the person's 4x4 calibration instead."""
-        return self.reuse_switch.isEnabled() and self.reuse_switch.isChecked()
-
-    @property
     def share_partner(self) -> bool:
-        """Sweep / Points / Line model: save the calibration as the other two types too."""
+        """Points / Line model: save the calibration as the other one too."""
         return self.share_switch.isChecked()
 
-    def _update_reuse(self):
+    def _update_share(self):
         m = METHOD_BY_ID[self.method_id]
         others = partners(m)
         self.share_row.setVisible(bool(others))
         if others:
-            names = " and ".join(o.name for o in others)
-            self.share_note.setText(f"{m.name}, {names} share the head step and the dots (the first step only checks "
-                                    f"that your eyes followed), so this calibration is saved as {names} too: all "
-                                    f"three models train on the same data. Calibrate once. Off: {m.name} only.")
-        self.reuse_row.setVisible(m.kind != "grid")
-        if m.kind == "grid":
-            return
-        source = storage.dots_source(m)
-        kind = "Random 4×4" if m.random_order else "Original 4×4"
-        self.reuse_switch.setEnabled(source is not None)
-        self.reuse_switch.set_checked_now(self._reuse_wanted if source else False)   # off while there's nothing to reuse
-        self.reuse_note.setText(
-            f"Skip the final dots: they are the same 16 as {kind}, so they are reused from the newest one "
-            f"({source.name}). Off: do the dots here too." if source else
-            f"No {kind} calibration for this person yet, so the dots are done here. Calibrate {kind} first to reuse them.")
+            other = others[0].name
+            self.share_note.setText(f"{m.name} and {other} record exactly the same steps, so this calibration is "
+                                    f"saved as {other} too: both models train on the same recording, and only the "
+                                    f"model differs between them. Off: {m.name} only.")
 
-    # ----- the gaze check: one person's model of one calibration type
+    # ----- the gaze check: one person's model (a grid, alone or paired with a special)
+
+    def _person_picker(self, on_pick) -> tuple[QPushButton, QHBoxLayout]:
+        """"Person" and its menu (every person, and No person): on_pick(name)."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(label("Person", "rowtitle"))
+        btn = button("", "assist")
+        menu = QMenu(btn)
+        menu.aboutToShow.connect(lambda: (menu.clear(), [menu.addAction(n or "No person (data/)", lambda n=n: on_pick(n))
+                                                         for n, _ in storage.person_roots()]))
+        btn.setMenu(menu)
+        row.addWidget(btn)
+        row.addStretch(1)
+        return btn, row
 
     def _check_page(self) -> QWidget:
         page = QWidget()
@@ -1155,25 +1206,30 @@ class TestingPage(QWidget):
         v.setContentsMargins(24, 20, 24, 24)
         v.setSpacing(12)
         v.addWidget(label(f"{I_CHART}   Gaze check", "sheetTitle"))
-        lead = label("Test one person's model of one calibration type on 16 rings (4×4), or every type at once on "
-                     "36 (6×6): the same rings for all, so the errors can be compared. Which method is the most "
-                     "accurate for this person?", "lead")
+        lead = label("Test one person's model on 16 rings (4×4), or several models at once on 36 (6×6): the same "
+                     "rings for all, so the errors can be compared. A model is a grid's dots, alone or with a "
+                     "special's steps. Which is the most accurate for this person?", "lead")
         lead.setWordWrap(True)
         v.addWidget(lead)
-        pick = QHBoxLayout()
-        pick.setSpacing(8)
-        pick.addWidget(label("Person", "rowtitle"))
-        self.check_person_btn = button("", "assist")
-        self.check_person_menu = QMenu(self.check_person_btn)
-        self.check_person_menu.aboutToShow.connect(self._fill_check_person_menu)
-        self.check_person_btn.setMenu(self.check_person_menu)
-        pick.addWidget(self.check_person_btn)
-        pick.addStretch(1)
+        self.check_person_btn, pick = self._person_picker(lambda n: self.set_check(person=n))
         v.addLayout(pick)
-        v.addWidget(label("Calibration type", "rowtitle"))
-        self.check_chips = QButtonGroup(self)
-        v.addWidget(method_picker(self.check_chips))
-        self.check_chips.idClicked.connect(lambda i: self.set_check(method_id=METHODS[i].id))
+        v.addWidget(label("Dots from", "rowtitle"))
+        self.check_chips = QButtonGroup(self)               # the grid: its id is its index in METHODS
+        v.addWidget(method_picker(self.check_chips, GRIDS))
+        self.check_chips.idClicked.connect(lambda i: self.set_check(model_id=model_for(
+            METHODS[i].id, MODEL_BY_ID[self.check_model].special and MODEL_BY_ID[self.check_model].special.id).id))
+        with_row = QHBoxLayout()
+        with_row.setSpacing(8)
+        with_row.addWidget(label("With", "rowtitle"))
+        self.with_chips = QButtonGroup(self)                # nothing, or a special: its id is its index in WITH
+        for i, s in enumerate(WITH):
+            b = CheckButton("Nothing (the dots alone)" if s is None else METHOD_BY_ID[s].name, "chip")
+            self.with_chips.addButton(b, i)
+            with_row.addWidget(b)
+        with_row.addStretch(1)
+        self.with_chips.idClicked.connect(lambda i: self.set_check(
+            model_id=model_for(MODEL_BY_ID[self.check_model].grid.id, WITH[i]).id))
+        v.addLayout(with_row)
         use = QHBoxLayout()
         use.setSpacing(8)
         use.addWidget(label("Calibrations to use", "rowtitle"))
@@ -1195,9 +1251,9 @@ class TestingPage(QWidget):
         go = button("Start the gaze check", "filled")
         go.clicked.connect(lambda: self.command.emit("check"))
         many = button("Multiple model gaze check", "outlined")
-        many.setToolTip("Every type this person has calibrations for, at once, on 36 rings (6×6): one file per type")
+        many.setToolTip("Several of this person's models at once (a popup asks which), on 36 rings (6×6): one file per model")
         many.clicked.connect(lambda: self.pick_multi_counts() and self.command.emit("check-all"))
-        self.multi_counts: dict[str, int] = {}             # the popup's choice: type -> calibrations (app reads it)
+        self.multi_counts: dict[str, int] = {}             # the popup's choice: model -> grid calibrations (app reads it)
         self.recordings_btn = button("", "assist")        # run every model over an earlier recording
         self.recordings_menu = QMenu(self.recordings_btn)
         self.recordings_menu.aboutToShow.connect(self._fill_recordings_menu)
@@ -1220,8 +1276,8 @@ class TestingPage(QWidget):
         mode.addWidget(note, 1)
         v.addLayout(mode)
         v.addSpacing(8)
-        v.addWidget(label("How each type did", "rowtitle"))
-        self.check_results = label("", "sheetText")              # the comparison: every type, this person
+        v.addWidget(label("How each model did", "rowtitle"))
+        self.check_results = label("", "sheetText")              # the comparison: every model with data, this person
         self.check_results.setTextFormat(Qt.RichText)
         v.addWidget(self.check_results)
         note = label("Error: the mean distance from where the model said to the lit ring, as a share of the "
@@ -1231,11 +1287,11 @@ class TestingPage(QWidget):
         v.addWidget(note)
         for s in ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, "
                   "and the next ring lights up. A sample's error is its distance to the lit ring.",
-                  "Multiple model gaze check: every type this person has calibrations for, each trained on the newest "
-                  "N above (as many as it has), all predicting from the same camera frames: 36 rings (6×6), no dot, "
-                  "one file per type. One sitting, the fairest comparison.",
+                  "Multiple model gaze check: the models you tick in its popup, each on the newest N of its grid's "
+                  "calibrations, all predicting from the same camera frames: 36 rings (6×6), no dot, one file per "
+                  "model. One sitting, the fairest comparison. The whole picture: Data > Gaze check table.",
                   "Do a full round (16, or 36) for a fair number. Space pauses. Esc saves and leaves; the files go in "
-                  "that person's folder of each calibration type."]:
+                  "that person's folder of each model. Undo (under the status line, or Ctrl+Z) takes them back."]:
             w = label(f"•   {s}", "sheetText")
             w.setWordWrap(True)
             v.addWidget(w)
@@ -1253,17 +1309,18 @@ class TestingPage(QWidget):
                                            lambda p=path: self.pick_multi_counts() and self.replay_requested.emit(str(p)))
 
     def pick_multi_counts(self) -> bool:
-        """The popup before a multiple check (or a replay): which types, how many calibrations each.
-        False if there is nothing to pick or it was cancelled."""
+        """The popup before a multiple check (or a replay): which models, how many of each grid's
+        calibrations. False if there is nothing to pick or it was cancelled."""
         root = storage.person_root(self.check_person)
-        available = {m: n for m in METHOD_BY_ID if (n := storage.usable_calibrations(m, root))}
+        available = {m.id: len(storage.model_files(m, root)[0]) for m in MODELS if storage.model_ready(m, root) is None}
         if not available:
             self.say(f"{self.check_person or 'No person'}: no usable calibration of any type yet. Calibrate first.")
             return False
         dlg = MultiCheckDialog(self.check_person, available, self.multi_counts, self.window())
         if dlg.exec() != QDialog.Accepted or not dlg.chosen():
             return False
-        self.multi_counts = {m: dlg.counts[m] if m in dlg.chosen() else 0 for m in available}   # 0: left out, remembered
+        chosen = dlg.chosen()
+        self.multi_counts = {m: chosen.get(m, 0) for m in available}   # 0: left out, remembered
         return True
 
     def set_check_count(self, n: int):
@@ -1278,35 +1335,33 @@ class TestingPage(QWidget):
             self.check_count_menu.addAction(f"{n}{' (all)' if n == self.check_most else ''}",
                                             lambda n=n: self.set_check_count(n))
 
-    def _fill_check_person_menu(self):
-        self.check_person_menu.clear()
-        for name, _ in storage.person_roots():
-            self.check_person_menu.addAction(name or "No person (data/)", lambda n=name: self.set_check(person=n))
-
-    def set_check(self, person: str | None = None, method_id: str | None = None):
-        """Whose model and which calibration type the gaze check tests; the comparison follows the person.
-        How many calibrations it uses goes back to all of them when the person or type changes."""
+    def set_check(self, person: str | None = None, model_id: str | None = None):
+        """Whose model and which model the gaze check tests; the comparison follows the person. How many
+        of the grid's calibrations it uses goes back to all of them when the person or model changes."""
         changed = (person is not None and person != self.check_person) or \
-                  (method_id is not None and method_id != self.check_method)
+                  (model_id is not None and model_id != self.check_model)
         if person is not None:
             self.check_person = person
-        if method_id is not None:
-            self.check_method = method_id
-        most = storage.usable_calibrations(self.check_method, storage.person_root(self.check_person))
+        if model_id is not None:
+            self.check_model = model_id
+        model, root = MODEL_BY_ID[self.check_model], storage.person_root(self.check_person)
+        missing = storage.model_ready(model, root)
+        most = 0 if missing else len(storage.model_files(model, root)[0])
         keep = self.check_count
         self.check_most = most
         self.set_check_count(most if changed or keep == 0 or keep > most else keep)   # a choice is kept while it fits
-        self.check_count_note.setText(f"of {most}, the newest first" if most else "no usable calibration of this type yet")
+        self.check_count_note.setText(f"of {most} {model.grid.name}, the newest first" if most else missing)
         self.check_person_btn.setText(f"{self.check_person or 'No person (data/)'}  {I_CHEVRON}")
-        self.check_chips.button([m.id for m in METHODS].index(self.check_method)).setChecked(True)
-        self.results = storage.method_results(storage.person_root(self.check_person))
+        self.check_chips.button(METHODS.index(model.grid)).setChecked(True)
+        self.with_chips.button(WITH.index(model.special and model.special.id)).setChecked(True)
+        self.results = storage.model_results(root)
         self.show_results()
-        n = len(storage.list_recordings(storage.person_root(self.check_person)))
+        n = len(storage.list_recordings(root))
         self.recordings_btn.setText(f"Recordings ({n})  {I_CHEVRON}" if n else "No recordings")
         self.recordings_btn.setEnabled(n > 0)
 
     def show_results(self):
-        self.check_results.setText(results_table(self.results, self.check_method, self.bar_colors))
+        self.check_results.setText(results_table(self.results, self.check_model, self.bar_colors))
 
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
         """An instruction page: what the test does, then the button that starts it."""
@@ -1451,26 +1506,146 @@ class TestingPage(QWidget):
         """Re-read data/. Runs whenever the page shows, the method changes, or a file was saved."""
         roots = storage.person_roots()
         cols: tuple[list, ...] = ([], [], [], [])             # active, non-active, not usable, removed
+        old = [k for k in LEGACY if k not in METHOD_BY_ID]     # the old random specials: not usable, still shown
         for name, root in roots:
             mine: tuple[list, ...] = ([], [], [], [])            # this person's rows, per column
-            for m in METHODS:                                   # every calibration type, under the person's name
-                usable = {p: calibration_usable(p) for p in list_calibrations(m.id, root)}
-                files = ([p for p, ok in usable.items() if ok], list_disabled(m.id, root),
-                         [p for p, ok in usable.items() if not ok], storage.list_removed(m.id, root))
+            for m in [*METHOD_BY_ID, *old]:                     # every calibration type, under the person's name
+                usable = {p: calibration_usable(p) for p in list_calibrations(m, root)}
+                files = ([p for p, ok in usable.items() if ok], list_disabled(m, root),
+                         [p for p, ok in usable.items() if not ok], storage.list_removed(m, root))
                 for rows, paths in zip(mine, files):
                     if paths:
-                        rows += [("type", m.name), *paths]
+                        rows += [("type", METHOD_BY_ID[m].name if m in METHOD_BY_ID else model_name(m)), *paths]
             heading = (name or "No person (data/)") + ("   · in use" if root == storage.DATA_DIR else "")
             for col, rows in zip(cols, mine):
                 if rows:                                        # people exist: the name above its types
                     col += ([("person", heading)] if len(roots) > 1 else []) + rows
         for lst, rows, empty in zip((self.active_list, self.disabled_list, self.inactive_list, self.removed_list), cols,
                                     ("None active: enable one, or calibrate", "None", "None", "None")):
-            fill_tree(lst, rows, empty)
+            fill_tree(lst, rows, empty, storage.calibration_problem if lst is self.inactive_list else None)
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
-        self._update_reuse()
+        self._update_share()
         self.set_check()
+        self.refresh_train()
+        self.check_table.refresh()
+
+    def set_undo(self, what: str):
+        """The Undo button under the status line: "Undo <what>", hidden when there is nothing to undo."""
+        self.undo_btn.setText(f"{I_UNDO}  Undo {what}")
+        self.undo_btn.setToolTip(f"Undo {what} (Ctrl+Z): its files go to the trash; Removed restores a calibration")
+        self.undo_btn.setVisible(bool(what))
+
+    # ----- Data > Train: every model, tick some, train them now
+
+    TRAIN_HEAD = ("Model", "Dots from", "Steps from", "Samples", "Error on its dots", "Head matrix", "Status")
+
+    def _train_page(self) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(24, 20, 24, 24)
+        v.setSpacing(12)
+        v.addWidget(label(f"{I_TRAIN}   Train", "sheetTitle"))
+        lead = label("Every model the lab makes: a grid's dots alone, or a grid with a special's steps, 24 in all. "
+                     "Tick the ones to train for this person and press Train: each learns from the person's "
+                     "calibrations now (the newest weighs most), so a gaze check of it starts at once. A model "
+                     "without its data says what it needs.", "lead")
+        lead.setWordWrap(True)
+        v.addWidget(lead)
+        self.train_person = ""
+        self.train_person_btn, pick = self._person_picker(self.set_train_person)
+        v.addLayout(pick)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        go = button("Train the ticked models", "filled")
+        go.clicked.connect(lambda: self.ticked() and self.train_requested.emit(self.train_person, self.ticked()))
+        every = button("Tick every ready model", "text")
+        every.clicked.connect(lambda: self.tick_models(True))
+        none = button("Untick all", "text")
+        none.clicked.connect(lambda: self.tick_models(False))
+        for b in (go, every, none):
+            row.addWidget(b)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.train_table = QTableWidget(len(MODELS), len(self.TRAIN_HEAD), objectName="table")
+        self.train_table.setHorizontalHeaderLabels(self.TRAIN_HEAD)
+        self.train_table.verticalHeader().hide()
+        self.train_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.train_table.setSelectionMode(QTableWidget.ExtendedSelection)   # Ctrl / Shift-click rows, Space ticks them
+        self.train_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.train_table.setWordWrap(False)
+        for r, m in enumerate(MODELS):
+            for c in range(len(self.TRAIN_HEAD)):
+                self.train_table.setItem(r, c, QTableWidgetItem(""))
+            self.train_table.item(r, 0).setText(m.name)
+            self.train_table.item(r, 0).setData(Qt.UserRole, m.id)
+        self.train_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.train_table.horizontalHeader().setStretchLastSection(True)
+        QShortcut(QKeySequence(Qt.Key_Space), self.train_table, self._space_ticks, context=Qt.WidgetShortcut)
+        v.addWidget(self.train_table, 1)
+        note = label("Error on its dots: how far the model's point is from the dots of the newest grid calibration it "
+                     "learnt from, as a share of the screen. Low only says the fit is tight; the gaze check, on rings "
+                     "it never saw, is the real test. Head matrix: the head-turn correction, the built-in one or the "
+                     "special's own head step.", "sheetText")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        self.train_info: dict[tuple, tuple] = {}     # (person, model id) -> (the files it learnt from, the numbers)
+        return page
+
+    def set_train_person(self, person: str):
+        self.train_person = person
+        self.refresh_train()
+
+    def _space_ticks(self):
+        """Space ticks (or unticks) every selected row that can be trained."""
+        rows = sorted({i.row() for i in self.train_table.selectedIndexes()})
+        items = [self.train_table.item(r, 0) for r in rows if self.train_table.item(r, 0).flags() & Qt.ItemIsUserCheckable]
+        on = any(i.checkState() != Qt.Checked for i in items)
+        for i in items:
+            i.setCheckState(Qt.Checked if on else Qt.Unchecked)
+
+    def tick_models(self, on: bool):
+        for r in range(self.train_table.rowCount()):
+            item = self.train_table.item(r, 0)
+            if item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(Qt.Checked if on else Qt.Unchecked)
+
+    def ticked(self) -> list[str]:
+        """The ids of the ticked models."""
+        return [self.train_table.item(r, 0).data(Qt.UserRole) for r in range(self.train_table.rowCount())
+                if self.train_table.item(r, 0).checkState() == Qt.Checked]
+
+    def refresh_train(self):
+        """Each model's row: what it would learn from for the person on the page, and what it learnt the last
+        time it was trained (while those files are unchanged), or what it is missing."""
+        self.train_person_btn.setText(f"{self.train_person or 'No person (data/)'}  {I_CHEVRON}")
+        root = storage.person_root(self.train_person)
+        c = getattr(self.window(), "c", None)
+        dim = QColor(c["onSurfaceVariant"]) if c else QColor("gray")     # a model without its data: greyed
+        for r, m in enumerate(MODELS):
+            grids, specials = storage.model_files(m, root)
+            missing = storage.model_ready(m, root)
+            item = self.train_table.item(r, 0)
+            ticked = item.checkState() == Qt.Checked
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | (Qt.ItemIsUserCheckable if not missing else Qt.NoItemFlags))
+            item.setCheckState(Qt.Checked if ticked and not missing else Qt.Unchecked)
+            files = tuple(p.name for p in grids + specials)
+            done = self.train_info.get((self.train_person, m.id))
+            numbers = done[1] if done and done[0] == files else None
+            texts = (f"{len(grids)} {m.grid.name}" if grids else "–",
+                     f"{len(specials)} {m.special.name}" if m.special and specials else "–",
+                     *(numbers or ("", "", "")),
+                     missing or ("Trained" if numbers else "Ready: not trained yet"))
+            for col, text in enumerate(texts, start=1):
+                self.train_table.item(r, col).setText(text)
+            for col in range(self.train_table.columnCount()):
+                self.train_table.item(r, col).setData(Qt.ForegroundRole, dim if missing else None)
+
+    def show_trained(self, person: str, results: dict[str, tuple]):
+        """The app trained these: model id -> (the files it learnt from, (samples, error, head matrix))."""
+        for m, (files, numbers) in results.items():
+            self.train_info[(person, m)] = (files, numbers)
+        self.refresh_train()
 
     def showEvent(self, e):
         self.refresh()
@@ -1644,7 +1819,7 @@ class SettingsWindow(QWidget):
             self.row(I_PERSON, "Person mode", "On: every file goes under data/<name>/<calibration type>/, one folder "
                      "per person. Off: data/<calibration type>/. Changes apply when you save", self.person_switch),
             self.row(I_PERSON, "Person", "Whose calibrations, checks and blink scores these are. Each person's "
-                     "methods train on their own files only", self.person_btn),
+                     "models train on their own files only. Picking or adding a person saves at once", self.person_btn),
         ])
         self.content.addStretch(1)
 
@@ -1780,16 +1955,24 @@ class SettingsWindow(QWidget):
     def _fill_person_menu(self):
         self.person_menu.clear()
         for name in storage.list_people():
-            self.person_menu.addAction(name, lambda n=name: self.set_person(n))
+            self.person_menu.addAction(name, lambda n=name: self.pick_person(n))
         self.person_menu.addAction("Add a person…", self.add_person)
 
+    def pick_person(self, name: str):
+        """Another person from the menu: saved at once, as if Save changes were pressed (20 Oct: a person
+        picked but not saved left the files going to the one before, with nothing on screen saying so)."""
+        self.set_person(name)
+        self.save()
+
     def add_person(self):
-        """A new name (its folder is made when you save); person mode turns on with it."""
+        """A new name: person mode turns on with it, and it is saved at once, so their folder is made and
+        the next calibration goes into it."""
         text, ok = QInputDialog.getText(self, "Add a person", "Name (letters, digits, spaces, - and _):")
         name = storage.person_name(text) if ok else ""
         if name:
             self.set_person(name)
             self.person_switch.setChecked(True)
+            self.save()
 
     def _fill_camera_menu(self):
         self.camera_menu.clear()
@@ -1930,9 +2113,10 @@ def is_dark(mode: str) -> bool:
 
 
 class MultiCheckDialog(QDialog):
-    """Multiple model gaze check: which types take part, and how many of the person's calibrations
-    each one trains on (the newest first). `available`: type id -> usable calibrations; `last`:
-    the counts chosen before (0 = left out), remembered from the previous popup."""
+    """Multiple model gaze check: which models take part, and how many of each grid's calibrations they
+    train on (the newest first). A row per grid, a chip per model: the grid alone, or with Sweep, Points
+    or Line model (a chip only where the person has that special). `available`: model id -> usable
+    calibrations of its grid; `last`: the counts chosen before (0 = left out), remembered."""
 
     def __init__(self, person: str, available: dict[str, int], last: dict[str, int] | None = None,
                  parent: QWidget | None = None):
@@ -1944,30 +2128,39 @@ class MultiCheckDialog(QDialog):
         v = QVBoxLayout(self)
         v.setContentsMargins(24, 20, 24, 20)
         v.setSpacing(12)
-        v.addWidget(label("Which types, and how many calibrations each", "sheetTitle"))
-        hint = label(f"Every ticked type predicts from the same camera frames, trained on the newest N of "
-                     f"{person or 'No person'}'s calibrations. 36 rings (6×6), one file per type.", "sheetText")
+        v.addWidget(label("Which models, and how many calibrations each", "sheetTitle"))
+        hint = label(f"Every ticked model predicts from the same camera frames, trained on the newest N of "
+                     f"{person or 'No person'}'s calibrations of its grid (and the newest of its special). "
+                     "36 rings (6×6), one file per model.", "sheetText")
         hint.setWordWrap(True)
         v.addWidget(hint)
         grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
+        grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
-        self.rows: dict[str, tuple[CheckButton, QPushButton]] = {}
-        self.counts: dict[str, int] = {}
-        for r, (m, most) in enumerate(available.items()):
-            chip = CheckButton(METHOD_BY_ID[m].name, "chip")
-            chip.setChecked(last.get(m, most) > 0)
+        self.chips: dict[str, CheckButton] = {}             # model id -> its chip
+        self.picks: dict[str, QPushButton] = {}             # grid id -> its count picker
+        self.counts: dict[str, int] = {}                    # grid id -> calibrations to use
+        for r, g in enumerate(g for g in GRIDS if any(MODEL_BY_ID[m].grid is g for m in available)):
+            most = next(n for m, n in available.items() if MODEL_BY_ID[m].grid is g)
+            grid.addWidget(label(g.name, "rowtitle"), r, 0)
+            for c, s in enumerate(WITH):
+                m = model_for(g.id, s).id
+                if m in available:
+                    chip = CheckButton("Alone" if s is None else f"+ {METHOD_BY_ID[s].name}", "chip")
+                    chip.setChecked(last.get(m, most) > 0)
+                    self.chips[m] = chip
+                    grid.addWidget(chip, r, 1 + c)
             pick = button("", "assist")
             menu = QMenu(pick)
             for n in range(1, most + 1):
-                menu.addAction(f"{n}{' (all)' if n == most else ''}", lambda n=n, m=m: self.set_count(m, n))
+                menu.addAction(f"{n}{' (all)' if n == most else ''}", lambda n=n, g=g.id: self.set_count(g, n))
             pick.setMenu(menu)
-            self.rows[m] = (chip, pick)
-            self.set_count(m, min(last.get(m) or most, most))
-            grid.addWidget(chip, r, 0)
-            grid.addWidget(label("calibrations", "rowsub"), r, 1)
-            grid.addWidget(pick, r, 2)
-        grid.setColumnStretch(3, 1)
+            self.picks[g.id] = pick
+            mine = [last[m.id] for m in MODELS if m.grid is g and last.get(m.id)]
+            self.set_count(g.id, min(max(mine, default=most), most))
+            grid.addWidget(pick, r, 1 + len(WITH))
+            grid.addWidget(label("calibrations", "rowsub"), r, 2 + len(WITH))
+        grid.setColumnStretch(3 + len(WITH), 1)
         v.addLayout(grid)
         actions = QHBoxLayout()
         actions.addStretch(1)
@@ -1979,15 +2172,15 @@ class MultiCheckDialog(QDialog):
         actions.addWidget(ok)
         v.addLayout(actions)
 
-    def set_count(self, m: str, n: int):
-        self.counts[m] = n
-        chip, pick = self.rows[m]
+    def set_count(self, grid_id: str, n: int):
+        self.counts[grid_id] = n
+        pick = self.picks[grid_id]
         most = len(pick.menu().actions())
         pick.setText(f"{n}{' (all)' if n == most else ''}  {I_CHEVRON}")
 
     def chosen(self) -> dict[str, int]:
-        """type id -> calibrations to use, for the ticked types only."""
-        return {m: n for m, n in self.counts.items() if self.rows[m][0].isChecked()}
+        """model id -> calibrations of its grid to use, for the ticked models only."""
+        return {m: self.counts[MODEL_BY_ID[m].grid.id] for m, chip in self.chips.items() if chip.isChecked()}
 
 
 def pick_camera(names: list[str], current: str = "") -> str | None:

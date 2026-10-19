@@ -3,28 +3,33 @@ What the lab writes to disk, and reads back in words. By person, then by calibra
 
     data/<person>/                                    person mode on (Settings > Person mode)
     data/                                             person mode off: the same folders straight in data/
-      <type>/<type>_<date>_<time>.json                a calibration: what the type's model learns from
-      <type>/gaze-check_<type>[_<n>-calibrations]_<date>_<time>.csv
-                                                      a gaze check of that type's model, trained on n calibrations
+      <type>/<type>_<date>_<time>.json                a calibration (one of the 9 types in core/methods.py)
       <type>/disabled/                                calibrations kept, but turned off by the user
       <type>/trash/                                   removed files, and the originals of edited ones
+      <model>/gaze-check_<model>[_<n>-calibrations]_<date>_<time>.csv
+                                                      a gaze check of a model, trained on n grid calibrations.
+                                                      A grid's own model has the grid's id, so its checks sit
+                                                      with its calibrations; a paired model's folder
+                                                      (sweep-original-4x4/ ...) is made by its first check
       blink-test/blink-scores_<date>_<time>.csv       blink tests (they belong to no type)
       gaze-videos/gaze-video_<date>_<time>.mp4 + .json  record-mode gaze checks (services/recording.py)
     data/trash/<date>_<time>/<person or data>/...      everything cleared with Data > Clear data (move back to undo)
 
-<type> is a method id from core/methods.py: original-3x3, original-4x4, original-5x5,
-sweep, points, line-model, and the random twins random-3x3 ... random-line-model. So a
-file name says which type made it and when, and its folders say whose it is. Missing
-folders are made at start (ensure_layout): a person's folder can be cut out and moved
-away by hand. The other branches' folders in data/ (calibrations/, gaze_checks/,
-blink_scores/, history/) are never read or moved here, and can't be used as a person's name.
+<type> is a calibration type: original-3x3, original-4x4, original-5x5, random-3x3, random-4x4,
+random-5x5, sweep, points, line-model. So a file name says which type made it and when, and its
+folders say whose it is. Missing type folders are made at start (ensure_layout): a person's folder
+can be cut out and moved away by hand. Before 20 Oct 2026 Sweep / Points / Line model also had random
+twins (random-sweep/ ...) and ended on 4x4 dots: those folders are read as old types (their gaze checks
+are listed, their calibrations shown as not usable). The other branches' folders in data/
+(calibrations/, gaze_checks/, blink_scores/, history/) are never read or moved here, and can't be
+used as a person's name.
 
 Every calibration file is in one format (FORMAT below), with its type and grid size inside:
 
-    {"format": "gaze-calibration-v3", "method": "sweep", "grid": 4, "saved_at": ...,
-     "sweep": [{"features": [...12], "target_x": .., "target_y": ..}, ...],   step 1 (empty for Original)
-     "head":  [...the same, at the centre dot...],                              step 2 (empty for Original)
-     "dots":  [...the same, at the grid dots...]}
+    {"format": "gaze-calibration-v3", "method": "sweep", "grid": 0, "saved_at": ...,
+     "sweep": [{"features": [...12], "target_x": .., "target_y": ..}, ...],   step 1 (empty for a grid)
+     "head":  [...the same, at the centre dot...],                              step 2 (empty for a grid)
+     "dots":  [...the same, at the grid dots...]}                               (empty for a special)
 
 A gaze check is a csv of index, x, y (where the model said), target_x, target_y (the lit ring).
 """
@@ -45,21 +50,24 @@ from pathlib import Path
 from eyetracking.core import blink_scores
 from eyetracking.core.calibration import describe_target, grid_positions
 from eyetracking.core.features import describe_features, head_degrees
-from eyetracking.core.methods import METHOD_BY_ID
+from eyetracking.core.methods import LEGACY, METHOD_BY_ID, MODEL_BY_ID, MODELS, Model, model_name
 from eyetracking.core.models import CalibrationRecording, CalibrationSample
+from eyetracking.core.quality import MIN_HEAD_FRAMES, step_one_problem
 from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"                   # the date-time part of every file name
 BASE_DIR = DATA_DIR                         # data/ itself; use_person() moves DATA_DIR into data/<person>/
 BLINK = "blink-test"                        # the blink tests' folder, beside the method folders
 VIDEOS = "gaze-videos"                      # record-mode recordings of the gaze check
-KINDS = (*METHOD_BY_ID, BLINK, VIDEOS)      # the folders in a person's folder (or in data/ with person mode off)
+KINDS = (*METHOD_BY_ID, BLINK, VIDEOS)      # the folders made in a person's folder (or in data/ with person mode off)
+# every folder the lab may have written in a person's folder: the types, the paired models' gaze checks, old types
+FOLDERS = tuple(dict.fromkeys((*KINDS, *MODEL_BY_ID, *LEGACY)))
 # never a person: the lab's own folders, and the other branches' folders in the shared data/
-RESERVED = {k.lower() for k in KINDS} | {"calibrations", "gaze_checks", "blink_scores", "history", "people",
-                                         "disabled", "trash", "older-versions"}
+RESERVED = {k.lower() for k in FOLDERS} | {"calibrations", "gaze_checks", "blink_scores", "history", "people",
+                                           "disabled", "trash", "older-versions"}
 FORMAT = "gaze-calibration-v3"              # 12 features per frame
 PARTS = ("sweep", "head", "dots")
-STEP_NAMES = {"sweep": "Step 1, the eye range", "head": "Step 2, the head moving, eyes on the centre dot",
+STEP_NAMES = {"sweep": "Step 1, the eyes following a dot across and down", "head": "Step 2, the head moving, eyes on the centre dot",
               "dots": "The dot grid"}
 
 
@@ -123,7 +131,7 @@ def list_people() -> list[str]:
     if not BASE_DIR.is_dir():
         return []
     return sorted((p.name for p in BASE_DIR.iterdir()
-                   if p.is_dir() and p.name.lower() not in RESERVED and any((p / k).is_dir() for k in KINDS)),
+                   if p.is_dir() and p.name.lower() not in RESERVED and any((p / k).is_dir() for k in FOLDERS)),
                   key=str.lower)
 
 
@@ -149,7 +157,7 @@ def clear_data(person: str | None) -> Path:
             continue
         target = stamp / (name or "data")
         target.mkdir(parents=True, exist_ok=True)
-        for kind in KINDS:
+        for kind in FOLDERS:
             if (root / kind).is_dir():
                 shutil.move(str(root / kind), str(target / kind))
         if name and root.is_dir() and not any(root.iterdir()):
@@ -167,15 +175,17 @@ def method_dir(method_id: str, root: Path | None = None) -> Path:
 def save_calibration(rec: CalibrationRecording, method_id: str, path: Path | None = None,
                      dots_from: str | None = None) -> Path:
     """Write one calibration to its method's folder (or `path`). Returns the path.
-    Nothing is written without dot samples. `dots_from`: the file the dots were reused
-    from (a Sweep / Points / Line model calibration that skipped its own dots)."""
-    if not rec.dots:
-        raise ValueError("no dot samples: nothing worth saving")
+    Nothing is written without dot samples (a grid) or head-step frames (a special). `dots_from`:
+    the file the dots were reused from (an old Sweep / Points / Line model file that skipped its own)."""
+    if not rec.dots and not rec.head:
+        raise ValueError("no dot samples and no head step: nothing worth saving")
     now = datetime.now()
     if path is None:
         path = method_dir(method_id) / f"{method_id}_{now:{STAMP}}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    grid = METHOD_BY_ID[method_id].grid if method_id in METHOD_BY_ID else 5
+    grid = METHOD_BY_ID[method_id].grid if method_id in METHOD_BY_ID else 0
+    if rec.dots and not grid:                       # an older special / old type's file (it ended on dots): their size
+        grid = round(len({(s.target_x, s.target_y) for s in rec.dots}) ** 0.5)
     data = {"format": FORMAT, "method": method_id, "grid": grid, "saved_at": now.isoformat(timespec="seconds")}
     if dots_from:
         data["dots_from"] = dots_from
@@ -246,34 +256,41 @@ def load_calibrations(paths) -> list[CalibrationRecording]:
     return recordings
 
 
-def dots_source(method, root: Path | None = None) -> Path | None:
-    """The newest usable 4x4 calibration a Sweep / Points / Line model calibration can take its
-    dots from: Original 4x4 for an in-order type, Random 4x4 for a random twin. None if there
-    is none (or the type does its own dots anyway)."""
-    if method.kind == "grid":
-        return None
-    source = "random-4x4" if method.random_order else "original-4x4"
-    return next((p for p in list_calibrations(source, root) if calibration_usable(p)), None)
-
-
 def calibration_usable(path: Path) -> bool:
-    """True if the lab can train on the file: the current format. Remembered per file version (its
-    size and modification time), so the lists, the chips and the reuse switch don't parse every file
-    again on each click: 42 files were ~0.5 s a click on 19 Oct (several seconds on a cold start)."""
+    """True if the lab can train on the file (calibration_problem says why not)."""
+    return calibration_problem(path) is None
+
+
+def calibration_problem(path: Path) -> str | None:
+    """Why a calibration can't train a model, in words, or None. Cheap checks only (the full quality
+    check runs when a model trains, on the worker thread): the current format; a grid has dots; a
+    special has a head step long enough and a step 1 of its own kind (a gliding dot for Sweep, still
+    dots for Points / Line model: before 20 Oct one recording was saved as all three, so a Sweep
+    folder can hold a Points recording); an old type's folder is read only. Remembered per file
+    version (size, modification time): the lists and chips don't parse every file again on each
+    click (42 files were ~0.5 s a click on 19 Oct)."""
     try:
         st = path.stat()
     except OSError:
-        return False
-    return _usable(str(path), st.st_size, st.st_mtime_ns)
+        return "the file is gone"
+    return _problem(str(path), st.st_size, st.st_mtime_ns)
 
 
 @functools.lru_cache(maxsize=4096)
-def _usable(path: str, size: int, mtime_ns: int) -> bool:
+def _problem(path: str, size: int, mtime_ns: int) -> str | None:
+    kind = method_of(Path(path))
+    if kind not in METHOD_BY_ID:
+        return f"an old type ({LEGACY.get(kind, kind)}): since 20 Oct a special is its own calibration, paired with a grid"
     try:
-        load_calibration(Path(path))
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
-    return True
+        rec = load_calibration(Path(path))
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return f"it can't be read ({e})"
+    method = METHOD_BY_ID[kind]
+    if method.kind == "grid":
+        return None if rec.dots else "no dot samples"
+    if len(rec.head) < MIN_HEAD_FRAMES:
+        return f"a head step of only {len(rec.head)} frames (need {MIN_HEAD_FRAMES})"
+    return step_one_problem(rec.sweep, method.kind)
 
 
 def set_calibration_enabled(path: Path, enabled: bool) -> Path:
@@ -316,9 +333,15 @@ def calibration_lines(path: Path) -> list[tuple[str, int | None, str | None]]:
     except (OSError, ValueError, KeyError, TypeError) as e:
         return [(f"Can't show this file: it was saved by a different version ({e}).", None, None)]
     method = METHOD_BY_ID.get(method_of(path))
-    lines = [(f"{method.name if method else method_of(path)}, {file_date(path):%d %b %Y, %H:%M}"
+    problem = calibration_problem(path)
+    lines = [(f"{method.name if method else model_name(method_of(path))}, {file_date(path):%d %b %Y, %H:%M}"
               + (f" (the dots reused from {dots_from})" if dots_from else "")
               + (f" (the same recording as {same_as})" if same_as else ""), None, None)]
+    if problem:
+        lines.append((f"Not usable: {problem}.", None, None))
+    elif method is not None and method.kind != "grid" and rec.dots:
+        lines.append((f"Made before 20 Oct, with {grid}x{grid} dots of its own: today its steps 1 and 2 are used "
+                      "and the dots come from the grid calibration it is paired with.", None, None))
     n = 0
     for part in PARTS:
         samples = getattr(rec, part)
@@ -375,10 +398,10 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
             if n not in indexes:
                 kept[part].append(s)
             n += 1
-    if kept["dots"]:
+    if kept["dots"] or kept["head"]:
         save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), method_of(path), path, dots_from)
     else:
-        remove_calibration(path)        # no dots left: the file goes too
+        remove_calibration(path)        # no dots and no head step left: the file goes too
     return n - sum(len(v) for v in kept.values())
 
 
@@ -495,13 +518,12 @@ def gaze_check_lines(path: Path) -> list[str]:
         rows = read_gaze_check(path)
     except (OSError, ValueError, IndexError) as e:
         return [f"Can't read {path.name} ({e})."]
-    method = METHOD_BY_ID.get(method_of(path))
     who = person_of(path) or "No person"
     error = check_error(rows)
     used = check_calibrations(path)
     trained = f" (trained on the newest {used} calibration{'s' if used != 1 else ''})" if used else ""
     grid = check_grid(rows)
-    lines = [f"Gaze check of {who}'s {method.name if method else method_of(path)} model{trained}{check_source(path)}, "
+    lines = [f"Gaze check of {who}'s {model_name(method_of(path))} model{trained}{check_source(path)}, "
              f"{file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples on {grid}x{grid} rings, average error "
              f"{error or 0:.1%} of the screen (from where the model said to the lit ring).", ""]
     for i, x, y, tx, ty in rows:
@@ -510,20 +532,48 @@ def gaze_check_lines(path: Path) -> list[str]:
     return lines
 
 
-def method_results(root: Path | None = None) -> list[tuple[str, int, int, float | None, float | None]]:
-    """For one person (or data/), per calibration type: (method id, calibrations, gaze checks,
-    the latest check's error, the mean error over every check) - the comparison of the methods."""
+def model_files(model: Model, root: Path | None = None, newest: int | None = None) -> tuple[list[Path], list[Path]]:
+    """What a model of a person trains on: their newest `newest` usable calibrations of its grid (None: all),
+    and every usable calibration of its special (train() takes the newest that passes the full check)."""
+    usable = lambda m: [p for p in list_calibrations(m, root) if calibration_usable(p)]
+    return usable(model.grid.id)[:newest], usable(model.special.id) if model.special else []
+
+
+def model_ready(model: Model, root: Path | None = None) -> str | None:
+    """None if a person has what the model trains on; else what is missing, in words."""
+    grids, specials = model_files(model, root)
+    missing = [m.name for m, files in ((model.grid, grids), (model.special, specials)) if m and not files]
+    return f"needs a usable {' and a '.join(missing)} calibration" if missing else None
+
+
+def check_errors(model_id: str, root: Path | None = None) -> list[float]:
+    """Every gaze check's error of a model (or an old type), newest first."""
+    errors = []
+    for path in list_gaze_checks(model_id, root):
+        try:
+            error = check_error(read_gaze_check(path))
+        except (OSError, ValueError, IndexError):
+            continue
+        if error is not None:
+            errors.append(error)
+    return errors
+
+
+def model_results(root: Path | None = None, everything: bool = False) -> list[tuple[str, str, list[float]]]:
+    """For one person (or data/), per model: (model id, what it trains on in words, every gaze check's
+    error newest first). The 24 models, then the old types with gaze checks. everything=False: only the
+    models with a calibration of each part or a gaze check (the rest can't say anything yet)."""
     out = []
-    for m in METHOD_BY_ID:
-        errors = []
-        for path in list_gaze_checks(m, root):
-            try:
-                errors.append(check_error(read_gaze_check(path)))
-            except (OSError, ValueError, IndexError):
-                pass
-        errors = [e for e in errors if e is not None]
-        out.append((m, len(list_calibrations(m, root)), len(errors), errors[0] if errors else None,
-                    sum(errors) / len(errors) if errors else None))
+    for m in MODELS:
+        grids, specials = model_files(m, root)
+        errors = check_errors(m.id, root)
+        if everything or errors or (grids and (specials or m.special is None)):
+            used = f"{len(grids)}" + (f" + {len(specials)}" if m.special else "")
+            out.append((m.id, used, errors))
+    for old in LEGACY:
+        errors = check_errors(old, root)
+        if errors:
+            out.append((old, "old", errors))
     return out
 
 

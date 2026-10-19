@@ -68,4 +68,17 @@ w.store.sync()
 storage.use_person("")
 app2 = appmod.App(mouse=True)                                    # a restart: still Ann
 assert storage.DATA_DIR == tmp / "data" / "Ann" and app2.control.person_switch.isChecked()
+
+# picking or adding a person saves at once (20 Oct), no Save changes needed
+w2 = app2.control
+w2.person_switch.setChecked(False)
+w2.save()
+assert storage.DATA_DIR == tmp / "data"
+cw.QInputDialog.getText = lambda *a, **k: ("Bo", True)          # Add a person… > "Bo" > OK
+w2.add_person()
+assert storage.DATA_DIR == tmp / "data" / "Bo" and w2.store.value("person") == "Bo" and w2.person_switch.isChecked()
+assert w2.store.value("person_mode", type=bool) and "Saving for Bo" in app2.testing.status.text()
+w2._fill_person_menu()
+next(a for a in w2.person_menu.actions() if a.text() == "Ann").trigger()   # the menu: Ann, saved at once
+assert storage.DATA_DIR == tmp / "data" / "Ann" and w2.store.value("person") == "Ann"
 print("person mode ok")

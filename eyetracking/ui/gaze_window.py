@@ -1,7 +1,7 @@
 """
 The gaze check, full screen: test rings, one lit at a time, and what the models say.
 
-    python -m eyetracking.ui.gaze_window sweep              (that type's calibrations, newest weighted most)
+    python -m eyetracking.ui.gaze_window sweep-original-4x4   (that model, from data/; newest weighted most)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
 Three ways to run it (app.py picks):
@@ -31,9 +31,9 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid
 from eyetracking.core.line_model import ScreenGeometry
-from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, live_clock, train
+from eyetracking.core.methods import DEFAULT_MODEL, MODEL_BY_ID, live_clock, train
 from eyetracking.core.models import NO_FRAME
-from eyetracking.services.storage import CHECK_GRID, Check, load_all_calibrations, save_gaze_check
+from eyetracking.services.storage import CHECK_GRID, Check, load_calibrations, model_files, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
 TICK_MS = 16         # asks for the newest camera frame (read on its own thread) at the screen's pace
@@ -263,14 +263,15 @@ def screen_geometry() -> ScreenGeometry:
 def main() -> int:
     app = QApplication(sys.argv)
 
-    method = METHOD_BY_ID[next((a for a in sys.argv[1:] if a in METHOD_BY_ID), DEFAULT_METHOD)]
+    method = MODEL_BY_ID[next((a for a in sys.argv[1:] if a in MODEL_BY_ID), DEFAULT_MODEL)]
     if "--mouse" in sys.argv:
         tracker = None
         get_point = fake_point_from_mouse
     else:
-        model, n = train(method, load_all_calibrations(method.id), screen_geometry())
+        grids, specials = model_files(method)
+        model, n = train(method, load_calibrations(grids), load_calibrations(specials), screen_geometry())
         if model is None:
-            print(f"No usable {method.name} calibration yet: calibrate first")
+            print(f"No usable calibrations for {method.name} yet: calibrate first")
             return 1
         print(f"{method.name}: trained on {n} samples")
         tracker = EyeTracker()             # asks which camera, in the console
