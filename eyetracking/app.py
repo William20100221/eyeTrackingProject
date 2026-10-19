@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer
@@ -73,6 +74,7 @@ class App(QObject):
         settings = self.control.read_store()
 
         self.tracker: EyeTracker | None = None     # opened by _use_camera(), only while a window needs the gaze
+        self._opening = False                     # a camera open in progress: a second start meanwhile is ignored
         self.camera_users: set[str] = set()
         self.camera = settings["camera"]
         self.fullscreen: QWidget | None = None     # the calibration / check / blink page while it runs
@@ -145,7 +147,9 @@ class App(QObject):
             self.tracker = None
 
     def _open_camera(self) -> bool:
-        """Open the chosen camera and MediaPipe (about a second, on this thread)."""
+        """Open the chosen camera and MediaPipe on a worker thread, this one painting meanwhile."""
+        if self._opening:
+            return False                          # the driver is still starting from the last click
         try:
             index = self._camera_index()          # may ask with the popup first
         except RuntimeError as e:
@@ -154,13 +158,28 @@ class App(QObject):
         self.testing.status.setText("Opening the camera…")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
-        # ponytail: opens on the GUI thread (~1 s freeze); move to a QThread if that feels slow
+        # the open runs on another thread while this one keeps painting: the camera driver can take
+        # a minute the first time on some PCs, and a GUI thread stuck that long shows "Not Responding"
+        box: dict = {}
+
+        def job() -> None:
+            try:
+                box["tracker"] = EyeTracker(index)
+            except Exception as e:                # camera busy, MediaPipe failed
+                box["error"] = e
+        worker = threading.Thread(target=job, daemon=True)
+        self._opening = True
+        worker.start()
         try:
-            self.tracker = EyeTracker(index)
+            while worker.is_alive():
+                QApplication.processEvents()      # paint, answer clicks (a second start is ignored meanwhile)
+                worker.join(0.05)
+            self._opening = False
+            if "error" in box:
+                self.testing.say(f"The camera didn't start ({box['error']}). Pick another in Settings > Camera.")
+                return False
+            self.tracker = box["tracker"]
             return True
-        except Exception as e:                    # camera busy, MediaPipe failed
-            self.testing.say(f"The camera didn't start ({e}). Pick another in Settings > Camera.")
-            return False
         finally:
             QApplication.restoreOverrideCursor()
 
