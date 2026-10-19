@@ -258,8 +258,9 @@ def plan(files: list[File], everyone: list[File]) -> tuple[dict[str, list[str]],
         failing = [f for f in active if not f.usable and not wrong(f)]
         old = newest_first([f for f in live if OLD.get(f.folder) in {m.id, *(p.id for p in partners(m))} and f.usable
                             and id(f) not in deleted])
-        move = (f"{m.name}: {old[0].rel}'s steps pass as {m.name}{' (weak)' if old[0].weak else ''}: move it to "
-                f"{m.id}/ (prefix {m.id}_, \"method\": \"{m.id}\"; its old dots are ignored)") if old else ""
+        move = (f"{m.name}: {old[0].rel}'s steps pass as {m.name}{' (weak)' if old[0].weak else ''}: "
+                + ("Restore it, then " if old[0].where == "trash" else "")
+                + f"right-click it (Not usable) > Copy to {m.name}; its old dots are ignored") if old else ""
         if any(f.good for f in active):
             weak = [f.name for f in active if f.usable and f.weak]
             act["OK"].append(f"{m.name}: " + ", ".join(f.name for f in active if f.good)
@@ -297,8 +298,9 @@ def plan(files: list[File], everyone: list[File]) -> tuple[dict[str, list[str]],
                 and not any(o.startswith(f"{METHOD_BY_ID[OLD[f.folder]].name}: {f.rel}") for o in act["OPTIONAL"]):
             act["OPTIONAL"].append(f"{f.rel}: a real {METHOD_BY_ID[OLD[f.folder]].name} recording of an old type"
                                    + (" (in its trash)" if f.where == "trash" else "") + (", weak" if f.weak else "")
-                                   + f": keep it; moved to {OLD[f.folder]}/ (prefix and \"method\" changed) it would "
-                                   "be a second calibration of that type")
+                                   + ": keep it; " + ("Restore, then " if f.where == "trash" else "")
+                                   + f"right-click > Copy to {METHOD_BY_ID[OLD[f.folder]].name} makes it a second "
+                                   "calibration of that type")
     # 4. failing files away from training (trash, disabled, old types), when the person has that type usable
     have = {f.folder for f in live if f.where == "active" and f.usable} | {f.folder for f in restored}
     for f in live:
