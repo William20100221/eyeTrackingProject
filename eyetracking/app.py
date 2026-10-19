@@ -63,6 +63,7 @@ from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, 
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
+STALL_S = 1.0            # a camera frame slower than this is reported: the GUI thread waited for it
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
 CAPTURE_MS = 1000        # how often the text of the window being read is re-read (scrolling, a new page)
 
@@ -262,6 +263,7 @@ class App(QObject):
         self.control.ai_changed.connect(self._ai_changed)
 
         self.tracker = None                       # opened by _use_camera(), only while needed (issue #11)
+        self._opening = False                     # a camera open in progress: a second start meanwhile is ignored
         self.camera_users: set[str] = set()       # what needs the gaze right now
         self.camera = settings["camera"]
         migrate_layout()                          # files from older versions, loose in data/, go into their folders
@@ -339,8 +341,10 @@ class App(QObject):
             self.cursor.hide()
 
     def _open_camera(self) -> bool:
-        """Open the chosen camera and MediaPipe (about a second, on this thread).
+        """Open the chosen camera and MediaPipe on a worker thread, this one painting meanwhile.
         The chat's status line says so, and the pointer waits, meanwhile."""
+        if self._opening:
+            return False                          # the driver is still starting from the last click
         try:
             index = self._camera_index()          # may ask with the popup first
         except RuntimeError as e:                 # no camera, or the popup was closed
@@ -349,13 +353,28 @@ class App(QObject):
         self.panel.status.setText("Opening the camera…")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()              # paint the status before the wait
-        # ponytail: opens on the GUI thread (~1 s freeze); move to a QThread if that feels slow
+        # the open runs on another thread while this one keeps painting: the camera driver can take
+        # a minute the first time on some PCs, and a GUI thread stuck that long shows "Not Responding"
+        box: dict = {}
+
+        def job() -> None:
+            try:
+                box["tracker"] = EyeTracker(index)
+            except Exception as e:                # camera busy, MediaPipe failed
+                box["error"] = e
+        worker = threading.Thread(target=job, daemon=True)
+        self._opening = True
+        worker.start()
         try:
-            self.tracker = EyeTracker(index)
+            while worker.is_alive():
+                QApplication.processEvents()      # paint, answer clicks (a second start is ignored meanwhile)
+                worker.join(0.05)
+            self._opening = False
+            if "error" in box:
+                self.panel.reply(f"The camera didn't start ({box['error']}). Pick another in Settings > Camera.")
+                return False
+            self.tracker = box["tracker"]
             return True
-        except Exception as e:                    # camera busy, MediaPipe failed
-            self.panel.reply(f"The camera didn't start ({e}). Pick another in Settings > Camera.")
-            return False
         finally:
             QApplication.restoreOverrideCursor()
             self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
@@ -456,7 +475,10 @@ class App(QObject):
         else:
             # None during a blink and the frames just after it (eyes reopening);
             # face_found stays True then, so the ball doesn't flash "face lost"
+            t0 = time.perf_counter()
             features = self.tracker.read_features()
+            if time.perf_counter() - t0 > STALL_S:    # the camera or MediaPipe hung: say so, with the time
+                self.panel.status.setText(f"The camera took {time.perf_counter() - t0:.1f} s for one frame.")
             face = self.tracker.face_found
         self.ball.set_tracking_state(face)
 
