@@ -21,7 +21,12 @@ as the process is DPI-aware: Qt makes it so; a plain script calls make_dpi_aware
 Qt's own coordinates (QCursor.pos(), widget geometry) are scaled pixels: multiply
 by the screen's devicePixelRatio before using them with these boxes.
 
-Threads: UIA is COM; lines_on_screen() initialises COM for whatever thread calls it.
+Threads: every capture runs on one long-lived thread (whoever calls lines_on_screen): UI Automation
+objects belong to the thread (COM apartment) that made them, and keeping them between captures is what
+makes a capture cheap. Each window's document is found once (walking its whole UI tree) and then only
+asked for its visible lines; before 19 Oct the whole tree of a long web page was walked and every text
+in it read once a second, which could make the browser itself stall. A window that needs OCR is OCR'd
+again only when its picture changed.
 
 Run:  python -m eyetracking.services.screen_text    (3 s to point the mouse at a window, then prints its lines)
 """
@@ -29,21 +34,23 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import queue
 import sys
+import threading
 import time
+from concurrent.futures import Future
 from ctypes import wintypes
 
 from eyetracking.core.reading import Line
 
 OCR_LANG = "en"        # a Windows OCR language pack (Settings > Time & language); "zh-Hans-CN" for simplified Chinese
 MIN_WORDS = 20         # fewer words than this from UIA = probably a toolbar only: try OCR too, keep whichever found more
+NO_DOCUMENT_RETRY_S = 2.0   # a window that showed no text: its UI tree is walked again at most this often
 
 if sys.platform == "win32":
     import comtypes
     import comtypes.client
 
-    comtypes.client.GetModule("UIAutomationCore.dll")  # writes comtypes.gen.UIAutomationClient on first run
-    from comtypes.gen import UIAutomationClient as UIA
 
     _user32 = ctypes.windll.user32
     _user32.GetForegroundWindow.restype = wintypes.HWND
@@ -89,9 +96,36 @@ def window_rect(hwnd: int) -> tuple[int, int, int, int]:
 
 
 # ---------------------------------------------------------------- text
+_jobs: queue.SimpleQueue = queue.SimpleQueue()       # (Future, hwnd): every capture, done on one thread (_serve)
+_automation = None                                  # (UIA module, IUIAutomation): made once, on that thread
+_documents: dict[int, tuple[object | None, float, str]] = {}   # hwnd -> (its document's text pattern or None,
+                                                                #          when it was looked for, the window's title then)
+_ocr_seen: dict[int, tuple[tuple, list]] = {}       # hwnd -> (where it was + a 32x24 thumbnail, the lines OCR found)
+
+
 def lines_on_screen(hwnd: int | None = None) -> list[Line]:
-    """The visible text of a window, one Line per visual line, in reading order."""
+    """The visible text of a window, one Line per visual line, in reading order. Runs on the capture
+    thread; the caller waits for it (the app calls it from a background thread)."""
     hwnd = hwnd or active_window()
+    done: Future = Future()
+    _jobs.put((done, hwnd))
+    return done.result()
+
+
+def _serve() -> None:
+    """The capture thread: a daemon, so quitting never waits for a capture still running."""
+    while True:
+        done, hwnd = _jobs.get()
+        try:
+            done.set_result(_lines(hwnd))
+        except BaseException as e:                       # handed to the caller of lines_on_screen
+            done.set_exception(e)
+
+
+threading.Thread(target=_serve, daemon=True, name="screen-text").start()
+
+
+def _lines(hwnd: int) -> list[Line]:
     lines = _uia_lines(hwnd)
     if sum(len(ln.text.split()) for ln in lines) < MIN_WORDS:
         ocr = _ocr_lines(hwnd)
@@ -100,20 +134,48 @@ def lines_on_screen(hwnd: int | None = None) -> list[Line]:
     return lines     # in the source's own order: UIA gives document order, which is the reading order
 
 
+def _uia():
+    """(the UIA module, an IUIAutomation), made once on the capture thread."""
+    global _automation
+    if _automation is None:
+        try:
+            comtypes.CoInitialize()                      # COM per thread: this is the capture thread
+        except OSError:
+            pass                                         # already initialised another way: fine
+        comtypes.client.GetModule("UIAutomationCore.dll")   # writes comtypes.gen.UIAutomationClient on first run
+        from comtypes.gen import UIAutomationClient as UIA
+        _automation = (UIA, comtypes.CoCreateInstance(UIA.CUIAutomation._reg_clsid_, interface=UIA.IUIAutomation,
+                                                      clsctx=comtypes.CLSCTX_INPROC_SERVER))
+    return _automation
+
+
 def _uia_lines(hwnd: int) -> list[Line]:
-    try:
-        comtypes.CoInitialize()                          # COM per thread: the app captures on a worker thread
-    except OSError:
-        pass                                             # already initialised another way: fine
-    uia = comtypes.CoCreateInstance(UIA.CUIAutomation._reg_clsid_, interface=UIA.IUIAutomation,
-                                    clsctx=comtypes.CLSCTX_INPROC_SERVER)
+    """The window's visible lines through its document's text pattern, kept per window: a capture is
+    then one cheap call. The document is looked for again (the walk of the whole UI tree) when the
+    window's title changed (another tab, page or window), or when the kept one shows almost nothing,
+    at most every NO_DOCUMENT_RETRY_S."""
+    title = window_title(hwnd)
+    tp, when, was = _documents.get(hwnd, (None, 0.0, None))
+    lines = (_visible(tp) or []) if tp is not None else []
+    if was == title and (sum(len(ln.text.split()) for ln in lines) >= MIN_WORDS
+                         or time.monotonic() - when < NO_DOCUMENT_RETRY_S):
+        return lines
+    tp = _find_document(hwnd)
+    _documents[hwnd] = (tp, time.monotonic(), title)
+    return (_visible(tp) or []) if tp is not None else []
+
+
+def _find_document(hwnd: int):
+    """The window's document: the text element with the most text (a page also has an address bar,
+    buttons, tooltips). This walks the window's whole UI tree: done once per document, not per capture."""
+    UIA, uia = _uia()
     has_text = uia.CreatePropertyCondition(UIA.UIA_IsTextPatternAvailablePropertyId, True)
     try:
         found = uia.ElementFromHandle(wintypes.HWND(hwnd)).FindAll(UIA.TreeScope_Descendants, has_text)
     except Exception:                                    # COMError: the window is gone or refuses (admin app)
-        return []
-    best = None                                          # the document = the text element with the most text
-    for i in range(found.Length):                        # (a page also has an address bar, buttons, tooltips)
+        return None
+    best = None
+    for i in range(found.Length):
         try:
             tp = found.GetElement(i).GetCurrentPattern(UIA.UIA_TextPatternId).QueryInterface(UIA.IUIAutomationTextPattern)
             n = len(tp.DocumentRange.GetText(-1))
@@ -121,16 +183,19 @@ def _uia_lines(hwnd: int) -> list[Line]:
             continue
         if best is None or n > best[0]:
             best = (n, tp)
-    if best is None:
-        return []
+    return best[1] if best else None
+
+
+def _visible(tp) -> list[Line] | None:
+    """The lines a document shows now; None when it fails (gone, another page)."""
     lines: list[Line] = []
     try:
-        ranges = best[1].GetVisibleRanges()              # Chromium: one range per visual line; Notepad: the whole text
+        ranges = tp.GetVisibleRanges()                   # Chromium: one range per visual line; Notepad: the whole text
         for i in range(ranges.Length):
             rng = ranges.GetElement(i)
             lines += _split(rng.GetText(-1), rng.GetBoundingRectangles())
-    except Exception:                                    # the page re-rendered under us: keep what we got, next call gets the rest
-        pass
+    except Exception:                                    # gone, or re-rendered under us: keep what we got
+        return lines or None
     return lines
 
 
@@ -187,6 +252,9 @@ def _ocr_lines(hwnd: int) -> list[Line]:
     if right <= left or bottom <= top:
         return []
     image = ImageGrab.grab((left, top, right, bottom), all_screens=True)
+    seen = (left, top, right, bottom, image.resize((32, 24)).tobytes())
+    if hwnd in _ocr_seen and _ocr_seen[hwnd][0] == seen:
+        return _ocr_seen[hwnd][1]                        # the same picture as last time: the same lines, no OCR
     result = asyncio.run(winocr.recognize_pil(image, OCR_LANG))
     lines = []
     for ln in result.lines:
@@ -195,6 +263,7 @@ def _ocr_lines(hwnd: int) -> list[Line]:
         y1 = top + max(w.bounding_rect.y + w.bounding_rect.height for w in ln.words)
         lines.append(Line(" ".join(w.text for w in ln.words), boxes[0][0], y0, boxes[-1][1] - boxes[0][0], y1 - y0,
                           tuple(boxes)))
+    _ocr_seen[hwnd] = (seen, lines)
     return lines
 
 

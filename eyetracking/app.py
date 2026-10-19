@@ -59,7 +59,8 @@ from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, Gaze
 from eyetracking.core.blink_scores import advice as blink_advice
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import app_icon, TEXT_FONTS, SettingsWindow, model_label, pick_ai, pick_camera
+from eyetracking.ui.control_window import (app_icon, TEXT_FONTS, SettingsWindow, busy, model_label, pick_ai,
+                                          pick_camera, run_busy)
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
 
 TICK_MS = 33             # ~30 frames a second; the camera read limits it anyway
@@ -188,6 +189,9 @@ class ReadingDebug(QLabel):
         self.setWordWrap(True)
         self.move(QApplication.primaryScreen().availableGeometry().topLeft() + QPoint(8, 8))
         self._shown = None
+        if sys.platform == "win32":               # not in screen captures (WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+):
+            import ctypes                         # the OCR of the page being read must not see it change every word
+            ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x11)
 
     def show_word(self, hit: tuple[str, str] | None, read: int, total: int, title: str) -> None:
         if (hit, read, total) == self._shown:        # 30 calls a second: repaint only on a change
@@ -221,6 +225,20 @@ class Background(QObject):
     @Slot(object, object)
     def _deliver(self, then, result) -> None:
         then(result)
+
+
+STILL_WORKING = "Still working on the last one…"   # a second start while slow work runs
+
+
+def open_tracker(index: int, closing: threading.Thread | None = None) -> EyeTracker:
+    """The camera opened and made ready, on the worker thread (App._busy). `closing`, the camera closed
+    last, is waited for first, so the device is free. Then the first frame is read here: the stream
+    really starting and MediaPipe's first run would otherwise land on the GUI thread, in the first tick."""
+    if closing is not None:
+        closing.join()
+    tracker = EyeTracker(index)
+    tracker.read()
+    return tracker
 
 
 class App(QObject):
@@ -259,11 +277,10 @@ class App(QObject):
         self._capturing = False
         settings = self.control.read_store()
         self.ai_entry: dict | None = None
-        self._choose_ai(provider)
-        self.control.ai_changed.connect(self._ai_changed)
 
         self.tracker = None                       # opened by _use_camera(), only while needed (issue #11)
-        self._opening = False                     # a camera open in progress: a second start meanwhile is ignored
+        self._working = False                     # slow work running (App._busy): a camera start meanwhile is ignored
+        self._closing: threading.Thread | None = None   # the last camera, closing on its own thread
         self.camera_users: set[str] = set()       # what needs the gaze right now
         self.camera = settings["camera"]
         migrate_layout()                          # files from older versions, loose in data/, go into their folders
@@ -284,6 +301,9 @@ class App(QObject):
         self.timer.timeout.connect(self.tick)
         self.timer.start(TICK_MS)
 
+        # last: the first-run key check answers clicks while it waits, so everything they reach exists by now
+        self._choose_ai(provider)
+        self.control.ai_changed.connect(self._ai_changed)
         self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
         self.control.show_last()
 
@@ -325,6 +345,9 @@ class App(QObject):
         """`user` needs the gaze: open the camera if it is off. False if it can't be opened."""
         if self.mouse:
             return True
+        if self._working or busy():               # a click answered while the camera opens, a model trains, a key is checked
+            self.panel.status.setText(STILL_WORKING)
+            return False
         self.camera_users.add(user)
         if self.tracker is None and not self._open_camera():
             self.camera_users.discard(user)
@@ -335,49 +358,50 @@ class App(QObject):
         """`users` are done with the gaze; the last one out closes the camera."""
         self.camera_users.difference_update(users)
         if not self.camera_users and self.tracker is not None:
-            self.tracker.close()                  # camera light off, MediaPipe freed
-            self.tracker = None
+            # camera light off, MediaPipe freed: on its own thread (a driver's release can block for a second);
+            # the next open waits for it (open_tracker), so the camera is free again before it's asked for
+            old, self.tracker = self.tracker, None
+            self._closing = threading.Thread(target=old.close, daemon=True)
+            self._closing.start()
+            self._closing.join(0.25)              # usually done by now: the camera is off when this returns
             self.ball.set_tracking_state(None)    # grey halo: camera off
             self.cursor.hide()
 
     def _open_camera(self) -> bool:
         """Open the chosen camera and MediaPipe on a worker thread, this one painting meanwhile.
         The chat's status line says so, and the pointer waits, meanwhile."""
-        if self._opening:
-            return False                          # the driver is still starting from the last click
         try:
             index = self._camera_index()          # may ask with the popup first
         except RuntimeError as e:                 # no camera, or the popup was closed
             self.panel.reply(f"The camera didn't start ({e}).")
             return False
-        self.panel.status.setText("Opening the camera…")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()              # paint the status before the wait
-        # the open runs on another thread while this one keeps painting: the camera driver can take
-        # a minute the first time on some PCs, and a GUI thread stuck that long shows "Not Responding"
-        box: dict = {}
-
-        def job() -> None:
-            try:
-                box["tracker"] = EyeTracker(index)
-            except Exception as e:                # camera busy, MediaPipe failed
-                box["error"] = e
-        worker = threading.Thread(target=job, daemon=True)
-        self._opening = True
-        worker.start()
+        # the camera driver can take a minute the first time on some PCs: on a worker thread, the bar running
         try:
-            while worker.is_alive():
-                QApplication.processEvents()      # paint, answer clicks (a second start is ignored meanwhile)
-                worker.join(0.05)
-            self._opening = False
-            if "error" in box:
-                self.panel.reply(f"The camera didn't start ({box['error']}). Pick another in Settings > Camera.")
-                return False
-            self.tracker = box["tracker"]
+            self.tracker = self._busy("Opening the camera…", lambda: open_tracker(index, self._closing))
             return True
+        except Exception as e:                    # camera busy, MediaPipe failed
+            self.panel.reply(f"The camera didn't start ({e}). Pick another in Settings > Camera.")
+            return False
+
+    def _busy(self, text: str, work):
+        """work() on a worker thread while this one keeps the window alive (control_window.run_busy): the
+        bar runs under the title bar, the chat's status line says `text`, clicks are answered. Windows
+        shows "Not Responding" when the GUI thread stops for 5 s, which a cold camera driver or training
+        on many calibrations could do on this PC. Returns work()'s result; raises its exception."""
+        before = self.panel.status.text()
+        self.panel.status.setText(text)
+        self.control.place_busy()
+        was, self._working = self._working, True     # nested (a click answered meanwhile): the outer job still runs
+        try:
+            return run_busy(self.control.busy, work)
         finally:
-            QApplication.restoreOverrideCursor()
-            self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
+            self._working = was
+            if self.panel.status.text() in (text, STILL_WORKING):   # nothing else said meanwhile
+                self.panel.status.setText(before)
+
+    def _train_model(self):
+        """_load_model on a worker thread, the bar running: training on every calibration takes seconds."""
+        return self._busy("Training the gaze model…", self._load_model)
 
     def _choose_ai(self, forced: str | None) -> None:
         """Which AI answers: the key chosen in Settings > AI (or the chat's picker). Besides the
@@ -439,8 +463,12 @@ class App(QObject):
         return GazeModel(K=K).fit(samples, weights) if samples else None
 
     def _retrain(self) -> None:
-        """Gaze data was removed in the Practice tab: train again on what is left."""
-        self.model = self._load_model()
+        """Gaze data was removed in the Practice tab: train again on what is left. Asked while other slow
+        work runs (a click answered meanwhile), it waits for it: its model must be the last one kept."""
+        if self._working or busy():
+            QTimer.singleShot(200, self._retrain)
+            return
+        self.model = self._train_model()
         self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
         self.panel.reply(f"Gaze model retrained on {self.samples_used} samples.")
 
@@ -662,7 +690,7 @@ class App(QObject):
             self.panel.reply(f"Calibration didn't work ({e}). Try calibrate again.")
             return
         path = save_calibration(rec)
-        self.model = self._load_model()           # the new file + all older ones
+        self.model = self._train_model()           # the new file + all older ones
         self.panel.reply(f"Calibrated with {len(rec.dots)} dot samples, saved to {path.name}. "
                          f"Gaze model retrained on {self.samples_used} samples.")
 
