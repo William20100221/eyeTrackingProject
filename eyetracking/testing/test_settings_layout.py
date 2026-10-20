@@ -32,4 +32,14 @@ for step in (w.open_sheet, w.cancel_sheet, w.open_sheet):
 for spin in w.findChildren(cw.SpinButton):
     spin._turn.setCurrentTime(275)                                  # halfway through the turn
     assert spin._turn.endValue() == -360.0 and spin.angle < 0, (spin.text(), spin.angle)
+
+# Settings > Font: every window's text at once, light ones too; kept with Save changes, back with Reset
+assert [a.text() for a in w.font_menu.actions()] == list(cw.FONTS) and qt.font().weight() == 400
+w.set_font_choice("Segoe UI Light")
+assert qt.font().families()[0] == "Segoe UI" and qt.font().weight() == 300 and w.font_btn.text().startswith("Segoe UI Light")
+assert cw.ICON_FONTS[0] in qt.font().families()                  # the glyphs still draw
+w.save()
+assert w.store.value("font") == "Segoe UI Light"
+w.load(cw.DEFAULTS)
+assert qt.font().weight() == 400 and w.font_btn.text().startswith("Segoe UI  ")
 print("settings layout ok")
