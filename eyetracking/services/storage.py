@@ -166,6 +166,21 @@ def clear_data(person: str | None) -> Path:
     return stamp
 
 
+def delete_person(person: str) -> Path:
+    """A person's whole folder (every calibration, check, blink test, recording, their trash too) moves into
+    data/trash/<date>_<time>/<person>/: they are no longer a person; move the folder back to undo. Not the
+    person in use: switch away first, or ensure_layout() would make their folders again. Returns where it went."""
+    name = person_name(person)
+    if not name or name not in list_people():
+        raise ValueError(f"no person called {person!r}")
+    if BASE_DIR / name == DATA_DIR:
+        raise ValueError(f"{name} is the person in use: switch to another first")
+    target = BASE_DIR / "trash" / f"{datetime.now():{STAMP}}" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(BASE_DIR / name), str(target))
+    return target
+
+
 def clear_gaze_checks(person: str | None) -> tuple[Path, int]:
     """Only the gaze checks of a person ('' = straight under data/, None = everyone): every
     <folder>/gaze-check_*.csv moves into data/trash/<date>_<time>/<person or data>/<folder>/, so they

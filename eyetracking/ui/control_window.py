@@ -1855,7 +1855,8 @@ class SettingsWindow(QWidget):
             self.row(I_PERSON, "Person mode", "On: every file goes under data/<name>/<calibration type>/, one folder "
                      "per person. Off: data/<calibration type>/. Changes apply when you save", self.person_switch),
             self.row(I_PERSON, "Person", "Whose calibrations, checks and blink scores these are. Each person's "
-                     "models train on their own files only. Picking or adding a person saves at once", self.person_btn),
+                     "models train on their own files only. Picking or adding a person saves at once; Delete a person moves "
+                     "their folder to data/trash/", self.person_btn),
         ])
         self.content.addStretch(1)
 
@@ -1993,6 +1994,11 @@ class SettingsWindow(QWidget):
         for name in storage.list_people():
             self.person_menu.addAction(name, lambda n=name: self.pick_person(n))
         self.person_menu.addAction("Add a person…", self.add_person)
+        people = storage.list_people()
+        if people:
+            gone = self.person_menu.addMenu(f"{I_DELETE}  Delete a person")
+            for name in people:
+                gone.addAction(f"{name}…", lambda n=name: self.delete_person(n))
 
     def pick_person(self, name: str):
         """Another person from the menu: person mode on and saved at once, as if Save changes were pressed
@@ -2011,6 +2017,32 @@ class SettingsWindow(QWidget):
             self.set_person(name)
             self.person_switch.setChecked(True)
             self.save()
+
+    def delete_person(self, name: str):
+        """Settings > Person > Delete a person: after a yes, their whole folder goes into data/trash/<date>_<time>/
+        (move it back to undo). The person in use is switched away from first (no person, person mode off,
+        saved), or their folders would be made again at once."""
+        folder = storage.BASE_DIR / name
+        files = sum(1 for p in folder.rglob("*") if p.is_file())
+        if QMessageBox.question(self, "Delete a person", f"Move {name} and all {files} of their files (calibrations, "
+                                "gaze checks, blink tests, recordings) to data/trash/? Move the folder back by hand "
+                                "to undo.") != QMessageBox.Yes:
+            return
+        if storage.BASE_DIR / name == storage.DATA_DIR or self.person == name:
+            self.set_person("")
+            self.person_switch.setChecked(False)
+            self.save()                               # the app moves to data/ (no person) before the folder goes
+        where = storage.delete_person(name)
+        t = self.testing
+        if t.check_person == name:
+            t.set_check(person="")
+        if t.train_person == name:
+            t.set_train_person("")
+        if t.check_table.person == name:
+            t.check_table.show_person(None)
+        t.refresh()
+        t.data_changed.emit()
+        t.say(f"Deleted {name}: {files} files moved to {where.relative_to(storage.BASE_DIR.parent).as_posix()}/.")
 
     def _fill_camera_menu(self):
         self.camera_menu.clear()

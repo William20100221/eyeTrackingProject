@@ -83,4 +83,19 @@ w2.person_switch.setChecked(False)
 w2.save()
 next(a for a in w2.person_menu.actions() if a.text() == "Ann").trigger()   # the menu: Ann, in use and saved at once
 assert storage.DATA_DIR == tmp / "data" / "Ann" and w2.store.value("person") == "Ann" and w2.person_switch.isChecked()
+
+# Delete a person: their whole folder into data/trash/; the person in use is switched away from first
+cw.QMessageBox.question = lambda *a, **k: cw.QMessageBox.Yes
+storage.save_calibration(rec, "original-3x3")                          # Ann (in use) has a calibration
+w2._fill_person_menu()
+gone = next(a for a in w2.person_menu.actions() if a.menu() is not None).menu()
+assert [a.text() for a in gone.actions()] == ["Ann…", "Bo…"]
+w2.delete_person("Bo")                                                 # not in use: just goes
+assert storage.list_people() == ["Ann"] and storage.DATA_DIR == tmp / "data" / "Ann"
+assert any(p.name == "Bo" for p in (tmp / "data" / "trash").glob("*/Bo"))
+w2.delete_person("Ann")                                                # in use: back to data/ first, then gone
+assert storage.list_people() == [] and storage.DATA_DIR == tmp / "data" and not w2.person_switch.isChecked()
+assert w2.store.value("person") == "" and not (tmp / "data" / "Ann").exists()
+moved = list((tmp / "data" / "trash").glob("*/Ann/original-3x3/original-3x3_*.json"))
+assert moved and "Deleted Ann:" in app2.testing.status.text(), app2.testing.status.text()
 print("person mode ok")
