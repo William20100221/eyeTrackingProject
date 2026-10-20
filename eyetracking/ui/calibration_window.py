@@ -36,6 +36,8 @@ from eyetracking.core.methods import DEFAULT_METHOD, METHOD_BY_ID, Method
 from eyetracking.core.models import NO_FRAME, CalibrationRecording
 
 SETTLE_MS = 1000       # dot appears, eyes travel to it: DON'T record yet
+GRID_SETTLE = 0.8      # tester branch: a grid's dots settle 20% quicker (800 ms); the recording after it is unchanged,
+                       # so each dot keeps its ~45 samples (the webcam gives 30 frames a second, it can't go faster)
 COLLECT_MS = 1500      # eyes resting on the dot: record features
 DOT_SAMPLES = 25       # good frames each dot needs; a blink costs frames, so the dot waits longer
 MAX_COLLECT_MS = 4000  # ...but never longer than this (face lost, eyes closed for ages)
@@ -54,6 +56,7 @@ class CalibrationWindow(QWidget):
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.method = method
+        self._settle_ms = SETTLE_MS * GRID_SETTLE if method.kind == "grid" else SETTLE_MS   # Points' line dots: as before
         self._get_features = get_features
         grid = point_grid(method.grid) if method.kind == "grid" else []          # row by row...
         self._session = CalibrationSession(random.sample(grid, len(grid)) if method.random_order else grid) \
@@ -179,7 +182,7 @@ class CalibrationWindow(QWidget):
                 if record and fresh:
                     self._head.add_sample(features)
 
-        elif self._phase == "settle" and elapsed >= SETTLE_MS:
+        elif self._phase == "settle" and elapsed >= self._settle_ms:
             self._phase = "collect"
             self._clock.restart()
             self._still.reset()                       # the head's place for this dot: its first frame
@@ -301,7 +304,7 @@ class CalibrationWindow(QWidget):
         centre = QPointF(x * self.width(), y * self.height())
         if self._phase == "settle":
             # ring shrinks onto the dot: pulls the eye to its exact centre
-            t = min(1.0, self._clock.elapsed() / SETTLE_MS)
+            t = min(1.0, self._clock.elapsed() / self._settle_ms)
             radius, colour = RING_START - (RING_START - RING_END) * t, QColor("white")
         else:
             radius, colour = RING_END, GREEN           # green = recording
