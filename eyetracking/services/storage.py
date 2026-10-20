@@ -181,11 +181,11 @@ def usable_calibrations(method_id: str, root: Path | None = None) -> int:
     return sum(calibration_usable(p) for p in list_calibrations(method_id, root))
 
 
-def model_files(model: Model, root: Path | None = None) -> tuple[list[Path], list[Path]]:
-    """What a model of a person trains on: their usable calibrations of its grid, newest first, and every
-    usable calibration of its special (train() takes the newest that passes the full check)."""
+def model_files(model: Model, root: Path | None = None, newest: int | None = None) -> tuple[list[Path], list[Path]]:
+    """What a model of a person trains on: their newest `newest` usable calibrations of its grid (None: all),
+    and every usable calibration of its special (train() takes the newest that passes the full check)."""
     usable = lambda m: [p for p in list_calibrations(m, root) if calibration_usable(p)]
-    return usable(model.grid.id), usable(model.special.id) if model.special else []
+    return usable(model.grid.id)[:newest], usable(model.special.id) if model.special else []
 
 
 def model_ready(model: Model, root: Path | None = None) -> str | None:
@@ -214,3 +214,16 @@ def save_gaze_check(samples: list[Check], method_id: str, folder: Path | None = 
         w.writerow(["index", "x", "y", "target_x", "target_y"])
         w.writerows((i, f"{x:.4f}", f"{y:.4f}", f"{tx:.4f}", f"{ty:.4f}") for i, x, y, tx, ty in samples)
     return path
+
+
+def checks_done(root: Path | None = None) -> set[int]:
+    """The gaze checks the person has done, by how many calibrations of each grid trained their models
+    (1: one set, 2: both), read from the file names."""
+    return {int(m.group(1)) for p in (root or DATA_DIR).glob("*/gaze-check_*_multi_*-calibrations_*.csv")
+            if (m := re.search(r"_multi_(\d+)-calibrations_", p.name))}
+
+
+def result_files(root: Path | None = None) -> list[Path]:
+    """Everything the person has saved: each calibration and gaze check."""
+    root = root or DATA_DIR
+    return sorted([*root.glob("*/*.json"), *root.glob("*/gaze-check_*.csv")])

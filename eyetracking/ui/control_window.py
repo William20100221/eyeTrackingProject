@@ -2,9 +2,10 @@
 
 A sidebar of three pages, the status line under it:
     Instructions   the tester's name, the camera, what to do
-    Calibration    the 8 recordings as chips (Line model is saved with every Points), the chosen one's
-                   steps, what is still to do, Start
-    Gaze check     Start: every model at once, on 36 rings
+    Calibration    the 8 recordings as chips (Line model is saved with every Points), each done twice
+                   (SETS): the chosen one's steps, what this set still needs, Start; "n/16" in the sidebar
+    Gaze check     locked until both sets are done; then twice, every model at once on 36 rings: trained
+                   on one set, then on both; "n/2" in the sidebar
 The calibration and gaze-check pages fill the screen with no title bar or buttons, then the window comes
 back as it was. pick_camera() is the small camera popup used at first start.
 
@@ -23,7 +24,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, QRectF, QSettings, Qt, QVariant
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
+                               QLineEdit, QMenu, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
 import eyetracking.services.storage as storage
@@ -33,6 +34,7 @@ from eyetracking.core.methods import METHOD_BY_ID, METHODS
 TITLE = "Eye tracking test"
 SEED = "#E5483B"            # the logo's red: every colour is made from it
 TESTER_METHODS = tuple(m for m in METHODS if m.id != "line-model")   # Line model is saved with every Points
+SETS = 2                    # each type calibrated twice; gaze check n: the models trained on the newest n sets
 
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
 ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 11 / Windows 10
@@ -41,6 +43,7 @@ ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 
 I_MIN, I_MAX, I_RESTORE, I_CLOSE = "", "", "", ""
 I_CHECK, I_CHEVRON = "", ""
 I_INFO, I_EYE, I_CHART = "", "", ""   # Info, View (eye), AreaChart
+NAV = [(I_INFO, "Instructions"), (I_EYE, "Calibration"), (I_CHART, "Gaze check")]   # the sidebar = the pages
 
 
 # ---------------------------------------------------------------- colour
@@ -88,6 +91,7 @@ QPushButton { border: none; border-radius: 12px; min-height: 36px; max-height: 3
 QPushButton[kind="filled"] { background: $primary; color: $onPrimary; }
 QPushButton[kind="filled"]:hover { background: $primaryHover; }
 QPushButton[kind="filled"]:pressed { background: $primaryPress; }
+QPushButton[kind="filled"]:disabled { background: $surfaceContainerHighest; color: $onSurfaceVariant; }
 
 /* chips */
 QPushButton[kind="chip"], QPushButton[kind="assist"] { min-height: 30px; max-height: 30px; border-radius: 8px;
@@ -375,7 +379,7 @@ class TestingPage(QWidget):
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
         self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
-        for i, (glyph, text) in enumerate([(I_INFO, "Instructions"), (I_EYE, "Calibration"), (I_CHART, "Gaze check")]):
+        for i, (glyph, text) in enumerate(NAV):
             b = button(f"{glyph}   {text}", "nav")
             b.setCheckable(True)
             self.side_nav.addButton(b, i)                # its id = the page index on the right
@@ -418,17 +422,18 @@ class TestingPage(QWidget):
         v.addWidget(w)
         return w
 
-    def _go(self, v: QVBoxLayout, text: str, slot):
+    def _go(self, v: QVBoxLayout, text: str, slot) -> QPushButton:
         go = button(text, "filled")
         go.clicked.connect(slot)
         v.addSpacing(8)
         v.addWidget(go, 0, Qt.AlignLeft)
         v.addStretch(1)
+        return go
 
     # ----- instructions: the name, the camera, what to do
 
     def _instructions_page(self) -> QWidget:
-        page, v = self._page(I_INFO, "Instructions")
+        page, v = self._page(*NAV[0])
         form = QGridLayout()
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(8)
@@ -446,11 +451,12 @@ class TestingPage(QWidget):
         v.addLayout(form)
         v.addSpacing(8)
         for i, step in enumerate(["Type your name and pick the camera that faces you.",
-                                  f"Calibration: do all {len(TESTER_METHODS)}, one after another.",
-                                  "Gaze check: once, after the calibrations."]):
+                                  f"Calibration: all {len(TESTER_METHODS)} types, twice ({SETS * len(TESTER_METHODS)} "
+                                  "in all). The next one is picked for you.",
+                                  "Gaze check: twice, after the calibrations."]):
             self._text(v, f"{i + 1}.  {step}")
-        self._text(v, f"Sit as you normally would, with your face in good light. Each result is emailed to {TO} "
-                      "when it is saved.", "sheetText")
+        self._text(v, "Sit as you normally would, with your face in good light. When both gaze checks are done, "
+                      f"your results are emailed to {TO}.", "sheetText")
         v.addStretch(1)
         return page
 
@@ -468,7 +474,7 @@ class TestingPage(QWidget):
     # ----- calibration: one of the 8, what is left
 
     def _calibrate_page(self) -> QWidget:
-        page, v = self._page(I_EYE, "Calibration")
+        page, v = self._page(*NAV[1])
         self.method_chips = QButtonGroup(self)
         v.addWidget(method_picker(self.method_chips, TESTER_METHODS))
         self.method_chips.idClicked.connect(lambda i: self.set_method(METHODS[i].id))
@@ -483,33 +489,51 @@ class TestingPage(QWidget):
         self.method_chips.button(METHODS.index(m)).setChecked(True)
         self.method_steps.setText("\n".join(f"{i + 1}.  {s}" if len(m.steps) > 1 else s for i, s in enumerate(m.steps)))
 
+    def calibrations(self) -> dict:
+        """Each of the 8 types -> how many usable calibrations of it the person in use has."""
+        return {m: storage.usable_calibrations(m.id) for m in TESTER_METHODS}
+
+    @staticmethod
+    def _todo(done: dict) -> list:
+        low = min(done.values())
+        return [m for m, n in done.items() if n == low] if low < SETS else []
+
     def todo(self) -> list:
-        """The calibrations the person in use hasn't done yet."""
-        return [m for m in TESTER_METHODS if not storage.usable_calibrations(m.id)]
+        """The types still to do in the set the person is on ([] once every set is done)."""
+        return self._todo(self.calibrations())
+
+    def checks(self) -> int:
+        """How many of the gaze checks the person has done."""
+        return len(storage.checks_done() & set(range(1, SETS + 1)))
 
     def refresh(self):
-        """At start, on a new name and after each calibration: what is left, and the next one picked."""
-        todo = self.todo()
-        self.todo_label.setText(f"Still to do: {', '.join(m.name for m in todo)}." if todo else
-                                "All done. Next: the gaze check.")
-        if todo and METHOD_BY_ID[self.method_id] not in todo:
-            self.set_method(todo[0].id)
+        """At start, on a new name, after each calibration and check: the progress, the next one picked."""
+        done = self.calibrations()
+        todo, checks = self._todo(done), self.checks()
+        calibrated, total = sum(min(n, SETS) for n in done.values()), SETS * len(TESTER_METHODS)
+        self.todo_label.setText(f"Set {min(done.values()) + 1} of {SETS}. Still to do: {', '.join(m.name for m in todo)}."
+                                if todo else "Both sets done. Next: the gaze check.")
+        if todo:
+            self.set_method(todo[0].id)               # in order: set 2 starts again at Original 3x3
+        for i, n in ((1, f"{calibrated}/{total}"), (2, f"{checks}/{SETS}")):
+            self.side_nav.button(i).setText(f"{NAV[i][0]}   {NAV[i][1]}   {n}")
+        self.check_go.setEnabled(not todo and checks < SETS)
+        self.check_note.setText(
+            f"Finish the calibrations first ({calibrated}/{total})." if todo else
+            "Both done. Thank you!" if checks == SETS else
+            f"Gaze check {checks + 1} of {SETS}: the models trained on "
+            f"{'one set' if checks == 0 else 'both sets'} of your calibrations.")
 
-    # ----- the gaze check
+    # ----- the gaze check, twice
 
     def _check_page(self) -> QWidget:
-        page, v = self._page(I_CHART, "Gaze check")
-        self._text(v, f"Look at the white ring and press Enter. It ends after {storage.MULTI_GRID ** 2} rings. "
-                      "Space pauses, Esc stops.")
-        self._go(v, "Start the gaze check", self._start_check)
+        page, v = self._page(*NAV[2])
+        self._text(v, "Do it twice: first with the models trained on one set of your calibrations, then on both. "
+                      f"Look at the white ring and press Enter; it ends after {storage.MULTI_GRID ** 2} rings. "
+                      "Space pauses, Esc stops without saving.")
+        self.check_note = self._text(v, "")
+        self.check_go = self._go(v, "Start the gaze check", lambda: self.command.emit("check"))
         return page
-
-    def _start_check(self):
-        todo = self.todo()
-        if todo and QMessageBox.question(self, "Gaze check", f"Not calibrated yet: {', '.join(m.name for m in todo)}. "
-                                         "Start the gaze check anyway?") != QMessageBox.Yes:
-            return
-        self.command.emit("check")
 
 
 # ---------------------------------------------------------------- window

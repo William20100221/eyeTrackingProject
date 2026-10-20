@@ -4,8 +4,8 @@ Self-check for the gaze window (no webcam):  python -m eyetracking.testing.test_
 Enter records a sample (where the dot is right now) against the lit ring, then lights the
 next one; each sample gets an index written BEFORE its coordinates, on screen and in the
 csv saved on Esc. Space pauses. Nothing is recorded by itself. With several models, every
-one records its own point at the same press (6x6 rings, no dot), and the window saves and
-closes by itself after the last ring.
+one records its own point at the same press (6x6 rings, no dot); the window saves and closes
+by itself after the last ring, and Esc before that saves nothing.
 """
 import csv
 import os
@@ -73,12 +73,12 @@ with tempfile.TemporaryDirectory() as folder:
     assert multi.sample_lines() == [] and multi.status_text().startswith("Ring 4 of 36     Enter: record")
     got = []
     multi.logged.connect(got.extend)
-    key(multi, Qt.Key.Key_Escape)
-    assert [p.parent.name for p in got] == ["a", "b"] and got[0].name.startswith("gaze-check_a_multi_2-calibrations_")
-    assert got[1].name.startswith("gaze-check_b_multi_20"), got[1].name
+    key(multi, Qt.Key.Key_Escape)                         # a round not finished: nothing saved
+    assert got == [] and not any(folder.iterdir())
 
     # one round of the 36 rings: it saves and closes by itself, no Esc
-    whole = GazeWindow(lambda: {"a": (0.5, 0.5)}, {"a": folder / "a"}, grid=6, show_dot=False, tag="multi")
+    whole = GazeWindow(lambda: {"a": (0.5, 0.5), "b": (0.4, 0.4)}, {"a": folder / "a", "b": folder / "b"},
+                       {"a": 2, "b": None}, grid=6, show_dot=False, tag="multi")
     done = []
     whole.logged.connect(done.extend)
     whole._tick()
@@ -86,5 +86,7 @@ with tempfile.TemporaryDirectory() as folder:
         key(whole, Qt.Key.Key_Return)
     assert not done and whole.status_text().startswith("Ring 36 of 36")
     key(whole, Qt.Key.Key_Return)
-    assert len(done) == 1 and len(whole.logs["a"]) == 36 and not whole._timer.isActive()
+    assert len(whole.logs["a"]) == 36 and not whole._timer.isActive()
+    assert [p.parent.name for p in done] == ["a", "b"] and done[0].name.startswith("gaze-check_a_multi_2-calibrations_")
+    assert done[1].name.startswith("gaze-check_b_multi_20"), done[1].name
 print("gaze samples ok")

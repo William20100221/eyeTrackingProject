@@ -1,17 +1,19 @@
 """
-The tester version of the calibration lab: a tester types their name, does each calibration once, then
-one gaze check of every model at once. Each result is emailed as soon as it is saved
-(services/mailer.py); which model is the most accurate is worked out afterwards, in the lab.
+The tester version of the calibration lab: a tester types their name, does each calibration type twice
+(two sets), then two gaze checks of every model at once: the models trained on one set, then on both.
+Once both checks are done, everything is emailed (services/mailer.py); which model is the most accurate
+is worked out afterwards, in the lab.
 
     python main.py                 (a popup asks for the camera on first start)
     python main.py --mouse         (no camera: the mouse plays the eyes; nothing is emailed)
 
 What talks to what:
     camera -> tracker (services/tracker.py) -> 12 features per frame (core/features.py)
-      -> CalibrationWindow(type) -> recording -> quality check -> data/<name>/<type>/ -> emailed
-      -> GazeWindow: every model the tester's calibrations make (core/methods.py), trained now, all
-         predicting from the same camera frames on 36 rings (6x6); Enter records where each says you
-         look against the lit ring -> one csv per model -> emailed
+      -> CalibrationWindow(type) -> recording -> quality check -> data/<name>/<type>/
+      -> GazeWindow: every model the tester's calibrations make (core/methods.py), trained now on the
+         newest 1 (then 2) sets, all predicting from the same camera frames on 36 rings (6x6); Enter
+         records where each says you look against the lit ring -> one csv per model
+      -> after the second check: every file of the tester, zipped and emailed
 The camera is on only while one of those full-screen windows runs, read on a thread of its own
 (FrameFeed). Slow work (the camera opening, training, checking and saving a calibration) runs on a
 worker thread while a thin bar runs under the title bar (App._busy); each email has a thread of its own.
@@ -36,7 +38,7 @@ from eyetracking.services.camera import camera_names
 from eyetracking.services.storage import load_calibrations, save_calibration, use_person
 from eyetracking.services.tracker import EyeTracker, FrameFeed
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import TEXT_FONTS, MainWindow, app_icon, busy, pick_camera, run_busy
+from eyetracking.ui.control_window import SETS, TEXT_FONTS, MainWindow, app_icon, busy, pick_camera, run_busy
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse, screen_geometry
 
 
@@ -211,10 +213,10 @@ class App(QObject):
             return False
 
     # ---- the models: trained when the check needs them, kept while their files stay the same -------
-    def _model(self, model: Model, root: Path) -> tuple[TrainedModel | None, int]:
-        """A person's model, trained on all their calibrations of its grid and its special's, or the one
-        already trained on exactly those files. (model, samples used)."""
-        grids, specials = storage.model_files(model, root)
+    def _model(self, model: Model, root: Path, newest: int) -> tuple[TrainedModel | None, int]:
+        """A person's model, trained on their newest `newest` calibrations of its grid and its special's,
+        or the one already trained on exactly those files. (model, samples used)."""
+        grids, specials = storage.model_files(model, root, newest)
         key = (model.id, str(root), tuple((p.name, p.stat().st_mtime_ns) for p in grids + specials))
         if key not in self.models:
             screen = screen_geometry()            # Qt: here, on the GUI thread; the training itself on a worker
@@ -222,10 +224,10 @@ class App(QObject):
                 model, load_calibrations(grids), load_calibrations(specials), screen))
         return self.models[key]
 
-    # ---- emailing: every saved file, on a thread of its own ----------------------
+    # ---- emailing: once both checks are done, on a thread of its own ----------------------
     def _mail(self, paths: list[Path] = ()) -> None:
-        """These saved files into the outbox, and everything waiting there emailed, on a thread of its own:
-        an email takes seconds, longer on a slow network. Not in mouse mode (nothing real to send)."""
+        """These files into the outbox, and everything waiting there emailed, on a thread of its own: an
+        email takes seconds, longer on a slow network. Not in mouse mode (nothing real to send)."""
         if self.mouse:
             return
         mailer.queue(paths)
@@ -283,22 +285,28 @@ class App(QObject):
         said = self._busy("Checking and saving the calibration…", check_and_save)
         self.testing.refresh()
         self.testing.say(said)                    # last: "saved" or why it was not stays in view
-        if made:
-            self._mail(made)
 
     def check(self) -> None:
-        """Every model the tester's calibrations make, trained now, all predicting from the same camera
-        frames, on 36 rings (6x6), no dot: one csv per model, in data/<name>/<model>/."""
+        """Gaze check n of SETS (the first not done): every model the tester's calibrations make, trained
+        now on their newest n sets, all predicting from the same camera frames, on 36 rings (6x6), no
+        dot: one csv per model, in data/<name>/<model>/, named "_<n>-calibrations"."""
         if not self._named():
             return
-        root = storage.DATA_DIR
+        if self.testing.todo():
+            self.testing.say("Finish the calibrations first.")
+            return
+        left = [n for n in range(1, SETS + 1) if n not in storage.checks_done()]
+        if not left:
+            self.testing.say("Both gaze checks are done.")
+            return
+        root, newest = storage.DATA_DIR, left[0]
         models, counts = {}, {}
         for spec in MODELS:
             if storage.model_ready(spec, root):  # its calibrations aren't there
                 continue
-            model = None if self.mouse else self._model(spec, root)[0]   # mouse mode: the mouse plays each one
+            model = None if self.mouse else self._model(spec, root, newest)[0]   # mouse mode: the mouse plays each one
             if model is not None or self.mouse:
-                models[spec.id], counts[spec.id] = model, len(storage.model_files(spec, root)[0])
+                models[spec.id], counts[spec.id] = model, len(storage.model_files(spec, root, newest)[0])
         if not models:
             self.testing.say("No calibration yet: calibrate first.")
             return
@@ -319,15 +327,20 @@ class App(QObject):
         self._open_fullscreen(window)
 
     def _checked(self, paths: list[Path]) -> None:
-        self.testing.say("Gaze check saved.")
-        self._mail(paths)
+        self.testing.refresh()
+        done = self.testing.checks()
+        if done < SETS:
+            self.testing.say(f"Gaze check {done}/{SETS} saved. One more to do.")
+            return
+        self.testing.say("Both gaze checks done. Sending your results…")
+        self._mail(storage.result_files())        # everything of this tester, in one email
 
     def close(self) -> None:
         self._stop_feed()
         if self.tracker is not None:
             self.tracker.close()
         for sender in self.senders:               # an email on its way: let it finish (it gives up after a minute)
-            sender.join(mailer.TIMEOUT_S)
+            sender.join(2 * mailer.TIMEOUT_S)   # two ports tried
 
 
 def main() -> int:

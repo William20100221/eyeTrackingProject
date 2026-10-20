@@ -1,24 +1,27 @@
 ## Eye Tracking Test (tester version of the calibration lab)
 
-The calibration lab cut down for testers: instructions, the calibrations and one gaze check. Each
-result is emailed to zh25764@my.westlake.school.nz as soon as it is saved. Which model is the most
-accurate is worked out afterwards, in the lab (`calibration-lab` branch): unzip each email into its
-`data/` folder.
+The calibration lab cut down for testers: instructions, two sets of calibrations and two gaze checks.
+When both checks are done, all of the tester's files are emailed to zh25764@my.westlake.school.nz.
+Which model is the most accurate is worked out afterwards, in the lab (`calibration-lab` branch):
+unzip each email into its `data/` folder.
 
 ## Install Requirements
 
 Mediapipe, OpenCV, scikit-learn, PySide6 (Qt) and materialyoucolor (`uv sync`).
 
-Emailing needs `mail.ini` beside `main.py` (not in git: it holds a password). Use an account made
-only for sending, for example a Gmail account with an app password:
+Emailing needs `mail.ini` beside `main.py`. It is not in git (the repo is public and it holds a
+password), so copy it onto each tester's computer along with the app. Use an account made only for
+sending, for example a Gmail account with an app password:
 
 ```
 [smtp]
 host = smtp.gmail.com
-port = 465
 user = <the sending address>
 password = <its app password>
 ```
+
+On each tester's computer, check it before they start: `python -m eyetracking.services.mailer` sends
+a test email and says what failed. It tries port 465, then 587 (a network may block one).
 
 ## Run
 
@@ -30,19 +33,22 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is ema
 ## What the tester does
 
 1. Instructions: type their name, pick the camera.
-2. Calibration: the 8 recordings, one after another (Original and Random 3×3 / 4×4 / 5×5, Sweep,
-   Points; each Points is also saved as Line model). The next one to do is picked after each.
-3. Gaze check: every model their calibrations make (up to 24), all at once from the same camera
-   frames, on 36 rings. It ends by itself after the last ring.
+2. Calibration: the 8 recordings (Original and Random 3×3 / 4×4 / 5×5, Sweep, Points; each Points is
+   also saved as Line model), twice: 16 in all, the next one picked after each.
+3. Gaze check, locked until the 16 are done, then twice: every model (24) at once from the same camera
+   frames, on 36 rings, trained on the newest set (files `_1-calibrations`), then on both sets
+   (`_2-calibrations`). It saves and ends by itself after the last ring; Esc before that saves nothing.
 
-Files go into `data/<name>/<type>/`, the lab's layout. A file not sent yet (no internet) waits in
-`data/outbox.txt` and goes with the next email, or at the next start.
+The sidebar shows the progress (`Calibration 5/16`, `Gaze check 1/2`). Files go into
+`data/<name>/<type>/`, the lab's layout. After the second check everything is emailed in one zip. If
+that fails (no internet, no `mail.ini`), the zip is put on the Desktop with a note to email it by
+hand, and the email is tried again at the next start (`data/outbox.txt`).
 
 ## Self-checks (no webcam, no network)
 
 ```
-python -m eyetracking.testing.test_camera_use     # the tester app: name, calibrations, check, emails
-python -m eyetracking.testing.test_mailer         # the outbox and the zip
+python -m eyetracking.testing.test_camera_use     # the tester app: name, 2 sets, 2 checks, one email
+python -m eyetracking.testing.test_mailer         # the outbox, the zip, port 587, the Desktop copy
 python -m eyetracking.testing.test_gaze_log
 python -m eyetracking.testing.test_frame_feed
 python -m eyetracking.testing.test_blinks

@@ -6,8 +6,8 @@ The gaze check, full screen: test rings, one lit at a time, and what the models 
 
 Two ways to run it:
   multiple   (the app) every model of a person at once, from the same camera frames: no dot (it
-             would show one model only); 6x6 rings (MULTI_GRID); one file per model; it ends by
-             itself after one round of the rings
+             would show one model only); 6x6 rings (MULTI_GRID); one file per model; it saves and
+             ends by itself after one round of the rings (Esc before that saves nothing)
   single     (the runner below) one model: its dot is drawn where it thinks you look; 4x4 rings
 One ring is lit: look at it and press Enter, which records where each model says you look and
 lights the next ring. A sample's error is its distance to the lit ring. Esc saves: one csv per
@@ -116,9 +116,9 @@ class GazeWindow(QWidget):
             super().keyPressEvent(event)
 
     def finish(self) -> None:
-        """Save (nothing without a sample) and close."""
+        """Save (nothing without a sample, nor a round of the rings left unfinished without a dot) and close."""
         self._timer.stop()
-        if any(self.logs.values()):
+        if any(self.logs.values()) and (self.show_dot or self.presses == len(self._targets)):
             self.logged.emit(self.save_log())
         self.close()
 
