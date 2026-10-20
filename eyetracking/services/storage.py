@@ -166,6 +166,23 @@ def clear_data(person: str | None) -> Path:
     return stamp
 
 
+def clear_gaze_checks(person: str | None) -> tuple[Path, int]:
+    """Only the gaze checks of a person ('' = straight under data/, None = everyone): every
+    <folder>/gaze-check_*.csv moves into data/trash/<date>_<time>/<person or data>/<folder>/, so they
+    can be moved back. Calibrations, blink tests and recordings stay. (trash folder, how many moved)."""
+    stamp, moved = BASE_DIR / "trash" / f"{datetime.now():{STAMP}}", 0
+    for name, root in person_roots():
+        if person is not None and name != person_name(person):
+            continue
+        for kind in FOLDERS:
+            for path in sorted((root / kind).glob("gaze-check_*.csv")):
+                target = stamp / (name or "data") / kind
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(path), str(target / path.name))
+                moved += 1
+    return stamp, moved
+
+
 # ---- calibrations ---------------------------------------------------------------
 def method_dir(method_id: str, root: Path | None = None) -> Path:
     """A method's folder: its calibrations and its gaze checks (of the person in use, or under `root`)."""

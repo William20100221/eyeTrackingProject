@@ -212,6 +212,16 @@ assert "Ann" not in storage.list_people() and mine.exists()                     
 where = storage.clear_data(None)
 assert not mine.exists() and (where / "data" / "original-3x3" / mine.name).exists()
 assert (tmp / "original-3x3").is_dir() and storage.list_calibrations("original-3x3") == []   # the empty folders are back
+# clear only the gaze checks: one person's, then everyone's; the calibrations stay
+cal = storage.save_calibration(one, "original-3x3", tmp / "Ann" / "original-3x3" / "original-3x3_2026-10-20_090000.json")
+ann_check = storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "sweep-original-3x3", tmp / "Ann" / "sweep-original-3x3")
+my_check = storage.save_gaze_check([(0, 0.5, 0.5, 0.5, 0.5)], "original-3x3")
+where, n = storage.clear_gaze_checks("Ann")
+assert n == 1 and (where / "Ann" / "sweep-original-3x3" / ann_check.name).exists() and my_check.exists() and cal.exists()
+where, n = storage.clear_gaze_checks(None)
+assert n == 1 and (where / "data" / "original-3x3" / my_check.name).exists() and cal.exists()
+assert storage.clear_gaze_checks(None)[1] == 0                                   # nothing left to clear
+storage.clear_data("Ann")
 
 # ---- 6. several files at once: move to a person, remove, restore ---------------------------
 from PySide6.QtWidgets import QMessageBox

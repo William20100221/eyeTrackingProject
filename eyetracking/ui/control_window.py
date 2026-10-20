@@ -865,7 +865,7 @@ class DataPage(QWidget):
         h = QHBoxLayout(self)
         h.setContentsMargins(24, 20, 24, 24)
         h.setSpacing(24)
-        left = QVBoxLayout()
+        self.left = left = QVBoxLayout()                 # the title, the words, the files (a page may add a button)
         left.setSpacing(8)
         left.addWidget(label(title, "sheetTitle"))
         text = label(hint, "sheetText")
@@ -1058,6 +1058,11 @@ class TestingPage(QWidget):
             "far the model was from it. Right-click a file (Ctrl- or Shift-click for several) to move it to another "
             "person or remove it. \"(old)\": a type from before 20 Oct.",
             lambda: person_type_rows(storage.list_gaze_checks), gaze_check_lines, "No gaze check yet", tree=True)
+        self.clear_checks_btn = button(f"{I_DELETE}  Clear gaze checks…", "outlined")   # only the checks: one person, or all
+        self.clear_checks_menu = QMenu(self.clear_checks_btn)
+        self.clear_checks_menu.aboutToShow.connect(self._fill_clear_checks_menu)
+        self.clear_checks_btn.setMenu(self.clear_checks_menu)
+        self.gaze_checks.left.insertWidget(2, self.clear_checks_btn, 0, Qt.AlignLeft)   # under the page's words
         self.blink_scores = DataPage(
             "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
             "file to remove it.", list_blink_scores, blink_score_lines, "No blink test yet")
@@ -1435,6 +1440,25 @@ class TestingPage(QWidget):
         for name, _ in storage.person_roots():
             self.clear_menu.addAction(f"Clear {name or 'No person (data/)'}", lambda n=name: self.clear_data(n))
         self.clear_menu.addAction("Clear everyone", lambda: self.clear_data(None))
+
+    def _fill_clear_checks_menu(self):
+        self.clear_checks_menu.clear()
+        for name, _ in storage.person_roots():
+            self.clear_checks_menu.addAction(f"Clear {name or 'No person (data/)'}'s gaze checks",
+                                             lambda n=name: self.clear_gaze_checks(n))
+        self.clear_checks_menu.addAction("Clear everyone's gaze checks", lambda: self.clear_gaze_checks(None))
+
+    def clear_gaze_checks(self, person: str | None):
+        """Only the gaze checks of one person (or of everyone) move into data/trash/<date>_<time>/ (move them
+        back to undo); calibrations, blink tests and recordings stay."""
+        who = "everyone" if person is None else (person or "No person (data/)")
+        if QMessageBox.question(self, "Clear gaze checks", f"Move all of {who}'s gaze checks to data/trash/? Their "
+                                "calibrations stay. Move them back by hand to undo.") != QMessageBox.Yes:
+            return
+        where, n = storage.clear_gaze_checks(person)
+        self.refresh()
+        self.say(f"Cleared {n} gaze check{'s' if n != 1 else ''} of {who} into "
+                 f"{where.relative_to(storage.BASE_DIR.parent).as_posix()}/." if n else f"{who}: no gaze check to clear.")
 
     def clear_data(self, person: str | None):
         """Every calibration, gaze check, blink test and recording of one person (or of everyone)
