@@ -90,7 +90,6 @@ class App(QObject):
         self.control = SettingsWindow()
         self.testing = self.control.testing
         self.control.saved.connect(self.apply_settings)
-        self.control.calibrate_requested.connect(lambda: self._command(self.calibrate))
         self.testing.command.connect(lambda c: self._command({"calibrate": self.calibrate, "check": self.check,
                                                                "check-all": self.check_all, "sample": self.sample_text,
                                                                "blink": self.blink_test}[c]))

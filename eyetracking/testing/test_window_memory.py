@@ -35,7 +35,7 @@ w.hide()
 w.show_last()
 assert w.isVisible() and w.pages.currentWidget() is w.testing and w.testing.main.currentIndex() == 5
 
-w.nav.button(2).click()                                      # the Settings tab
+w.nav.button(1).click()                                      # the Settings tab
 w.hide()
 w.show_last()
 assert w.pages.currentWidget() is w.settings_page             # ...where it was left

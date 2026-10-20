@@ -67,8 +67,6 @@ DEFAULTS = {
 }
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#E5483B", "#D32F2F", "#D81B60", "#7E57C2"]
 
-PAGE_OF_TAB = {0: 0, 2: 1}                # title-bar tab -> page in the stack (tab 1, Calibration, is full screen)
-TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
 
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
 ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 11 / Windows 10
@@ -293,7 +291,9 @@ class SpinButton(QPushButton):
     """A button whose glyph turns once when clicked (Refresh, Reset to defaults): the click is seen to
     land, like the turning arrows in Windows' and Android's refresh buttons. The glyph is drawn as an
     icon so it can turn; set_color() follows the theme. It turns anticlockwise, the way its arrow
-    (Segoe's Reset, U+E777) points: turning clockwise, it ran against its own arrowhead (20 Oct)."""
+    (Segoe's Reset, U+E777) points: turning clockwise, it ran against its own arrowhead (20 Oct).
+    The turn starts once the click's work is done: Refresh blocks ~200 ms, and a turn started before
+    it was first painted ~270 degrees round, which looked like a quarter turn clockwise (20 Oct)."""
 
     def __init__(self, glyph: str, text: str, kind: str):
         super().__init__(text)
@@ -304,7 +304,7 @@ class SpinButton(QPushButton):
         self._turn = QVariantAnimation(self, startValue=0.0, endValue=-360.0, duration=550,
                                        easingCurve=QEasingCurve.OutCubic)
         self._turn.valueChanged.connect(self._draw)
-        self.clicked.connect(self._turn.start)
+        self.clicked.connect(lambda: QTimer.singleShot(0, self._turn.start))
 
     def set_color(self, color: str):
         self.color = color
@@ -1670,7 +1670,6 @@ class TestingPage(QWidget):
 
 class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
-    calibrate_requested = Signal()    # Calibration tab clicked
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
@@ -1736,7 +1735,8 @@ class SettingsWindow(QWidget):
         h.addStretch(1)
 
         self.nav = QButtonGroup(self)   # exclusive, so clicking the selected tab can't un-select it
-        for i, (glyph, name) in enumerate([(I_TESTING, "Testing"), (I_EYE, "Calibration"), (I_SETTINGS, "Settings")]):
+        # tab i = page i; the Calibration tab went (20 Oct): Testing > Calibration starts one
+        for i, (glyph, name) in enumerate([(I_TESTING, "Testing"), (I_SETTINGS, "Settings")]):
             b = QPushButton(glyph, objectName="settingsBtn")
             b.setCheckable(True)
             b.setToolTip(name)
@@ -1747,9 +1747,7 @@ class SettingsWindow(QWidget):
             h.addWidget(b)
             h.addSpacing(4)
         self.nav.button(0).setChecked(True)
-        # Calibration (tab 1) runs full screen; the other tabs are pages in the stack
-        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 1
-                                   else cross_fade(self.pages, PAGE_OF_TAB[i]))
+        self.nav.idClicked.connect(lambda i: cross_fade(self.pages, i))
         h.addSpacing(4)
 
         caps = QWidget(objectName="caps")
@@ -2032,7 +2030,7 @@ class SettingsWindow(QWidget):
     def show_page(self, page: QWidget):
         """Bring the window up on `page` (self.testing or self.settings_page)."""
         self.pages.setCurrentWidget(page)
-        self.nav.button(TAB_OF_PAGE[self.pages.currentIndex()]).setChecked(True)
+        self.nav.button(self.pages.currentIndex()).setChecked(True)
         if not self.isVisible() or self.isMinimized():
             self.showNormal()
         self.raise_()
