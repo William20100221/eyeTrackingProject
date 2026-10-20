@@ -182,7 +182,7 @@ HEAD_MOVES = (           # (what the user is told, feature index, target either 
     ("Turn your head slowly left and right", 4, 15.0, 35.0),    # yaw, degrees
     ("Nod slowly up and down", 5, 10.0, 30.0),                   # pitch
     ("Tilt your head toward each shoulder", 6, 10.0, 30.0),      # roll
-    ("Lean closer to the screen, then back", 9, 4.0, 15.0),      # z, cm
+    ("Lean closer to the screen, then back", 9, 7.0, 20.0),      # z, cm (was 4: too small a lean)
 )
 HEAD_MOVE_MIN_MS = 2500  # a move lasts at least this long...
 HEAD_MOVE_MAX_MS = 8000  # ...and ends here at the latest, targets reached or not
