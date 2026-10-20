@@ -47,6 +47,7 @@ from eyetracking.services.storage import (blink_score_lines, calibration_lines, 
 DEFAULTS = {
     "seed": "#E5483B",          # the logo's red
     "theme": "system",          # system | light | dark
+    "font": "Segoe UI",         # a name in FONTS
     "show_ball": True,
     "ball_on_top": True,
     "hide_fullscreen": False,
@@ -64,6 +65,24 @@ TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
 
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
 ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 11 / Windows 10
+FONTS = {                   # Settings > Font: the text's families and weight (400 regular, 300 light), all built into Windows
+    "Segoe UI": (TEXT_FONTS[:2], 400),
+    "Segoe UI Semilight": (["Segoe UI"], 350),
+    "Segoe UI Light": (["Segoe UI"], 300),
+    "Calibri Light": (["Calibri"], 300),
+    "Georgia": (["Georgia"], 400),
+}
+I_FONT = "\uE8D2"   # Font
+
+
+def text_font(name: str) -> QFont:
+    """The app's font for a Settings > Font choice (an unknown name: the default); the icon fonts last,
+    so glyphs inside text still draw."""
+    families, weight = FONTS.get(name, FONTS[DEFAULTS["font"]])
+    f = QFont()
+    f.setFamilies(families + ICON_FONTS)
+    f.setWeight(QFont.Weight(weight))
+    return f
 
 # Segoe Fluent Icons code points
 I_SETTINGS, I_SEARCH = "", ""
@@ -1324,9 +1343,15 @@ class SettingsWindow(QWidget):
         self.hex_label.setMinimumWidth(62)
         change = button("Change", "text")
         change.clicked.connect(self.open_sheet)
+        self.font_btn = button("", "assist")
+        self.font_menu = QMenu(self.font_btn)
+        for name in FONTS:                           # each name in its own font
+            self.font_menu.addAction(name, lambda n=name: self.set_font_choice(n)).setFont(text_font(name))
+        self.font_btn.setMenu(self.font_menu)
         self.group("Appearance", [
             self.row(I_THEME, "Theme", "Follow Windows, or always use one", chips),
             self.row(I_PALETTE, "Theme colour", "Every colour in the app is made from this one", self.dot, self.hex_label, change),
+            self.row(I_FONT, "Font", "The text's typeface. Light and Semilight are thinner", self.font_btn),
         ])
 
         self.switches = {k: Switch(t) for k, t in [("show_ball", "Show floating ball"),
@@ -1781,12 +1806,13 @@ class SettingsWindow(QWidget):
         self.words.setValue(values["summary_words"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
+        self.set_font_choice(values["font"])
         self.seed_before_sheet = values["seed"]
         self.set_seed(values["seed"])
 
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
-        values.update(seed=self.seed, theme=self.mode, summary_words=self.words.value(),
+        values.update(seed=self.seed, theme=self.mode, font=self.font_name, summary_words=self.words.value(),
                       camera=self.camera, ball_look=self.ball_look, ball_image=self.ball_image, ball_ring=self.ball_ring)
         for k, v in values.items():
             self.store.setValue(k, v)
@@ -1849,6 +1875,13 @@ class SettingsWindow(QWidget):
     def set_mode(self, mode: str):
         self.mode = mode
         self.apply_theme()
+
+    def set_font_choice(self, name: str):
+        """Settings > Font: every window's text at once, as the theme colour is (kept with Save changes)."""
+        self.font_name = name if name in FONTS else DEFAULTS["font"]
+        self.font_btn.setText(f"{self.font_name}  {I_CHEVRON}")
+        QApplication.setFont(text_font(self.font_name))
+        self.apply_theme()                           # the stylesheet again: styled widgets take the new font
 
     def set_seed(self, hex_: str):
         self.seed = hex_.upper()
