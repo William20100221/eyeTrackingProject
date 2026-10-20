@@ -147,7 +147,7 @@ def sweep_points(n: int = 7, margin: float = 0.05) -> list[tuple[float, float]]:
 # Step 1, the Sweep method: a dot glides edge to edge and the eyes follow it.
 SWEEP_MARGIN = 0.05      # same margin as the dot grid: the sweep covers what the dots cover
 SWEEP_SETTLE_MS = 1000   # dot waits at the start of each axis so the eyes can find it
-SWEEP_CROSS_MS = 2500    # one edge-to-edge crossing
+SWEEP_CROSS_MS = 4000    # one edge-to-edge crossing (was 2.5 s: too fast to follow smoothly)
 SWEEP_CROSSINGS = 4      # 4 crossings = there and back twice, per axis
 
 
