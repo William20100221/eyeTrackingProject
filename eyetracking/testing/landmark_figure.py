@@ -4,7 +4,7 @@ uses, the lines its features are measured along, and the 12 feature values that 
 
     python -m eyetracking.testing.landmark_figure [--image PATH | --camera N] [--person NAME] [--screen-cm WxH]
 
-Grabs one frame (a photo, or camera N: the default camera 0 if neither is given), runs the Face
+Grabs one frame (a photo, or camera N: by default the camera chosen in the lab's Settings), runs the Face
 Landmarker (services/landmarker.py) and core/features.py's gaze_features on it, and writes into
 docs/img/report/ (docs/img/report/<person>/ with --person), each figure with the numbers it plots:
 
@@ -58,32 +58,54 @@ ROLE = {i: role for i, role, _ in USED}
 GREY, LINE, POINT, RULER = "#9E9E9E", "#1E88E5", "#E5483B", "#43A047"
 
 
-def grab(image: str | None = None, camera: int | None = None) -> tuple[np.ndarray, str]:
-    """One frame as RGB, and where it came from (printed and written beside the figures)."""
+FACE_WAIT_S = 5.0           # how long a camera is watched for a face before giving up
+
+
+def chosen_camera() -> int:
+    """The camera the lab's Settings chose (by name, as the app finds it), else 0."""
+    from PySide6.QtCore import QSettings
+    from eyetracking.services.camera import camera_names
+    name = QSettings("StudyAssistant", "CalibrationLab").value("camera", "")   # read only
+    names = camera_names()
+    return names.index(name) if name in names else 0
+
+
+def grab(image: str | None = None, camera: int | None = None) -> tuple[np.ndarray, FrameResult, str]:
+    """(one frame as RGB, its FrameResult, where it came from). A photo: that photo. A camera (the one chosen
+    in Settings unless --camera says): frames are read until one shows a face with open eyes, for up to
+    FACE_WAIT_S, which also lets the webcam's exposure settle. No face: the cameras are listed to pick from.
+    (20 Oct: --camera 0 is the Surface's REAR camera, which saw no face; Settings had the front one.)"""
+    import time
     import cv2 as cv
-    if image:
-        bgr = cv.imread(image)
-        if bgr is None:
-            raise SystemExit(f"Can't read the image {image}")
-        return cv.cvtColor(bgr, cv.COLOR_BGR2RGB), str(Path(image).resolve())
-    from eyetracking.services.camera import Camera
-    cam = Camera(camera or 0)
-    try:
-        # ponytail: a fixed 15 frames (~0.5 s) for the webcam's exposure to settle; wait for steady brightness if a dark frame ever comes out
-        for _ in range(15):
-            rgb = cam.read_rgb()
-    finally:
-        cam.release()
-    if rgb is None:
-        raise SystemExit(f"Camera {camera or 0} gave no frame")
-    return rgb, f"camera {camera or 0}, frame grabbed {datetime.now():%Y-%m-%d %H:%M:%S}"
-
-
-def detect(rgb: np.ndarray) -> FrameResult:
     from eyetracking.services.landmarker import FaceLandmarker
     with FaceLandmarker() as landmarker:
-        return landmarker.detect(rgb, 0)
-
+        if image:
+            bgr = cv.imread(image)
+            if bgr is None:
+                raise SystemExit(f"Can't read the image {image}")
+            rgb = cv.cvtColor(bgr, cv.COLOR_BGR2RGB)
+            return rgb, landmarker.detect(rgb, 0), str(Path(image).resolve())
+        from eyetracking.services.camera import Camera, camera_names
+        names = camera_names()
+        index = chosen_camera() if camera is None else camera
+        label = f"camera {index} ({names[index] if index < len(names) else 'unknown'})"
+        print(f"using {label}: look at the screen")
+        cam = Camera(index)
+        start, rgb = time.perf_counter(), None
+        try:
+            while time.perf_counter() - start < FACE_WAIT_S:
+                frame = cam.read_rgb()
+                if frame is None:
+                    continue
+                rgb = frame
+                result = landmarker.detect(frame, int((time.perf_counter() - start) * 1000))
+                if result.face_found and gaze_features(result) is not None:
+                    return frame, result, f"{label}, frame grabbed {datetime.now():%Y-%m-%d %H:%M:%S}"
+        finally:
+            cam.release()
+    listed = ", ".join(f"--camera {i} = {n}" for i, n in enumerate(names))
+    raise SystemExit(f"No face with open eyes in {FACE_WAIT_S:.0f} s from {label}"
+                     + (" (no frame at all)" if rgb is None else "") + f". Cameras: {listed}.")
 
 def _px(landmarks: np.ndarray, shape) -> np.ndarray:
     """Landmarks (fractions of the image) -> pixels."""
@@ -334,13 +356,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="The landmark figure for the report")
     src = parser.add_mutually_exclusive_group()
     src.add_argument("--image", help="a photo of a face instead of the camera")
-    src.add_argument("--camera", type=int, help="the camera's index (default 0)")
+    src.add_argument("--camera", type=int, help="the camera's index (default: the one chosen in the lab's Settings)")
     parser.add_argument("--person", default="", help="whose face: a sub-folder of docs/img/report/ and the titles")
     parser.add_argument("--screen-cm", help="the screen's size, WxH in cm (default: what Windows reports, via Qt)")
     args = parser.parse_args(argv)
-    rgb, source = grab(args.image, args.camera)
+    rgb, result, source = grab(args.image, args.camera)
     out = OUT_DIR / args.person if args.person else OUT_DIR
-    make_figures(rgb, detect(rgb), out, source, args.person, screen_size(args.screen_cm))
+    make_figures(rgb, result, out, source, args.person, screen_size(args.screen_cm))
     return 0
 
 
