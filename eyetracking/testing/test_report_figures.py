@@ -52,9 +52,9 @@ storage.save_calibration(CalibrationRecording(dots(3)[:30], tuple(head), ()), "s
 blink = [("open", 33 * i, s, s) for i, s in enumerate([0.2] * 40 + [0.85] * 3 + [0.2] * 40)]
 blink += [(state, 33 * i, v, v) for state, v in (("down", 0.3), ("half", 0.55), ("closed", 0.9)) for i in range(30)]
 storage.save_blink_scores(blink, data / "Ann" / "blink-test")
-assert report_figures.main([str(data), "--out", str(out), "--person", "Ann"]) == 0
+assert report_figures.main([str(data), "--out", str(out), "--person", "Ann", "--screen-cm", "27.7x18.9"]) == 0
 names = ["multi_check", "one_vs_two", "across_vs_down", "ring_map", "versions", "feature_correlation",
-         "feature_subsets", "heat_25", "lodo", "k_matrix", "one_euro", "same_vs_next", "blink_timeline", "blink_states"]
+         "feature_subsets", "heat_25", "lodo", "k_matrix", "one_euro", "same_vs_next", "blink_timeline", "blink_states", "accuracy_degrees"]
 for n in names:
     assert (out / f"{n}.png").read_bytes()[:4] == b"\x89PNG", n
     assert (out / f"{n}.csv").exists() and (out / f"{n}.csv").stat().st_size > 0, n
@@ -83,4 +83,9 @@ regions = [r[4] for r in csv.reader((out / "blink_timeline.csv").open(encoding="
 assert "closed" in regions and "recovery" in regions and regions.index("recovery") > regions.index("closed"), regions
 states = (out / "blink_states.csv").read_text(encoding="utf-8")
 assert "eyes open,left,83," in states and "today's cut-off (BLINK_THRESHOLD)" in states, states
+acc = list(csv.reader((out / "accuracy_degrees.csv").open(encoding="utf-8")))
+best = next(r for r in acc if r[0] == "best of a person")
+assert best[2] == "Ann" and 50 < float(best[3]) < 80 and 0 < float(best[5]) < 5, best      # her distance, from her calibrations
+assert sum(r[0] == "published" for r in acc) == len(report_figures.PUBLISHED)
+assert abs(report_figures.visual_angle(0.5, 0.5, 0.5 + 1.0 / 27.7, 0.5, (27.7, 18.9), 57.3) - 1.0) < 0.01   # 1 cm at 57.3 cm: 1 degree
 print("report figures ok:", ", ".join(f"{n}.png/.csv" for n in names))

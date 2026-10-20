@@ -48,6 +48,10 @@ the numbers it plots, the files it came from printed, and every number printed a
                      fed the recorded scores; BLINK_ONSET_RISE, BLINK_RECOVERY_MS... imported): the open level,
                      the onset line, the regions open / onset / closed / recovery shaded, and the frames where
                      the gaze point is held
+  accuracy_degrees   every gaze check's error as a visual angle (the screen's size in cm: --screen-cm or Windows;
+                     each person's eye distance: the median head z of their calibrations), per model and each
+                     person's best, beside published trackers' accuracies as reference lines (PUBLISHED, with
+                     their sources: literature, not this data)
   blink_states       every blink test's states as a box plot per eye, with the candidate cut-offs (today's
                      BLINK_THRESHOLD, the highest open-eye score, the lowest closed one, their midpoint if
                      there is a gap). Blink tests: each person's blink-test/, and data/blink_scores/ (the other
@@ -852,12 +856,100 @@ def blink_states(blinks, out):
     write(out, "blink_states", fig, ["state", "eye", "frames", "min", "p5", "median", "p95", "max"], table,
           [str(p) for _, p in blinks])
 
+# published accuracies, for reference lines only: none of them is this data (mean error, degrees of visual angle)
+PUBLISHED = (("Tobii / EyeLink (infrared, lab)", 0.5, "https://researchwiki.solo.universiteitleiden.nl/xwiki/wiki/"
+              "researchwiki.solo.universiteitleiden.nl/view/Physiology/Eye%20Tracking/Eye%20Tracker%20Comparison/"),
+             ("GazeCloud API, its own claim", 1.0, "https://gazerecorder.com/faq/"),
+             ("Labvanced webcam (Kaduk et al. 2023)", 1.4, "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC11289017/"),
+             ("GazeRecorder, measured (Frontiers 2024, head still)", 2.65,
+              "https://www.frontiersin.org/journals/robotics-and-ai/articles/10.3389/frobt.2024.1369566/full"),
+             ("WebGazer (Papoutsaki et al. 2016)", 4.17, "https://par.nsf.gov/biblio/10024076"))
+
+
+def screen_cm(arg: str | None) -> tuple[float, float]:
+    """The screen's size in cm: --screen-cm WxH, or what Windows reports for the main screen (through Qt)."""
+    if arg:
+        return tuple(float(v) for v in arg.lower().split("x"))
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    mm = app.primaryScreen().physicalSize()
+    return mm.width() / 10, mm.height() / 10
+
+
+def eye_distances(cals) -> dict[str, float]:
+    """Per person: how far the eyes were from the camera, cm: the median of MediaPipe's head z over every frame
+    of their grid calibrations (approximate: MediaPipe's head position is not a metric measurement)."""
+    z = defaultdict(list)
+    for person, _, _, rec in cals:
+        z[person] += [-s.features[HEAD.start + 5] for s in rec.dots]
+    return {p: float(np.median(v)) for p, v in z.items() if v}
+
+
+def visual_angle(x, y, tx, ty, size, distance) -> float:
+    """Degrees at the eye between the lit ring and the prediction (screen fractions), the eye on the screen's
+    centre line `distance` cm away."""
+    W, H = size
+    eye = np.array([0.0, 0.0, -distance])
+    a = np.array([(tx - .5) * W, (ty - .5) * H, 0.0]) - eye
+    b = np.array([(x - .5) * W, (y - .5) * H, 0.0]) - eye
+    return math.degrees(math.acos(float(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1, 1))))
+
+
+def accuracy_degrees(cals, checks, size, out):
+    """Every gaze check's error as a visual angle: per model (every person pooled) and each person's best model,
+    beside published webcam and infrared trackers' accuracies (reference lines, not this data)."""
+    dist = eye_distances(cals)
+    per, perp, sources = defaultdict(list), defaultdict(list), []
+    for person, m, path, rows in checks:
+        if person not in dist:
+            print(f"  accuracy_degrees: no calibration of {person or 'no person'} to give a distance; {path.name} left out")
+            continue
+        d = [visual_angle(x, y, tx, ty, size, dist[person]) for _, x, y, tx, ty in rows]
+        per[m] += d
+        perp[(person, m)] += d
+        sources.append(str(path))
+    table = [("model", model_name(m), "everyone", None, len(v), float(np.mean(v)), float(np.median(v)))
+             for m, v in sorted(per.items(), key=lambda kv: np.mean(kv[1]))]
+    best = []
+    for person in sorted({p for p, _ in perp}):
+        mine = {m: v for (p, m), v in perp.items() if p == person}
+        b = min(mine, key=lambda m: np.mean(mine[m]))
+        best.append(("best of a person", model_name(b), person or "no person", dist[person], len(mine[b]),
+                     float(np.mean(mine[b])), float(np.median(mine[b]))))
+    fig, axes = plt.subplots(1, 2, figsize=(15, max(5, 0.28 * len(table) + 1.5)), gridspec_kw={"width_ratios": [3, 2]})
+    if table:
+        for ax, rows, title in ((axes[0], table, "Every model, every person's gaze checks pooled"),
+                                (axes[1], best, "Each person's best model (the lowest of all: a little optimistic)")):
+            labels = [r[1] if r[2] == "everyone" else f"{r[2]}: {r[1]}" for r in rows]
+            y = np.arange(len(rows))[::-1]
+            ax.barh(y, [r[5] for r in rows], height=0.8 if ax is axes[0] else 0.45, color=BLUE, alpha=0.8, label="mean")
+            ax.scatter([r[6] for r in rows], y, color="black", s=12, zorder=3, label="median")
+            for yy, r in zip(y, rows):
+                ax.text(r[5] + 0.05, yy, f"{r[5]:.2f}° (n={r[4]})", va="center", fontsize=7)
+            for (name, v, _), colour in zip(PUBLISHED, ("#2E7D32", "#7E57C2", "#00897B", RED, "#8D6E63")):
+                ax.axvline(v, color=colour, ls="--", lw=1, label=f"{name}: {v}°")
+            ax.set_yticks(y, labels, fontsize=7)
+            ax.set_xlabel("error, degrees of visual angle")
+            ax.set_title(title, fontsize=9)
+            ax.grid(axis="x", alpha=0.3)
+        axes[1].legend(fontsize=7, loc="upper left", bbox_to_anchor=(0, -0.08))   # under the panel: off the bars
+        fig.suptitle(f"Gaze-check accuracy in degrees: screen {size[0]:.1f} x {size[1]:.1f} cm; each person's eye distance "
+                     f"from their calibrations ({', '.join(f'{p or chr(45)} {d:.0f} cm' for p, d in sorted(dist.items()))}). "
+                     "Dashed: published trackers, other protocols, not this data", fontsize=9)
+    else:
+        for ax in axes:
+            empty(ax, "no gaze check of a person with a calibration")
+    write(out, "accuracy_degrees", fig, ["what", "model", "person", "eye_distance_cm", "samples", "mean_deg",
+                                         "median_deg"], table + best + [("published", n, u, None, None, v, None)
+                                                                        for n, v, u in PUBLISHED], sources)
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="The report's figures, from the data folder")
     parser.add_argument("data", type=Path)
     parser.add_argument("--person", help="one person's files only ('' = the files straight under data/)")
     parser.add_argument("--out", type=Path, default=OUT)
     parser.add_argument("--screen", default="1440x960", help="the screen the checks were made on, in px")
+    parser.add_argument("--screen-cm", help="its size in cm, WxH (default: what Windows reports for the main screen)")
     args = parser.parse_args(argv)
     screen = tuple(int(v) for v in args.screen.lower().split("x"))
     cals, checks, heads, videos, blinks = collect(args.data, args.person)
@@ -877,6 +969,7 @@ def main(argv=None) -> int:
     same_vs_next(checks, args.data, args.person, screen, args.out)
     blink_timeline(blinks, args.out)
     blink_states(blinks, args.out)
+    accuracy_degrees(cals, checks, screen_cm(args.screen_cm), args.out)
     return 0
 
 
