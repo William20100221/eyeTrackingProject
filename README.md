@@ -23,6 +23,14 @@ password = <its app password>
 On each tester's computer, check it before they start: `python -m eyetracking.services.mailer` sends
 a test email and says what failed. It tries port 465, then 587 (a network may block one).
 
+## Handing it out
+
+1. Download the branch as a zip:
+   https://github.com/William20100221/eyeTrackingProject/archive/refs/heads/tester-calibration.zip
+2. Unzip it, put `mail.ini` inside the folder (beside `main.py`), and zip the folder again.
+3. Give that zip to the students. They unzip it and double-click `Start.bat`: the first time it installs
+   uv, Python and the packages (a few minutes, needs internet), after that it opens in seconds.
+
 ## Run
 
 ```
