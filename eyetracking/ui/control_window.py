@@ -24,12 +24,12 @@ from PySide6.QtCore import QEasingCurve, QEvent, QRectF, QSettings, Qt, QVariant
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QMenu, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
+                               QLineEdit, QMenu, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
 import eyetracking.services.storage as storage
 from eyetracking.services.mailer import TO
-from eyetracking.core.methods import METHOD_BY_ID, METHODS
+from eyetracking.core.methods import METHOD_BY_ID, METHODS, partners
 
 TITLE = "Eye tracking test"
 SEED = "#E5483B"            # the logo's red: every colour is made from it
@@ -101,6 +101,7 @@ QPushButton[kind="assist"]::menu-indicator { image: none; width: 0; }
 QPushButton[kind="chip"]:hover, QPushButton[kind="assist"]:hover { background: $hover; }
 QPushButton[kind="chip"]:checked { background: $secondaryContainer; color: $onSecondaryContainer; border-color: $secondaryContainer; padding-left: 8px; }
 QPushButton[kind="chip"]:checked:hover { background: $secContainerHover; }
+QPushButton[kind="chip"]:disabled { color: $outline; border-color: $surfaceContainerHigh; }
 
 /* keyboard focus: a 2px ring on every button. The ring is a border, which eats into the text's room,
    so each kind's padding gives that width back: focused text never moves or clips */
@@ -480,8 +481,34 @@ class TestingPage(QWidget):
         self.method_chips.idClicked.connect(lambda i: self.set_method(METHODS[i].id))
         self.method_steps = self._text(v, "")
         self.todo_label = self._text(v, "", "sheetText")
-        self._go(v, "Start the calibration", lambda: self.command.emit("calibrate"))
+        self.calibrate_go = self._go(v, "Start the calibration", lambda: self.command.emit("calibrate"))
+        self.redo_btn = button(f"Redo a calibration  {I_CHEVRON}", "assist")   # its newest one into the trash
+        self.redo_menu = QMenu(self.redo_btn)
+        self.redo_menu.aboutToShow.connect(self._fill_redo_menu)
+        self.redo_btn.setMenu(self.redo_menu)
+        v.insertWidget(v.indexOf(self.calibrate_go) + 1, self.redo_btn, 0, Qt.AlignLeft)
         return page
+
+    def _fill_redo_menu(self):
+        self.redo_menu.clear()
+        for m, n in self.calibrations().items():
+            if n:
+                self.redo_menu.addAction(f"{m.name} (your last one)", lambda m=m: self.redo(m))
+
+    def redo(self, m):
+        """Delete the newest calibration of a type (its Line model copy too) so it can be done again. The
+        gaze checks go as well, if any: the models change, so they must be done again."""
+        newest = storage.list_calibrations(m.id)[0]
+        files = [newest] + [p for o in partners(m)
+                            if (p := storage.method_dir(o.id) / f"{o.id}_{newest.stem[-17:]}.json").exists()]
+        checks = [p for p in storage.result_files() if p.suffix == ".csv"]
+        if QMessageBox.question(self, "Redo a calibration", f"Delete your last {m.name} calibration and do it again?"
+                                + (" Your gaze checks are deleted too: you will do them again." if checks else "")
+                                ) != QMessageBox.Yes:
+            return
+        trash = storage.discard(files + checks)
+        self.refresh()
+        self.say(f"{m.name} deleted (kept in {trash.relative_to(storage.BASE_DIR.parent).as_posix()}/). Do it again.")
 
     def set_method(self, method_id: str):
         m = METHOD_BY_ID[method_id]
@@ -515,6 +542,13 @@ class TestingPage(QWidget):
                                 if todo else "Both sets done. Next: the gaze check.")
         if todo:
             self.set_method(todo[0].id)               # in order: set 2 starts again at Original 3x3
+        for m, n in done.items():                     # exactly SETS of each, one of each per set: only this set's open
+            chip = self.method_chips.button(METHODS.index(m))
+            chip.plain = f"{m.name}  {min(n, SETS)}/{SETS}"
+            chip.setText(f"{I_CHECK}  {chip.plain}" if chip.isChecked() else chip.plain)
+            chip.setEnabled(m in todo)
+        self.calibrate_go.setEnabled(bool(todo))
+        self.redo_btn.setEnabled(any(done.values()))
         for i, n in ((1, f"{calibrated}/{total}"), (2, f"{checks}/{SETS}")):
             self.side_nav.button(i).setText(f"{NAV[i][0]}   {NAV[i][1]}   {n}")
         self.check_go.setEnabled(not todo and checks < SETS)

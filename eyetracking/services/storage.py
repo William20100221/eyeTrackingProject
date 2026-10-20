@@ -25,6 +25,7 @@ import csv
 import functools
 import json
 import re
+import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -214,6 +215,16 @@ def save_gaze_check(samples: list[Check], method_id: str, folder: Path | None = 
         w.writerow(["index", "x", "y", "target_x", "target_y"])
         w.writerows((i, f"{x:.4f}", f"{y:.4f}", f"{tx:.4f}", f"{ty:.4f}") for i, x, y, tx, ty in samples)
     return path
+
+
+def discard(paths) -> Path:
+    """Files of the person in use into their trash/ folder (data/<name>/trash/<type>/): no longer counted,
+    trained on or emailed; move them back to undo. Returns the trash folder."""
+    trash = DATA_DIR / "trash"
+    for p in paths:
+        (trash / p.parent.name).mkdir(parents=True, exist_ok=True)
+        shutil.move(str(p), str(trash / p.parent.name / p.name))
+    return trash
 
 
 def checks_done(root: Path | None = None) -> set[int]:

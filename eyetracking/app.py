@@ -252,9 +252,15 @@ class App(QObject):
         self._release_camera("calibration", "check")
 
     def calibrate(self) -> None:
-        if not self._named() or not self._use_camera("calibration"):
+        if not self._named():
             return
         method = self.method
+        if method not in self.testing.todo():         # exactly two of each type, one of each per set
+            self.testing.say(f"{method.name} is done for this set." if self.testing.todo() else
+                             "All calibrations are done.")
+            return
+        if not self._use_camera("calibration"):
+            return
         get = fake_features_from_mouse if self.mouse else self._frames()
         window = CalibrationWindow(method, get)
         window.finished.connect(lambda rec: self._calibrated(window, method, rec))

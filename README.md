@@ -34,7 +34,9 @@ python main.py --mouse    # no camera: the mouse plays your eyes, nothing is ema
 
 1. Instructions: type their name, pick the camera.
 2. Calibration: the 8 recordings (Original and Random 3×3 / 4×4 / 5×5, Sweep, Points; each Points is
-   also saved as Line model), twice: 16 in all, the next one picked after each.
+   also saved as Line model), exactly twice each: set 1 is one of each, then set 2. Only the types still
+   open in the current set can be started; each chip shows `n/2`. "Redo a calibration" deletes a type's
+   last one (into `data/<name>/trash/`, with the gaze checks, which then have to be done again).
 3. Gaze check, locked until the 16 are done, then twice: every model (24) at once from the same camera
    frames, on 36 rings, trained on the newest set (files `_1-calibrations`), then on both sets
    (`_2-calibrations`). It saves and ends by itself after the last ring; Esc before that saves nothing.

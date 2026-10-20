@@ -3,7 +3,8 @@ Self-check of the tester app (no webcam, no network):  python -m eyetracking.tes
 
 The app starts without opening the camera; the camera opens when a full-screen page needs the gaze and
 closes when it is done. Nothing starts without a name. Each of the 8 types is calibrated twice (two
-sets, "n/16"), the next one picked after each; Points is saved as Line model too. The gaze check stays
+sets, "n/16"): exactly two of each, one of each per set, the others locked; the next one picked after
+each; Points is saved as Line model too; Redo deletes a type's last one (and the gaze checks). The gaze check stays
 locked until all 16 are done, then runs twice ("n/2"): every model trained on the newest set, then on
 both. Only after the second is everything emailed, in one email; a send that fails goes at the next
 start. A camera that fails to open leaves the app running.
@@ -128,6 +129,12 @@ class Done:                                                       # the finished
 app._calibrated(Done(), METHOD_BY_ID["original-3x3"], recording(METHOD_BY_ID["original-3x3"]))
 assert page.status.text() == "Original 3×3: saved." and nav(1) == "1/16", page.status.text()
 assert page.method_id == "original-4x4" and sent == []                  # the next one picked; nothing emailed yet
+chip = lambda m: page.method_chips.button(cw.METHODS.index(cw.METHOD_BY_ID[m]))
+assert chip("original-3x3").text() == "Original 3×3  1/2" and not chip("original-3x3").isEnabled()
+assert chip("original-4x4").isEnabled() and chip("original-4x4").text().endswith("Original 4×4  0/2")
+page.set_method("original-3x3")                                                # done for this set: refused
+app.calibrate()
+assert page.status.text() == "Original 3×3 is done for this set." and log[-1] == "close"
 app._calibrated(Done(), METHOD_BY_ID["sweep"], recording(METHOD_BY_ID["points"]))   # still dots are not a Sweep
 assert "not saved (its step 1 is still dots" in page.status.text() and storage.list_calibrations("sweep") == []
 for k, m in enumerate(cw.TESTER_METHODS[1:]):                                   # the rest of set 1, as if done
@@ -136,7 +143,7 @@ for k, m in enumerate(cw.TESTER_METHODS[1:]):                                   
         storage.copy_as(path, "line-model")
 page.refresh()
 assert nav(1) == "8/16" and page.todo_label.text().startswith("Set 2 of 2. Still to do: Original 3×3, Original 4×4")
-assert page.method_id == "original-3x3" and not page.check_go.isEnabled()
+assert page.method_id == "original-3x3" and not page.check_go.isEnabled() and chip("sweep").isEnabled()
 for k, m in enumerate(cw.TESTER_METHODS):                                       # set 2
     path = storage.save_calibration(recording(m), m.id, storage.method_dir(m.id) / f"{m.id}_2026-10-21_1100{k:02d}.json")
     if m.id == "points":
@@ -171,6 +178,9 @@ assert sum(n.endswith(".json") for n in names) == 18 and sum("_multi_1-calibrati
 assert sum("_multi_2-calibrations_" in n for n in names) == 24 and all(n.startswith("Ann/") for n in names)
 app.check()
 assert page.status.text() == "Both gaze checks are done."
+assert not page.calibrate_go.isEnabled() and not any(chip(m.id).isEnabled() for m in cw.TESTER_METHODS)
+app.calibrate()
+assert page.status.text() == "All calibrations are done."
 
 # no internet: a copy on the Desktop to send by hand, and the email goes at the next start
 mailer.smtp_send = lambda msg: (_ for _ in ()).throw(OSError("no internet"))
@@ -182,6 +192,15 @@ again = appmod.App(mouse=False)
 mailed(again)
 assert len(sent) == 2 and len(files(sent[1])) == 1 and not mailer.outbox().exists()
 assert again.testing.name_edit.text() == "Ann" and again.camera == "Cam A" and again.testing.check_note.text() == "Both done. Thank you!"
+
+# Redo: the last Points (and its Line model copy) into the trash, the gaze checks too; only Points is open again
+cw.QMessageBox.question = lambda *a, **k: cw.QMessageBox.Yes
+page.redo(cw.METHOD_BY_ID["points"])
+assert len(storage.list_calibrations("points")) == len(storage.list_calibrations("line-model")) == 1
+assert storage.checks_done() == set() and sum(p.is_file() for p in (tmp / "data" / "Ann" / "trash").rglob("*")) == 2 + 48   # 2 calibrations, 48 checks
+assert (nav(1), nav(2)) == ("15/16", "0/2") and not page.check_go.isEnabled()
+assert [m.id for m in cw.TESTER_METHODS if chip(m.id).isEnabled()] == ["points"] and page.method_id == "points"
+assert page.status.text() == "Points deleted (kept in data/Ann/trash/). Do it again."
 
 fail = True                                                                    # a camera that can't open
 app.calibrate()
