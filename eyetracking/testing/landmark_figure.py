@@ -2,7 +2,7 @@
 The landmark figure for the report: one frame, the Face Landmarker's 478 points, the eleven the app
 uses, the lines its features are measured along, and the 12 feature values that frame gives.
 
-    python -m eyetracking.testing.landmark_figure [--image PATH | --camera N] [--person NAME]
+    python -m eyetracking.testing.landmark_figure [--image PATH | --camera N] [--person NAME] [--screen-cm WxH]
 
 Grabs one frame (a photo, or camera N: the default camera 0 if neither is given), runs the Face
 Landmarker (services/landmarker.py) and core/features.py's gaze_features on it, and writes into
@@ -16,6 +16,12 @@ docs/img/report/ (docs/img/report/<person>/ with --person), each figure with the
                                MediaPipe gives them (fractions of the image)
     landmarks_eye.png          a zoomed crop of each eye, the same labels, readable in a report
     landmarks_eye_points.csv   the points in those crops, per panel
+    line_model.png             the same frame as core/line_model.py sees it, in cm, a top and a side view: each
+                               eye's centre of rotation and iris (IRIS_RADIUS_CM along its measured direction),
+                               the two gaze rays and where they meet the screen plane, the straight middle line (an
+                               uncalibrated LineModel's prediction), the screen (ScreenGeometry: --screen-cm, or
+                               the size Windows reports); the vergence angle core/vergence.py gives, written on it
+    line_model.csv             those points in cm, the angles, the middle line's screen fractions
     landmarks.csv              the 12 feature values of the frame, with their names (also printed)
 
 The indices and the ruler length are imported from core/features.py, never copied here. PNGs at 200 dpi.
@@ -24,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +44,7 @@ import numpy as np                            # noqa: E402
 from eyetracking.core.features import (CORNER_TO_NOSE_CM, FEATURE_NAMES, L_INNER, L_IRIS, L_LOWER,   # noqa: E402
                                        L_OUTER, L_UPPER, NOSE_TIP, R_INNER, R_IRIS, R_LOWER, R_OUTER, R_UPPER,
                                        gaze_features)
+from eyetracking.core.line_model import IRIS_RADIUS_CM, LineModel, ScreenGeometry, eye_lines             # noqa: E402
 from eyetracking.core.models import FrameResult                                                    # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parents[2] / "docs" / "img" / "report"
@@ -141,8 +149,93 @@ def _draw(ax, p: np.ndarray, features, fs: float = 6.5, ruler: bool = True, out:
     return drawn
 
 
-def make_figures(rgb: np.ndarray, result: FrameResult, out_dir: Path, source: str, person: str = "") -> list[Path]:
-    """The two figures, their CSVs and the feature CSV, written into out_dir. Returns the files written."""
+def _hit(origin: np.ndarray, line: np.ndarray) -> np.ndarray | None:
+    """Where a ray meets the screen plane (z = 0): LineModel.predict's own step, for each eye's ray."""
+    return origin + (-origin[2] / line[2]) * line if line[2] > 1e-6 else None
+
+
+def line_model_figure(features, screen: ScreenGeometry, out_dir: Path, who: str = "") -> list[Path]:
+    """line_model.png: the frame as core/line_model.py sees it, in cm (camera space: the camera at 0, the user
+    at z < 0, y up): each eye's centre of rotation and its iris (IRIS_RADIUS_CM along the eye's measured
+    direction), each eye's ray to the screen plane, the straight middle line the model starts from (its hit =
+    an uncalibrated LineModel's prediction), the screen (ScreenGeometry), in a top and a side view; the vergence
+    angle core/vergence.py gives for the eyes' distance (eye_lines), and the angle between the measured rays."""
+    centres, measured, _, _, vergence = eye_lines(features)
+    irises = centres + IRIS_RADIUS_CM * measured
+    hits = [_hit(c, d) for c, d in zip(centres, measured)]
+    middle = centres.mean(axis=0)
+    fx, fy = LineModel(screen).predict(features) or (np.nan, np.nan)   # untrained: w = 1, the straight line
+    mid_hit = screen.point(fx, fy)
+    between = math.degrees(math.acos(float(np.clip(measured[0] @ measured[1], -1, 1))))
+    corners = np.array([screen.point(0, 0), screen.point(1, 0), screen.point(1, 1), screen.point(0, 1)])
+    distance = -float(centres[:, 2].mean())
+    fig, (top, side) = plt.subplots(1, 2, figsize=(13, 6))
+    for ax, (a, b), (xl, yl) in ((top, (0, 2), ("x (cm): the user's left is on the left", "z (cm): from the camera")),
+                                 (side, (2, 1), ("z (cm): from the camera", "y (cm): up"))):
+        ax.plot(*corners[[0, 1, 2, 3, 0]][:, [a, b]].T, color="black", lw=2, label="the screen (ScreenGeometry)")
+        ax.plot(0, 0, marker="s", color="black", ms=6)
+        ax.annotate("camera", (0, 0), (6, 6), textcoords="offset points", fontsize=8)
+        for c, i, h, colour, name in zip(centres, irises, hits, (LINE, POINT), ("right eye", "left eye")):
+            ax.plot(c[a], c[b], "o", color=colour, ms=6, label=f"{name}: centre of rotation")
+            ax.plot(i[a], i[b], "x", color=colour, ms=7, label=f"{name}: iris ({IRIS_RADIUS_CM:g} cm out)")
+            if h is not None:
+                ax.plot([c[a], h[a]], [c[b], h[b]], color=colour, lw=1, label=f"{name}: its ray")
+                ax.plot(h[a], h[b], "o", mfc="none", color=colour, ms=7)
+        ax.plot([middle[a], mid_hit[a]], [middle[b], mid_hit[b]], color=RULER, ls="--", lw=1.2,
+                label="the straight middle line (vergence taken out)")
+        ax.plot(mid_hit[a], mid_hit[b], "*", color=RULER, ms=12)
+        ax.set_xlabel(xl)
+        ax.set_ylabel(yl)
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.grid(alpha=0.3)
+    top.invert_xaxis()                                          # the camera's +x is the user's left: seen from behind
+    top.set_title("Top view", fontsize=10)
+    side.set_title("Side view", fontsize=10)
+    zoom = top.inset_axes([0.62, 0.05, 0.36, 0.36])            # the eyes, where 1 cm is visible
+    for c, i, colour in zip(centres, irises, (LINE, POINT)):
+        zoom.plot([c[0], i[0]], [c[2], i[2]], color=colour, lw=1)
+        zoom.plot(c[0], c[2], "o", color=colour, ms=5)
+        zoom.plot(i[0], i[2], "x", color=colour, ms=6)
+    zoom.set_aspect("equal", adjustable="datalim")
+    zoom.invert_xaxis()
+    zoom.set_title("the eyes, zoomed", fontsize=7)
+    zoom.tick_params(labelsize=6)
+    top.legend(fontsize=7, loc="lower left")                    # the screen and the camera are at the top
+    side.text(0.02, 0.02, f"vergence (core/vergence.py) at {distance:.0f} cm: {math.degrees(vergence):.2f}°\n"
+                          f"angle between the two measured rays: {between:.2f}°\n"
+                          f"the middle line meets the screen at {fx:.0%} across, {fy:.0%} down",
+              transform=side.transAxes, fontsize=9, va="bottom",
+              bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=GREY))
+    fig.suptitle(f"{who}the line model on this frame, in cm (core/line_model.py; screen "
+                 f"{screen.width_cm:.1f} x {screen.height_cm:.1f} cm, camera {screen.camera_above_cm:g} cm above it)",
+                 fontsize=10)
+    png, table = out_dir / "line_model.png", out_dir / "line_model.csv"
+    fig.savefig(png, dpi=DPI, bbox_inches="tight")
+    plt.close(fig)
+    eyes = ("right eye", "left eye")
+    rows = [(f"{n} centre of rotation", *c) for n, c in zip(eyes, centres)]
+    rows += [(f"{n} iris", *i) for n, i in zip(eyes, irises)]
+    rows += [(f"{n} ray meets the screen", *(h if h is not None else (None,) * 3)) for n, h in zip(eyes, hits)]
+    rows += [("middle line meets the screen", *mid_hit), ("screen corner top left", *corners[0]),
+             ("screen corner bottom right", *corners[2])]
+    with open(table, "w", newline="", encoding="utf-8") as f:
+        wr = csv.writer(f)
+        wr.writerow(["what", "x_cm", "y_cm", "z_cm", "value"])
+        wr.writerows([r[0], *("" if v is None else f"{v:.3f}" for v in r[1:]), ""] for r in rows)
+        wr.writerows([("vergence_deg", "", "", "", f"{math.degrees(vergence):.3f}"),
+                      ("eye_distance_cm", "", "", "", f"{distance:.2f}"),
+                      ("angle_between_measured_rays_deg", "", "", "", f"{between:.3f}"),
+                      ("middle_line_screen_x", "", "", "", f"{fx:.4f}"),
+                      ("middle_line_screen_y", "", "", "", f"{fy:.4f}")])
+    print(f"line model: vergence {math.degrees(vergence):.2f} deg at {distance:.0f} cm; measured rays {between:.2f} deg "
+          f"apart; middle line at ({fx:.2f}, {fy:.2f}) of the screen")
+    return [png, table]
+
+
+def make_figures(rgb: np.ndarray, result: FrameResult, out_dir: Path, source: str, person: str = "",
+                 screen: ScreenGeometry | None = None) -> list[Path]:
+    """The figures, their CSVs and the feature CSV, written into out_dir (line_model.png only with the screen's
+    size: the model needs it). Returns the files written."""
     if not result.face_found or result.landmarks is None:
         raise SystemExit(f"No face in {source}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +296,11 @@ def make_figures(rgb: np.ndarray, result: FrameResult, out_dir: Path, source: st
         wr.writerow(["panel", "index", "role", "x_px", "y_px", "ratio"])
         wr.writerows(rows)
 
-    # 3. the 12 features of this frame (the labels above show the first four)
+    # 3. the line model on this frame
+    if screen is not None:
+        written += line_model_figure(features, screen, out_dir, who)
+
+    # 4. the 12 features of this frame (the labels above show the first four)
     written.append(out_dir / "landmarks.csv")
     with open(written[-1], "w", newline="", encoding="utf-8") as f:
         wr = csv.writer(f)
@@ -217,16 +314,33 @@ def make_figures(rgb: np.ndarray, result: FrameResult, out_dir: Path, source: st
     return written
 
 
+def screen_size(text: str | None) -> ScreenGeometry:
+    """The screen for the line model: --screen-cm, or Windows' own size of the main screen (the app's
+    gaze_window.screen_geometry). Printed, as the figure depends on it."""
+    if text:
+        w, h = (float(v) for v in text.lower().split("x"))
+        screen = ScreenGeometry(w, h)
+    else:
+        from PySide6.QtWidgets import QApplication
+        from eyetracking.ui.gaze_window import screen_geometry
+        if QApplication.instance() is None:                    # Qt needs an app to know the screen
+            QApplication([])
+        screen = screen_geometry()
+    print(f"screen: {screen.width_cm:.1f} x {screen.height_cm:.1f} cm" + (" (--screen-cm)" if text else " (from Windows)"))
+    return screen
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="The landmark figure for the report")
     src = parser.add_mutually_exclusive_group()
     src.add_argument("--image", help="a photo of a face instead of the camera")
     src.add_argument("--camera", type=int, help="the camera's index (default 0)")
     parser.add_argument("--person", default="", help="whose face: a sub-folder of docs/img/report/ and the titles")
+    parser.add_argument("--screen-cm", help="the screen's size, WxH in cm (default: what Windows reports, via Qt)")
     args = parser.parse_args(argv)
     rgb, source = grab(args.image, args.camera)
     out = OUT_DIR / args.person if args.person else OUT_DIR
-    make_figures(rgb, detect(rgb), out, source, args.person)
+    make_figures(rgb, detect(rgb), out, source, args.person, screen_size(args.screen_cm))
     return 0
 
 
