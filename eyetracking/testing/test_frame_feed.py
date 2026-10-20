@@ -6,8 +6,7 @@ Self-check for the camera read on its own thread (no webcam):  python -m eyetrac
    FrameResult; stop() ends the reads.
 2. The windows between two camera frames (NO_FRAME): the calibration records each frame once and
    doesn't take NO_FRAME for a blink (a blink drops the frames held back before it); the gaze check
-   keeps its point and counts frames, not ticks; the blink test records a row per frame; the sample
-   text keeps counting the time on the last point.
+   keeps its point and counts frames, not ticks.
 """
 import os
 import threading
@@ -70,9 +69,7 @@ print("1. feed ok")
 import eyetracking.core.calibration as cal
 import eyetracking.ui.calibration_window as cw
 from eyetracking.core.methods import METHOD_BY_ID
-from eyetracking.ui.blink_window import BlinkWindow
 from eyetracking.ui.gaze_window import GazeWindow
-from eyetracking.ui.reading_window import ReadingWindow
 
 cal.SWEEP_SETTLE_MS, cal.SWEEP_CROSS_MS = 50, 150                             # quick, as in test_blinks
 cal.HEAD_SETTLE_MS, cal.HEAD_MOVE_MIN_MS, cal.HEAD_MOVE_MAX_MS = 50, 50, 150
@@ -124,21 +121,4 @@ assert gaze.point == (0.2, 0.3) and not gaze._stale and gaze._frames == 1     # 
 gaze._tick()
 gaze._tick()
 assert gaze.point == (0.2, 0.3) and gaze._stale and gaze._frames == 2         # a blink: held, grey
-
-scores = iter([(0.1, 0.2), NO_FRAME, NO_FRAME, (0.3, 0.4), NO_FRAME, None])
-blink = BlinkWindow(get_scores=lambda: next(scores))
-blink._phase = "record"
-blink._clock.start()
-for _ in range(6):
-    blink._tick()
-assert [row[2:] for row in blink.rows] == [(0.1, 0.2), (0.3, 0.4)] and blink._scores is None, blink.rows
-
-where = None
-reading = ReadingWindow(lambda: next(where))
-reading.resize(1440, 900)
-top = reading.boxes()[1][0].center()
-where = iter([(top.x() / 1440, top.y() / 900), NO_FRAME, None, NO_FRAME])
-for _ in range(4):
-    reading._tick(1.0)
-assert reading.seen[0] == 2.0, reading.seen                                   # the point, then held; a blink stops it
 print("3. windows ok")

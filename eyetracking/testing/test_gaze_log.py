@@ -4,8 +4,8 @@ Self-check for the gaze window (no webcam):  python -m eyetracking.testing.test_
 Enter records a sample (where the dot is right now) against the lit ring, then lights the
 next one; each sample gets an index written BEFORE its coordinates, on screen and in the
 csv saved on Esc. Space pauses. Nothing is recorded by itself. With several models, every
-one records its own point at the same press (6x6 rings, no dot); in record mode the
-presses go to the recorder instead.
+one records its own point at the same press (6x6 rings, no dot), and the window saves and
+closes by itself after the last ring.
 """
 import csv
 import os
@@ -70,44 +70,21 @@ with tempfile.TemporaryDirectory() as folder:
     assert [r[:3] for r in multi.logs["a"]] == [(0, 0.1, 0.1), (1, 0.2, 0.2), (2, 0.3, 0.3)]
     assert [r[:3] for r in multi.logs["b"]] == [(1, 0.8, 0.8), (2, 0.8, 0.8)]      # the index is the press, not b's count
     assert multi.logs["a"][1][3:] == (0.23, 0.05) and multi.presses == 3            # the second 6x6 ring
-    assert multi.sample_lines() == ["#0000  ring (1, 1)", "#0001  ring (2, 1)", "#0002  ring (3, 1)"]
-    assert "2 models predicting" in multi.status_text()
+    assert multi.sample_lines() == [] and multi.status_text().startswith("Ring 4 of 36     Enter: record")
     got = []
     multi.logged.connect(got.extend)
     key(multi, Qt.Key.Key_Escape)
     assert [p.parent.name for p in got] == ["a", "b"] and got[0].name.startswith("gaze-check_a_multi_2-calibrations_")
     assert got[1].name.startswith("gaze-check_b_multi_20"), got[1].name
 
-
-# ---- record mode: the presses go to the recorder, Esc finishes it ----------------
-class FakeRecorder:
-    frames_ms = [0, 33]
-
-    def __init__(self):
-        self.presses, self.finished = [], False
-
-    def press(self, index, tx, ty):
-        self.presses.append((index, tx, ty))
-
-    def finish(self):
-        self.finished = True
-        return Path("gaze-video_2026-10-18_173000.json") if self.presses else None
-
-
-rec = FakeRecorder()
-calls = []
-recording = GazeWindow(lambda: (calls.append(1), {})[1], {}, grid=6, show_dot=False, recorder=rec)
-recording._tick()
-key(recording, Qt.Key.Key_Return)
-key(recording, Qt.Key.Key_Return)
-assert calls == [1] and rec.presses == [(0, 0.05, 0.05), (1, 0.23, 0.05)] and recording.logs == {}
-assert "recording the camera: 2 frames" in recording.status_text()
-out = []
-recording.recorded.connect(out.append)
-key(recording, Qt.Key.Key_Escape)
-assert rec.finished and out == [Path("gaze-video_2026-10-18_173000.json")]
-empty = GazeWindow(lambda: {}, {}, grid=4, show_dot=False, recorder=FakeRecorder())
-empty.recorded.connect(out.append)
-key(empty, Qt.Key.Key_Escape)                             # no press: nothing recorded, nothing emitted
-assert len(out) == 1
+    # one round of the 36 rings: it saves and closes by itself, no Esc
+    whole = GazeWindow(lambda: {"a": (0.5, 0.5)}, {"a": folder / "a"}, grid=6, show_dot=False, tag="multi")
+    done = []
+    whole.logged.connect(done.extend)
+    whole._tick()
+    for _ in range(35):
+        key(whole, Qt.Key.Key_Return)
+    assert not done and whole.status_text().startswith("Ring 36 of 36")
+    key(whole, Qt.Key.Key_Return)
+    assert len(done) == 1 and len(whole.logs["a"]) == 36 and not whole._timer.isActive()
 print("gaze samples ok")

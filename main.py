@@ -1,8 +1,8 @@
 """
 Entry point:  python main.py
 
-Starts the calibration lab (eyetracking/app.py): one window with every
-calibration method, the gaze check, the blink test and their data.
+Starts the tester version of the calibration lab (eyetracking/app.py): the
+instructions, every calibration and the gaze check; each result is emailed.
 Add --mouse to try it without a camera.
 """
 import sys
