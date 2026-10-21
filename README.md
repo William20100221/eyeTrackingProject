@@ -19,6 +19,15 @@ python -m pip install scikit-learn
 python -m pip install pygrabber
 python -m pip install anthropic
 ```
+```bash
+pip install mediapipe
+pip install opencv-contrib-python
+pip install PySide6
+pip install PySide6 materialyoucolor
+pip install scikit-learn
+pip install pygrabber
+pip install anthropic
+```
 
 ### Optional
 
