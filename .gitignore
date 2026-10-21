@@ -33,3 +33,7 @@ htmlcov/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# build output and the self-test's report (as on master)
+installer/Output/
+self_test.txt
