@@ -11,13 +11,13 @@ This project is built with Mediapipe, OpenCV, scikit-learn and PySide6 (Qt) whic
 ### Required
 
 ```bash
-pip install mediapipe
-pip install opencv-contrib-python
-pip install PySide6
-pip install PySide6 materialyoucolor
-pip install scikit-learn
-pip install pygrabber
-pip install anthropic
+python -m pip install mediapipe
+python -m pip install opencv-contrib-python
+python -m pip install PySide6
+python -m pip install PySide6 materialyoucolor
+python -m pip install scikit-learn
+python -m pip install pygrabber
+python -m pip install anthropic
 ```
 
 ### Optional
