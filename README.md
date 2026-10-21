@@ -8,6 +8,15 @@ unzip each email into its `data/` folder.
 ## Install Requirements
 
 Mediapipe, OpenCV, scikit-learn, PySide6 (Qt) and materialyoucolor (`uv sync`).
+```
+python -m pip install mediapipe
+python -m pip install opencv-contrib-python
+python -m pip install PySide6
+python -m pip install PySide6 materialyoucolor
+python -m pip install scikit-learn
+python -m pip install pygrabber
+python -m pip install anthropic
+```
 
 Emailing needs `mail.ini` beside `main.py`. It is not in git (the repo is public and it holds a
 password), so copy it onto each tester's computer along with the app. Use an account made only for
