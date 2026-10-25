@@ -26,7 +26,7 @@ qt.setQuitOnLastWindowClosed(False)
 app = appmod.App(mouse=True)
 w = app.control
 assert w.pages.currentWidget() is w.testing and w.testing.main.currentIndex() == 0     # first run: Calibration
-assert app.method.id == "original-5x5"
+assert app.method.id == "points"
 
 w.testing.side_nav.button(5).click()                         # Data > Blink scores
 w.testing.method_chips.button(6).click()                     # Sweep: the third row's first chip

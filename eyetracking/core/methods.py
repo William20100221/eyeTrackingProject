@@ -120,7 +120,7 @@ SPECIALS = (
 GRIDS = ORIGINALS + tuple(randomised(m) for m in ORIGINALS)
 METHODS = GRIDS + SPECIALS
 METHOD_BY_ID = {m.id: m for m in METHODS}
-DEFAULT_METHOD = "original-5x5"
+DEFAULT_METHOD = "points"      # Points + a 4x4 grid was best on the eleven testers (report 4.1)
 # Points and Line model share their whole procedure, so one recording serves both (addendum 13): a
 # calibration of one is saved as the other too. Sweep's first step differs, so it shares nothing.
 SHARED = ({"points", "line-model"},)
@@ -149,7 +149,7 @@ class Model:
 MODELS = tuple(Model(g.id, g.name, g) for g in GRIDS) + \
     tuple(Model(f"{s.id}-{g.id}", f"{s.name} + {g.name}", g, s) for s in SPECIALS for g in GRIDS)
 MODEL_BY_ID = {m.id: m for m in MODELS}
-DEFAULT_MODEL = "original-5x5"
+DEFAULT_MODEL = "points-random-4x4"   # 218 px median on the shared frames, the best of the 24
 # the types before 20 Oct 2026: a special + its own 4x4 dots in one file. Their gaze checks stay readable.
 LEGACY = {"sweep": "Sweep (old)", "points": "Points (old)", "line-model": "Line model (old)",
           "random-sweep": "Random Sweep (old)", "random-points": "Random Points (old)",

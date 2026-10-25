@@ -27,11 +27,11 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QMenu, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from eyetracking.core.methods import DEFAULT_MODEL, model_name
+from eyetracking.core.methods import model_name
 import eyetracking.services.storage as storage
 
 EVERYONE = None                       # the person picker's "Everyone"
-BASELINE = DEFAULT_MODEL              # Original 5x5: what "vs baseline" is measured from
+BASELINE = "original-5x5"             # what "vs baseline" is measured from (no longer the default model)
 
 ONE_HEAD = ("Model", "Calibrations", "Gaze checks", "Latest error", "Mean error", "Best error", "vs Original 5×5")
 GOOD, BAD = QColor(56, 142, 60), QColor(211, 47, 47)   # the heat scale's ends: lowest error .. highest

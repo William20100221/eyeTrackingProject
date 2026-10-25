@@ -77,7 +77,7 @@ app.fullscreen.close()
 pump()
 assert log == ["open", "close"] and app.tracker is None                        # done: off
 app.check()                                                                    # no model yet: refused, camera stays off
-assert log[-1] == "close" and "needs a usable Original 5×5 calibration" in app.testing.status.text(), app.testing.status.text()
+assert log[-1] == "close" and "needs a usable Random 4×4 and a Points calibration" in app.testing.status.text(), app.testing.status.text()
 app.blink_test()                                                               # the blink test: on
 assert log[-1] == "open" and app.camera_users == {"blink"}
 app.fullscreen.close()
