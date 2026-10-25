@@ -5,10 +5,12 @@ for many model experiments without sitting through the dots again.
 Files go in <project root>/data, named by date and time, e.g.
     data/calibrations/calibration_2026-09-29_140312.json
 
-File format (FORMAT below): {"format": "gaze-calibration-v1", "saved_at": ...,
-"samples": [{"features": [...10], "target_x": .., "target_y": ..}, ...]}.
-Files from before the tag have no "format" but do have "samples": they count as v1.
-A file in any other format (the 3-step branches write v2 / v3) is not loaded.
+File format (FORMAT below), calibration-lab's, so a lab recording loads here too:
+    {"format": "gaze-calibration-v3", "method": "points-random-4x4", "grid": 4, "saved_at": ...,
+     "sweep": [{"features": [...12], "target_x": .., "target_y": ..}, ...],   step 1, the 14 line dots
+     "head":  [...the same, at the centre dot...],                              step 2, the head step
+     "dots":  [...the same, at the grid dots...]}                               step 3, the 4x4 grid
+Older files (v1: 10 features, the 25-dot grid only) are listed as not usable: calibrate again.
     data/history/reading_2026-09-29_141502.json  (one per reading: the AI's summary + quiz)
 """
 from __future__ import annotations
@@ -23,9 +25,9 @@ from datetime import datetime
 from pathlib import Path
 
 from eyetracking.core import blink_scores
-from eyetracking.core.calibration import describe_target, grid_positions
+from eyetracking.core.calibration import GRID, describe_target, grid_positions
 from eyetracking.core.features import N_FEATURES, describe_features, head_degrees
-from eyetracking.core.models import CalibrationSample
+from eyetracking.core.models import CalibrationRecording, CalibrationSample
 from path import DATA_DIR
 
 STAMP = "%Y-%m-%d_%H%M%S"            # the date-time part of every file name
@@ -54,7 +56,11 @@ def migrate_layout() -> int:
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
     return n
-FORMAT = "gaze-calibration-v1"
+FORMAT = "gaze-calibration-v3"              # 12 features per frame
+METHOD = "points-random-4x4"                # the lab's name for this calibration
+PARTS = ("sweep", "head", "dots")
+STEP_NAMES = {"sweep": "Step 1, the line dots across and down", "head": "Step 2, the head moving, eyes on the centre dot",
+              "dots": "Step 3, the dot grid"}
 
 
 def file_date(path: Path) -> datetime:
@@ -62,58 +68,49 @@ def file_date(path: Path) -> datetime:
     return datetime.strptime(path.stem[-17:], STAMP)
 
 
-def save_calibration(samples: list[CalibrationSample], path: Path | None = None) -> Path:
-    """Write samples to `path` (default: a new timestamped file in data/).
-    Returns the path it wrote to. Nothing is written for an empty calibration."""
-    if not samples:
-        raise ValueError("no samples: nothing worth saving")
+def save_calibration(rec: CalibrationRecording, path: Path | None = None) -> Path:
+    """Write one calibration to `path` (default: a new timestamped file in data/calibrations).
+    Returns the path it wrote to. Nothing is written without grid dots."""
+    if not rec.dots:
+        raise ValueError("no dot samples: nothing worth saving")
     now = datetime.now()
     if path is None:
         path = CALIB_DIR / f"calibration_{now:{STAMP}}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    data = {
-        "format": FORMAT,
-        "saved_at": now.isoformat(timespec="seconds"),
-        "samples": [asdict(s) for s in samples],
-    }
+    data = {"format": FORMAT, "method": METHOD, "grid": GRID, "saved_at": now.isoformat(timespec="seconds")}
+    data |= {part: [asdict(s) for s in getattr(rec, part)] for part in PARTS}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, separators=(",", ":"))   # compact: no indent (~40% smaller, ~3x faster to write and read)
     return path
 
 
-def load_calibration(path: Path) -> list[CalibrationSample]:
+def load_calibration(path: Path) -> CalibrationRecording:
     """Read one file. Raises ValueError if it isn't in this version's FORMAT."""
+    return _load(path)[0]
+
+
+def _load(path: Path) -> tuple[CalibrationRecording, int]:
+    """(the recording, its grid size)."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    tag = data.get("format", FORMAT if "samples" in data else None) if isinstance(data, dict) else None
-    if tag != FORMAT:
+    if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError(f"not in the current format ({FORMAT})")
     # JSON has no tuples: features come back as a list, so turn it back
-    return [CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
-            for s in data["samples"]]
+    parts = [tuple(CalibrationSample(tuple(s["features"]), s["target_x"], s["target_y"])
+                   for s in data[part]) for part in PARTS]
+    return CalibrationRecording(*parts), int(data.get("grid", 4))
 
 
-def load_all_calibrations(n_features: int, older_weight: float = 0.5
-                          ) -> tuple[list[CalibrationSample], list[float]]:
-    """Every saved calibration, newest first, plus a weight per sample:
-    newest file 1.0, every older file `older_weight` (0.5).
-    Older sessions still help, but today's seat, camera and light count most.
-    Files with a different feature count (an older version) are skipped."""
-    # ponytail: every older file weighs the same; decay by age/date if old sessions start to hurt
-    samples, weights = [], []
-    for path in sorted(CALIB_DIR.glob("calibration_*.json"), reverse=True):
-        try:
-            found = load_calibration(path)
-        except (OSError, ValueError, KeyError, TypeError) as e:   # damaged or hand-edited file
-            print(f"Skipping {path.name}: can't read it ({e})")
-            continue
-        if not found or len(found[0].features) != n_features:
-            print(f"Skipping {path.name}: older calibration format, not used for training")
-            continue
-        weights += [older_weight if samples else 1.0] * len(found)   # first one kept = newest
-        samples += found
-    return samples, weights
+def load_all_calibrations() -> list[CalibrationRecording]:
+    """Every usable saved calibration, newest first (core/points_model.train weighs the newest most).
+    Damaged files and older versions' are skipped."""
+    recordings = []
+    for path in list_calibrations():
+        if calibration_usable(path):
+            recordings.append(load_calibration(path))
+        else:
+            print(f"Skipping {path.name}: an older calibration format or a damaged file, not used for training")
+    return recordings
 
 
 def list_calibrations() -> list[Path]:
@@ -146,14 +143,10 @@ def calibration_usable(path: Path) -> bool:
     """True if this version of the app can train on the file: right format and
     feature count. Other versions' files and damaged ones are listed as not usable."""
     try:
-        found = load_calibration(path)
+        rec = load_calibration(path)
     except (OSError, ValueError, KeyError, TypeError):
         return False
-    return bool(found) and len(found[0].features) == N_FEATURES
-
-
-def _parts(samples: list[CalibrationSample]) -> list[tuple[str, tuple]]:
-    return [("The dot grid", tuple(samples))]
+    return bool(rec.dots) and len(rec.dots[0].features) == N_FEATURES
 
 
 def _spread(rows: list) -> float:
@@ -177,12 +170,16 @@ def calibration_lines(path: Path) -> list[tuple[str, int | None, str | None]]:
     index (as remove_samples counts them) and its dot; a dot's summary line carries
     the dot only (= all of its samples); headings carry neither."""
     try:
-        parts = _parts(load_calibration(path))
+        rec, grid = _load(path)
     except (OSError, ValueError, KeyError, TypeError) as e:
         return [(f"Can't show this file: it was saved by a different calibration version ({e}).", None, None)]
     lines = [(f"Calibration of {file_date(path):%d %b %Y, %H:%M}", None, None)]
     n = 0
-    for name, samples in parts:
+    for part in PARTS:
+        samples = getattr(rec, part)
+        if not samples:
+            continue
+        name, size = STEP_NAMES[part], grid if part == "dots" else 0
         lines += [("", None, None), (f"{name}: {len(samples)} samples. {_range_words(samples)}", None, None)]
         by_dot: dict = {}
         for s in samples:
@@ -194,10 +191,10 @@ def calibration_lines(path: Path) -> list[tuple[str, int | None, str | None]]:
             if grouped:
                 eyes = _spread([s.features[:4] for _, s in group])
                 head = _spread([head_degrees(s.features) for _, s in group])
-                lines.append((f"{describe_target(tx, ty)}: {len(group)} sample{'s' if len(group) != 1 else ''}, "
+                lines.append((f"{describe_target(tx, ty, size)}: {len(group)} sample{'s' if len(group) != 1 else ''}, "
                               f"eyes {'steady' if eyes < 0.02 else 'wandering'} (spread {eyes:.0%}), "
                               f"head {'still' if head < 2 else 'moving'} (±{head:.0f}°)", None, key))
-            where = "" if grouped else f" ({describe_target(tx, ty)})"
+            where = "" if grouped else f" ({describe_target(tx, ty, size)})"
             lines += [(f"      #{i + 1}{where}: {describe_features(s.features)}", i, key) for i, s in group]
     return lines
 
@@ -222,13 +219,19 @@ def remove_samples(path: Path, indexes: set[int]) -> int:
     """Drop the samples numbered `indexes` (as calibration_lines counts them) and
     rewrite the file in its own format. Returns how many were dropped."""
     keep_original(path)
-    samples = load_calibration(path)
-    kept = [s for i, s in enumerate(samples) if i not in indexes]
-    if kept:
-        save_calibration(kept, path)
+    rec = load_calibration(path)
+    n, kept = 0, {}
+    for part in PARTS:
+        kept[part] = []
+        for s in getattr(rec, part):
+            if n not in indexes:
+                kept[part].append(s)
+            n += 1
+    if kept["dots"]:
+        save_calibration(CalibrationRecording(**{p: tuple(v) for p, v in kept.items()}), path)
     else:
-        remove_calibration(path)        # nothing left: the file goes too
-    return len(samples) - len(kept)
+        remove_calibration(path)        # no grid dots left: the file goes too
+    return n - sum(len(v) for v in kept.values())
 
 
 def remove_calibration(path: Path) -> Path:

@@ -49,10 +49,12 @@ class FaceLandmarker:
             self._detector = None
 
 
-    def detect(self, rgb_frame: np.ndarray) -> FrameResult:
+    def detect(self, rgb_frame: np.ndarray, timestamp_ms: int | None = None) -> FrameResult:
         # ONE timestamp per frame: MediaPipe needs it to go up on every call,
-        # and the FrameResult should carry the same time MediaPipe saw
-        timestamp_ms = self.get_last_timestamp()
+        # and the FrameResult should carry the same time MediaPipe saw.
+        # A recording being replayed passes the time its frame was taken.
+        if timestamp_ms is None:
+            timestamp_ms = self.get_last_timestamp()
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         raw = self._detector.detect_for_video(mp_image, timestamp_ms)
 
@@ -83,9 +85,12 @@ class FaceLandmarker:
         yaw = math.degrees(math.asin(max(-1.0, min(1.0, -m[2][0]))))
         pitch = math.degrees(math.atan2(m[2][1], m[2][2]))
         roll = math.degrees(math.atan2(m[1][0], m[0][0]))
+        # the matrix's last column is the head's position (translation),
+        # in the same units as MediaPipe's canonical face model: ~cm
+        x, y, z = (float(m[i][3]) for i in range(3))
         return FrameResult(timestamp_ms = timestamp_ms,
                            face_found=True,
-                           head_pose=HeadPose(yaw, pitch, roll),
+                           head_pose=HeadPose(yaw, pitch, roll, x, y, z),
                            blink_score_left=blink_score_left,
                            blink_score_right=blink_score_right,
                            landmarks = raw_landmark_lst)

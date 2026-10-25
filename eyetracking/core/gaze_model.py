@@ -5,16 +5,12 @@ input gazing features -> output gazing coordinates on screen
 Screen positions are fractions 0..1, the same as calibration. Errors are
 measured in pixels, so those functions also need the screen size.
 
-Model (ported from calibration-lab, "Models, step 1 + 2", 18 Oct 2026; the measurements
-and the why: docs/model_improvements.md): Ridge regression, a straight line (degree 1)
-by default, on the EYE features only, each frame first turned back to the calibration's
-posture with the head-rotation matrix K (core/head_correction.py). The head features
-themselves are no longer inputs: they barely move within a calibration, so a model
-given them extrapolated wildly at the next sitting (2800% of the screen on the lab's
-14 real calibrations); the corrected eye features gave 23%. On the same files a straight
-line beats the degree-2 curve both inside a sitting (interior dots held out: 11.8% vs
-13.5% of the screen) and on a new sitting (23.6% vs 26.5%); the curve bends away faster
-where the features drift. degree=2 is still there to compare.
+Model: Ridge regression, a straight line (degree 1) by default since 18 Oct
+2026, on the 6 eye features turned back to the calibration's posture
+(core/head_correction.py). Measured on 14 real calibrations (testing/bench_final.py):
+a straight line beats the degree-2 curve both inside a sitting (interior dots held
+out: 11.8% vs 13.5% of the screen) and on a new sitting (23.6% vs 26.5%); the curve
+bends away faster where the features drift. degree=2 is still there to compare.
 The ridge strength is chosen with whole DOTS held out (5 folds): a dot's ~25 frames are
 near-copies, so leaving one FRAME out (RidgeCV's default) never really hides
 a dot and picks a strength that memorises the dots (bench: 27% -> 25% error
@@ -31,15 +27,14 @@ from sklearn.model_selection import GridSearchCV, GroupKFold
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 
-from eyetracking.core.head_correction import DEFAULT_K, corrected, reference_angles
-from eyetracking.core.models import CalibrationSample
-
 ALPHAS = np.logspace(-3, 3, 7)       # ridge strengths tried (13 measured the same error for twice the time)
 DOT_FOLDS = 5                        # whole-dot folds in the strength search
 
+from eyetracking.core.models import CalibrationSample
+
 
 def _xy(samples: list[CalibrationSample]) -> tuple[np.ndarray, np.ndarray]:
-    # X = the model INPUT: one row per sample, one column per raw feature
+    # X = the model INPUT: one row per sample, one column per feature
     X = np.array([s.features for s in samples])
     # y = the right ANSWERS: one row per sample, where the dot was (samples x 2)
     y = np.array([(s.target_x, s.target_y) for s in samples])
@@ -61,37 +56,25 @@ def leave_dots_out(groups: np.ndarray):
 
 
 class GazeModel:
-    def __init__(self, regressor=None, degree: int = 1, K: np.ndarray | None = DEFAULT_K) -> None:
+    def __init__(self, regressor=None, degree: int = 1) -> None:
         # any sklearn regressor works here. The default is 3 steps in a row:
-        #   StandardScaler      every feature on the same scale
+        #   StandardScaler      every feature on the same scale, so iris ratios
+        #                       (~0..1) and head angles don't drown each other
         #   PolynomialFeatures  degree 2 adds squares and pairs (a^2, a*b) so the
         #                       model can fit a curve; degree 1 = a straight line
         #   Ridge               linear regression that keeps the weights small
         #                       (less overfitting); the strength is chosen in fit()
         #                       by leave-one-dot-out over 13 candidates
-        # K: the head-rotation matrix (core/head_correction.py) every frame's eye features
-        #    are corrected with, before the fit and before each prediction: the default, or
-        #    the calibration's own. None = the raw features, all of them, as they are.
         # To compare: GazeModel(LinearRegression()) and check the numbers.
         # ponytail: one global poly+ridge; try per-axis models or a small MLP only once you have 100s of dots
         self._regressor = regressor if regressor is not None else make_pipeline(
             StandardScaler(), PolynomialFeatures(degree, include_bias=False), Ridge())
         self._search = regressor is None
-        self._K, self._ref = K, np.zeros(3)
         self._trained = False
-
-    def _rows(self, X: np.ndarray) -> np.ndarray:
-        """What the regressor sees: the eye features at the calibration's posture (or the raw rows)."""
-        return X if self._K is None else corrected(X, self._K, self._ref)
 
     def fit(self, samples: list[CalibrationSample],
             sample_weight: Sequence[float] | None = None) -> GazeModel:
         X, y = _xy(samples)
-        if self._K is not None:
-            # the calibration's posture: its mean head angles. A constant, so the scaler absorbs it;
-            # what matters is that live frames are turned to the same posture (predict)
-            self._ref = reference_angles(samples)
-        X = self._rows(X)
         # sample_weight: how much each sample counts (newer calibrations more).
         # A pipeline must be told WHICH step gets it: the last one, the regressor
         kw = {} if sample_weight is None else {"sample_weight": np.asarray(sample_weight)}
@@ -120,14 +103,14 @@ class GazeModel:
 
     def predict(self, features: Sequence[float]) -> tuple[float, float]:
         # sklearn predicts a whole TABLE of rows at once, so one sample goes in
-        # as a table with 1 row: shape (1, n), not (n,)
-        row = self._rows(np.array([features], dtype=float))
+        # as a table with 1 row: shape (1, 4), not (4,)
+        row = np.array([features], dtype=float)
         x, y = self._regressor.predict(row)[0]   # answer is (1, 2): take row 0
         return float(x), float(y)
 
     def predict_many(self, X: np.ndarray) -> np.ndarray:
         # the whole table at once: one call instead of predict() in a loop
-        return self._regressor.predict(self._rows(np.asarray(X, dtype=float)))
+        return self._regressor.predict(X)
 
     def is_trained(self) -> bool:
         return self._trained
@@ -142,7 +125,7 @@ def mean_error_px(model: GazeModel, samples: list[CalibrationSample],
     # 0.1 across and 0.1 down are different distances
     d = (model.predict_many(X) - y) * (screen_w, screen_h)
     # straight-line distance for every sample (Pythagoras), then the average
-    # nanmean: a line model gives no point (NaN) for a line that misses the screen
+    # nanmean: the line model gives no point (NaN) for a line that misses the screen
     return float(np.nanmean(np.hypot(d[:, 0], d[:, 1])))
 
 
@@ -156,8 +139,7 @@ def leave_one_dot_out(samples: list[CalibrationSample],
     Edge/corner dots measure extrapolation, so expect them to be worst.
     `test` (default: `samples`) = which samples to score, e.g. only the newest
     session, so models trained on different data are scored the same way.
-    `make_model` (default GazeModel) builds a fresh model, e.g. one with the
-    calibration's own K, or a LineModel."""
+    `make_model` (default GazeModel) builds a fresh model, e.g. a LineModel."""
     make_model = make_model or GazeModel
     test = samples if test is None else test
     dots = sorted({(s.target_x, s.target_y) for s in test})
@@ -167,44 +149,35 @@ def leave_one_dot_out(samples: list[CalibrationSample],
         # near-copies, so testing on any of them would let the model peek
         keep = [i for i, s in enumerate(samples) if (s.target_x, s.target_y) != dot]
         model = make_model().fit([samples[i] for i in keep],
-                                 None if weights is None else [weights[i] for i in keep])
+                                None if weights is None else [weights[i] for i in keep])
         held_out = [s for s in test if (s.target_x, s.target_y) == dot]
         errors[dot] = mean_error_px(model, held_out, screen_w, screen_h)
     return errors
 
 
 if __name__ == "__main__":
-    # self-check on fake data: a smooth non-linear eye->screen map plus noise, the head turned
-    # a little differently in every frame (sd 8 degrees) and the eye features shifted by that
-    # turn exactly as DEFAULT_K says, as a real head does: the model must see through that
+    # self-check on fake data: a smooth non-linear eye->screen map plus noise.
     from eyetracking.core.calibration import point_grid
-    from eyetracking.core.features import N_FEATURES
-    from eyetracking.core.head_correction import ANGLES, DEG, EYE_FEATURES
     rng = np.random.default_rng(0)
     samples = []
     for tx, ty in point_grid(5):
         for _ in range(40):
             hx, hy = tx - 0.5, ty - 0.5
-            angles = rng.normal(0, 8, 3)
-            f = np.full(N_FEATURES, 0.5)
-            f[:4] = [hx + 0.3 * hx**2, hy + 0.2 * hx * hy, hx * 0.9, hy * 1.1]
-            f[EYE_FEATURES] += angles @ DEFAULT_K
-            f[ANGLES] = angles / DEG
-            samples.append(CalibrationSample(tuple(f + rng.normal(0, 0.01, N_FEATURES)), tx, ty))
+            f = [hx + 0.3 * hx**2, hy + 0.2 * hx * hy, hx * 0.9, hy * 1.1]
+            f = np.array(f + [0, 0, 0, 0.5, 0.5, 1.0]) + rng.normal(0, 0.01, 10)
+            samples.append(CalibrationSample(tuple(f), tx, ty))
     w, h = 1920, 1080
     model = GazeModel(degree=2).fit(samples)             # the fake map is a curve: degree 2 fits it
     fit_err = mean_error_px(model, samples, w, h)
     assert model.alpha in ALPHAS
-    interior = [s for s in samples if 0.1 < s.target_x < 0.9 and 0.1 < s.target_y < 0.9]
-    errs = leave_one_dot_out(samples, w, h, test=interior, make_model=lambda: GazeModel(degree=2))
-    print(f"train {fit_err:.0f}px, held-out interior dots {np.mean(list(errs.values())):.0f}px")
-    assert fit_err < 30 and np.mean(list(errs.values())) < 40
-    assert len(GazeModel(K=None).fit(samples).predict(samples[0].features)) == 2   # the raw path still works
+    errs = leave_one_dot_out(samples, w, h, make_model=lambda: GazeModel(degree=2))
+    inner = [e for (x, y), e in errs.items() if 0.1 < x < 0.9 and 0.1 < y < 0.9]
+    print(f"train {fit_err:.0f}px, held-out interior dots {np.mean(inner):.0f}px")
+    assert fit_err < 30 and np.mean(inner) < 40
 
     # weights: an older session where the head sat differently (eye features
     # shifted). Weighting today's session higher should fit TODAY better.
-    shift = np.zeros(N_FEATURES)
-    shift[:4] = 0.1
+    shift = np.array([0.1] * 4 + [0] * 6)
     old = [CalibrationSample(tuple(np.array(s.features) + shift), s.target_x, s.target_y)
            for s in samples]
     both, weights = samples + old, [1.0] * len(samples) + [0.5] * len(old)
