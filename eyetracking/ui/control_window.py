@@ -56,7 +56,12 @@ DEFAULTS = {
     "ball_ring": "",            # the thin ring around a still ball; "" = the theme colour
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
+    "mesh_window": True,        # the face mesh self-view while you Go Reading (ui/mesh_window.py)
+    "mesh_view": "model",       # model | face: the 3D model alone, or the mesh on your picture
+    "mesh_reveal": 2,           # seconds the mesh takes to draw itself
+    "mesh_frame": False,        # corner brackets snap onto the face when it's drawn
 }
+MESH_VIEWS = ["model", "face"]
 BALL_LOOKS = ["logo", "water", "image"]
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#E5483B", "#D32F2F", "#D81B60", "#7E57C2"]
 
@@ -1356,7 +1361,9 @@ class SettingsWindow(QWidget):
 
         self.switches = {k: Switch(t) for k, t in [("show_ball", "Show floating ball"),
                                                    ("ball_on_top", "Keep it above other windows"),
-                                                   ("hide_fullscreen", "Hide during full-screen apps")]}
+                                                   ("hide_fullscreen", "Hide during full-screen apps"),
+                                                   ("mesh_window", "Show the face mesh window"),
+                                                   ("mesh_frame", "Lock-on frame")]}
         self.ball_look, self.ball_image, self.ball_ring = "logo", "", ""
         looks = QWidget()
         lk = QHBoxLayout(looks)
@@ -1444,6 +1451,33 @@ class SettingsWindow(QWidget):
         self.camera_btn.setMenu(self.camera_menu)
         self.group("Camera", [
             self.row(I_CAMERA, "Webcam", "Used for eye tracking. Changes apply when you save", self.camera_btn),
+        ])
+        self.mesh_group = QButtonGroup(self)
+        views = QWidget()
+        vl = QHBoxLayout(views)
+        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setSpacing(8)
+        for i, text in enumerate(["3D model", "Your face"]):
+            b = CheckButton(text, "chip")
+            vl.addWidget(b)
+            self.mesh_group.addButton(b, i)
+        self.reveal = QSpinBox(minimum=1, maximum=5, alignment=Qt.AlignRight)
+        self.reveal.setButtonSymbols(QSpinBox.NoButtons)
+        self.reveal.setAccessibleName("Drawing time in seconds")
+        reveal = QWidget()
+        rl = QHBoxLayout(reveal)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
+        rl.addWidget(self.reveal)
+        rl.addWidget(label("seconds", "unit"))
+        self.group("Face mesh window", [
+            self.row(I_EYE, "Show the face mesh window", "A small self-view while you Go Reading: the camera with your "
+                     "face mesh drawing itself on, point by point", self.switches["mesh_window"]),
+            self.row(I_CAMERA, "Show", "3D model: your picture fades out once the mesh is drawn. Your face: the "
+                     "mesh stays on your picture", views),
+            self.row(I_SPARKLE, "Drawing time", "How long the mesh takes to draw itself", reveal),
+            self.row(I_FULLSCREEN, "Lock-on frame", "Corner brackets snap onto your face when it's drawn",
+                     self.switches["mesh_frame"]),
         ])
         self.content.addStretch(1)
 
@@ -1804,6 +1838,8 @@ class SettingsWindow(QWidget):
         self.set_ball_ring(values["ball_ring"])
         self.set_camera(values["camera"])
         self.words.setValue(values["summary_words"])
+        self.mesh_group.button(MESH_VIEWS.index(values["mesh_view"]) if values["mesh_view"] in MESH_VIEWS else 0).setChecked(True)
+        self.reveal.setValue(values["mesh_reveal"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
         self.set_font_choice(values["font"])
@@ -1813,7 +1849,8 @@ class SettingsWindow(QWidget):
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
         values.update(seed=self.seed, theme=self.mode, font=self.font_name, summary_words=self.words.value(),
-                      camera=self.camera, ball_look=self.ball_look, ball_image=self.ball_image, ball_ring=self.ball_ring)
+                      camera=self.camera, ball_look=self.ball_look, ball_image=self.ball_image, ball_ring=self.ball_ring,
+                      mesh_view=MESH_VIEWS[max(0, self.mesh_group.checkedId())], mesh_reveal=self.reveal.value())
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)

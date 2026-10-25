@@ -47,6 +47,7 @@ class EyeTracker:
     def __init__(self, camera_index: int | None = None) -> None:
         self.face_found = False              # set by read_features(); a blink still counts as a face
         self.last_result: FrameResult | None = None   # read_features()'s frame, before the blink rules
+        self.last_rgb = None                 # read()'s camera picture (RGB), for the face mesh window
         self._open_level: float | None = None   # the user's normal blink score with eyes open
         self._onset_ms: int | None = None    # when the lids started closing (blink coming)
         self._blink_ms: int | None = None    # last frame that was a full blink
@@ -59,7 +60,7 @@ class EyeTracker:
 
     def read(self) -> FrameResult | None:
         """One camera frame through MediaPipe. None = no frame, or no face."""
-        frame = self._camera.read_rgb()
+        frame = self.last_rgb = self._camera.read_rgb()
         if frame is None:
             return None
         try:
@@ -123,7 +124,7 @@ class FrameFeed:
         self.tracker = tracker
         self._lock = threading.Lock()
         self._n = 0                                  # frames read so far
-        self._last: tuple = (None, None, 0.0)        # (features or None, FrameResult or None, perf_counter s)
+        self._last: tuple = (None, None, 0.0, None)  # (features or None, FrameResult or None, perf_counter s, RGB picture)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="camera")
         self._thread.start()
@@ -132,24 +133,27 @@ class FrameFeed:
         while not self._stop.is_set():
             features = self.tracker.read_features()  # waits for the camera's next frame
             result = getattr(self.tracker, "last_result", None)
+            picture = getattr(self.tracker, "last_rgb", None)
             with self._lock:
-                self._n, self._last = self._n + 1, (features, result, time.perf_counter())
+                self._n, self._last = self._n + 1, (features, result, time.perf_counter(), picture)
             time.sleep(0.001 if result is not None else 0.03)   # no frame at all (a camera gone): don't spin
 
     def reader(self, part: str = "features"):
         """A get() for one user: the newest frame's `part` ("features": the features or None;
         "stamped": (features or None, when it was read: perf_counter seconds, the smoother's clock);
-        "result": the FrameResult or None; "frame": (features, FrameResult, time), all three), or
+        "result": the FrameResult or None; "frame": (features, FrameResult, time), all three;
+        "picture": (FrameResult or None, the camera's RGB picture or None)), or
         NO_FRAME when no frame came since its last call."""
         seen = [0]
 
         def get():
             with self._lock:
-                n, (features, result, t) = self._n, self._last
+                n, (features, result, t, picture) = self._n, self._last
             if n == seen[0]:
                 return NO_FRAME
             seen[0] = n
-            return {"features": features, "stamped": (features, t), "result": result, "frame": (features, result, t)}[part]
+            return {"features": features, "stamped": (features, t), "result": result, "frame": (features, result, t),
+                    "picture": (result, picture)}[part]
         return get
 
     def stop(self) -> None:

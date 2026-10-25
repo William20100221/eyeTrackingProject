@@ -42,4 +42,14 @@ w.save()
 assert w.store.value("font") == "Segoe UI Light"
 w.load(cw.DEFAULTS)
 assert qt.font().weight() == 400 and w.font_btn.text().startswith("Segoe UI  ")
+
+# Settings > Face mesh window: 3D model by default; your face, drawing time and the frame kept with Save changes
+assert w.mesh_group.checkedId() == 0 and w.switches["mesh_window"].isChecked() and not w.switches["mesh_frame"].isChecked()
+w.mesh_group.button(1).click()
+w.reveal.setValue(3)
+w.switches["mesh_frame"].set_checked_now(True)
+w.save()
+assert w.read_store()["mesh_view"] == "face" and w.read_store()["mesh_reveal"] == 3 and w.read_store()["mesh_frame"] is True
+w.load(cw.DEFAULTS)
+assert w.mesh_group.checkedId() == 0 and w.reveal.value() == 2
 print("settings layout ok")

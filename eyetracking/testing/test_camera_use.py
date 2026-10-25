@@ -3,7 +3,8 @@ Self-check for issues #11 and #2 (no webcam):  python -m eyetracking.testing.tes
 
 The app starts without opening the camera (the window is up at once, issue #2);
 the camera opens when a feature needs the gaze and closes when the last one is
-done (issue #11): calibrate -> idle -> Go Reading -> idle. A camera that fails
+done (issue #11): calibrate -> idle -> Go Reading -> idle. Go Reading opens it at once for the
+face mesh window (unless Settings turns that off), the reading's end closes both. A camera that fails
 to open leaves the app running, with the reason in the chat.
 """
 import os
@@ -65,10 +66,18 @@ app.fullscreen.close()
 pump()
 assert log == ["open", "close"] and app.tracker is None                        # done: off
 app.tick()                                                                     # idle: no frames read
-app.go_reading()
-app.ball_clicked()                                                             # the ball's eyes open: on
+app.go_reading()                                                               # the face mesh window: on
+assert log[-1] == "open" and app.camera_users == {"mesh"} and app.mesh.isVisible()
+app.ball_clicked()                                                             # the ball's eyes open: still on
+assert log.count("open") == 2 and app.camera_users == {"mesh", "screen"}
+app.ball_clicked()                                                             # eyes closed: off, window gone
+assert log[-1] == "close" and app.tracker is None and not app.camera_users and not app.mesh.isVisible()
+app.apply_settings({**app.control.read_store(), "mesh_window": False})         # Settings: no face mesh window
+app.go_reading()                                                               # camera stays off until the click
+assert log[-1] == "close" and app.tracker is None and not app.mesh.isVisible()
+app.ball_clicked()
 assert log[-1] == "open" and app.camera_users == {"screen"}
-app.ball_clicked()                                                             # eyes closed: off
+app.ball_clicked()
 assert log[-1] == "close" and app.tracker is None and not app.camera_users
 
 fail = True                                                                    # a camera that can't open

@@ -63,6 +63,7 @@ from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_f
 from eyetracking.ui.control_window import (app_icon, TEXT_FONTS, SettingsWindow, busy, model_label, pick_ai,
                                           pick_camera, run_busy)
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
+from eyetracking.ui.mesh_window import MeshWindow
 
 TICK_MS = 16             # asks for the newest camera frame (read on its own thread) at the screen's pace
 SECONDS_PER_WORD = 0.1   # gaze time a paragraph needs per word to count as read
@@ -255,6 +256,7 @@ class App(QObject):
         self.cursor = GazeCursor()
         self.dwell = DwellController(self.cursor)
         self.background = Background()
+        self.mesh = MeshWindow()                  # the face mesh self-view while you Go Reading
 
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
@@ -329,6 +331,7 @@ class App(QObject):
         self.ball.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, values["ball_on_top"])
         self.ball.setVisible(self.show_ball and self.fullscreen is None)   # setWindowFlag hides it
         self.summary_words = values["summary_words"]
+        self.mesh_options = values                # Settings > Face mesh window: used at the next Go Reading
         self.ball.set_look(values["ball_look"], values["ball_image"], values["ball_ring"] or values["seed"])
         if values["camera"] != self.camera:
             self.camera = values["camera"]
@@ -552,8 +555,20 @@ class App(QObject):
     # ---- reading from the screen (Go Reading) ----------------------------
     def go_reading(self) -> None:
         """Hide the window and lock the ball: click = eyes open (recording), click = eyes closed (summary)."""
+        self._start_mesh()                        # first: the camera opening shows in the window
         self.control.hide()
         self.ball.set_locked(True)
+
+    def _start_mesh(self) -> None:
+        """The face mesh window, on the camera, until the reading ends (Settings > Face mesh window)."""
+        o = self.mesh_options
+        if self.mouse or not o["mesh_window"] or self.mesh.isVisible() or not self._use_camera("mesh"):
+            return
+        self.mesh.start(self._frames("picture"), o["mesh_view"] == "face", o["mesh_reveal"], o["mesh_frame"])
+
+    def _stop_mesh(self) -> None:
+        self.mesh.stop()
+        self._release_camera("mesh")
 
     def ball_clicked(self) -> None:
         if not self.ball.locked:
@@ -578,6 +593,7 @@ class App(QObject):
         if self.reader is not None:
             self.stop_reading()
         self.ball.set_locked(False)
+        self._stop_mesh()
         if page is None:
             self.control.show_last()
         else:
@@ -596,6 +612,7 @@ class App(QObject):
     def stop_reading(self) -> None:
         """Eyes closed: stop recording; the AI summarises what was missed on the page(s) read."""
         self._release_camera("screen")
+        self._stop_mesh()
         self.capture_timer.stop()
         self.ball.eyes_open = False
         self.debug.hide()
@@ -667,7 +684,7 @@ class App(QObject):
         return gaze.x() * ratio, gaze.y() * ratio
 
     def _own_windows(self) -> set[int]:
-        return {int(w.winId()) for w in (self.ball, self.cursor, self.debug, self.control)}
+        return {int(w.winId()) for w in (self.ball, self.cursor, self.debug, self.control, self.mesh)}
 
     # ---- full-screen windows that read the camera themselves -------
     def _open_fullscreen(self, window: QWidget) -> None:
