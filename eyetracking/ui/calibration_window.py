@@ -1,9 +1,15 @@
 """
-Calibration page: a grid of dots, one at a time, full screen (PySide6).
+Calibration page, full screen (PySide6): the testers' best model, "Points + Random 4x4"
+(ported from calibration-lab's calibration window, 25 Oct 2026), in one sitting:
 
-Only drawing and timing live here. The dot bookkeeping is in
-core/calibration.py, the camera is in services/tracker.py, and a finished
-camera run is saved to data/ by services/storage.py.
+  intro -> 1. 14 still dots along a line across, then down (head still)
+        -> 2. the head step: eyes on the centre dot, the head moves as far as the bar asks
+        -> 3. the 4x4 grid, in a new random order (head still) -> done
+
+Only drawing and timing live here. What each step means is in core/calibration.py (the dot
+bookkeeping with its blink lookback, the head step with its gauge, the head-still rule); the
+camera is in services/tracker.py; the app saves the recording (services/storage.py) and trains
+on it (core/points_model.py).
 
 Run from the project root, with your webcam:
 
@@ -13,55 +19,59 @@ or with FAKE features from your mouse position, so no camera is needed:
 
     python -m eyetracking.ui.calibration_window --mouse
 
-Space starts, Space again pauses / carries on (as often as you like),
-Esc leaves at any time. Screen positions are stored as fractions 0..1
-(x across, y down), so they work on any screen size.
+Space starts, Space again pauses / carries on (as often as you like). Esc leaves at any
+time; once samples are collected it pauses and asks first, because nothing is saved if
+you leave (No is the default). In steps 1 and 3 a frame whose head turned more than 3 degrees
+from the dot's first frame is left out ("keep your head still"), and a dot that lost frames to
+blinks waits for more ("keep looking..."). Screen positions are fractions 0..1 (x across, y down).
 """
 from __future__ import annotations
 
 import sys
 from typing import Callable, Sequence
 
-from PySide6.QtCore import QElapsedTimer, QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
-from eyetracking.core.calibration import CalibrationSession, point_grid
-from eyetracking.core.models import NO_FRAME, CalibrationSample
-from eyetracking.services.storage import save_calibration
-from eyetracking.services.tracker import EyeTracker
+from eyetracking.core.calibration import GRID, CalibrationSession, HeadStep, HeadStill, random_grid, sweep_points
+from eyetracking.core.models import NO_FRAME, CalibrationRecording
 
+SETTLE_MS = 1000       # dot appears, eyes travel to it: DON'T record yet
+COLLECT_MS = 1500      # eyes resting on the dot: record features
+DOT_SAMPLES = 25       # good frames each dot needs; a blink costs frames, so the dot waits longer
+MAX_COLLECT_MS = 4000  # ...but never longer than this (face lost, eyes closed for ages)
+TICK_MS = 16           # the ring shrinks at the screen's pace; each camera frame (~30 a second) is recorded once
 
-# =====================================================================
-# Draws the current dot and runs the timing. It does NOT know about the
-# camera: it just calls `get_features()` and stores whatever comes back.
-# =====================================================================
-
-SETTLE_MS = 1000   # dot appears, eyes travel to it: DON'T record yet
-COLLECT_MS = 1500  # eyes resting on the dot: record features
-TICK_MS = 16       # the ring shrinks at the screen's pace; each camera frame (~30 a second) is recorded once
-
-RING_START = 40    # px: ring radius when a dot first appears
-RING_END = 12      # px: ring radius once it has shrunk onto the dot
+RING_START = 40        # px: ring radius when a dot first appears
+RING_END = 12          # px: ring radius once it has shrunk onto the dot
+GREEN, AMBER, GREY = QColor(80, 220, 120), QColor(235, 149, 46), QColor(120, 120, 120)
+STEPS = ("Look at each dot along a line across, then down the middle: 14 dots. Keep your head still.",
+         "Keep looking at the centre dot and move your head as far as the bar asks: turn, nod, tilt, lean.",
+         f"Look at each dot until it moves on, head still: {GRID * GRID} dots in random order.")
 
 
 class CalibrationWindow(QWidget):
-    finished = Signal(list)   # list[CalibrationSample], once all dots are done
-    cancelled = Signal()      # user pressed Esc
+    finished = Signal(object)   # a CalibrationRecording, once every step is done
+    cancelled = Signal()        # Esc
 
-    def __init__(self,
-                 get_features: Callable[[], Sequence[float] | None],
-                 targets: Sequence[tuple[float, float]] | None = None,
-                 parent: QWidget | None = None) -> None:
+    def __init__(self, get_features: Callable[[], Sequence[float] | None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._get_features = get_features
-        self._session = CalibrationSession(targets or point_grid())
-        self._phase = "intro"          # intro -> settle -> collect -> ... -> done
+        self._line = CalibrationSession(sweep_points())       # step 1
+        # step 2 also goes through a CalibrationSession, for its blink handling: one long "dot"
+        self._head = CalibrationSession([(0.5, 0.5)])
+        self._session = CalibrationSession(random_grid())     # step 3
+        self._head_step = HeadStep()                # which move, how far the head is (the gauge)
+        self._still = HeadStill()                   # the head must not move while the eyes work
+        self._head_moved = False
+        self._active = self._line                   # whose dots settle / collect runs on now
+        self._prompt = ""                           # the head step's instruction
+        self._phase = "intro"                       # intro -> (settle -> collect) x 14 -> head -> (settle -> collect) x 16 -> done
         self.paused = False
-        self._clock = QElapsedTimer()  # time spent in the current phase
+        self._clock = QElapsedTimer()               # time spent in the current phase
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-
         self.setWindowTitle("Calibration")
         self.setCursor(Qt.CursorShape.BlankCursor)  # a visible mouse pulls the eye
 
@@ -70,6 +80,7 @@ class CalibrationWindow(QWidget):
         if self._phase != "intro":
             return
         self._phase = "settle"
+        self._still.reset()
         self._clock.start()
         self._timer.start(TICK_MS)
         self.update()
@@ -81,20 +92,43 @@ class CalibrationWindow(QWidget):
             elif self._phase != "done":
                 self.toggle_pause()
         elif event.key() == Qt.Key.Key_Escape:
+            n = self.collected()
+            if n and self._phase != "done":       # samples would be lost: ask first, paused meanwhile
+                if not self.paused:
+                    self.toggle_pause()
+                if not self.confirm_leave(n):
+                    return                        # stays paused: Space carries on
             self._timer.stop()
             self.cancelled.emit()
             self.close()
         else:
             super().keyPressEvent(event)
 
+    def collected(self) -> int:
+        """How many samples this calibration has kept so far (every step)."""
+        return sum(len(s.samples()) for s in (self._line, self._head, self._session))
+
+    def confirm_leave(self, n: int) -> bool:
+        """Esc with samples collected: are you sure? Nothing is saved if you leave."""
+        box = QMessageBox(QMessageBox.Icon.Question, "Leave the calibration?",
+                          f"{n} samples have been collected. If you leave now they won't be saved.\n\n"
+                          "Leave anyway?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+        box.setDefaultButton(QMessageBox.StandardButton.No)   # Enter / a second Esc keeps you in
+        box.setCursor(Qt.CursorShape.ArrowCursor)              # the page hides the mouse; the box needs it
+        return box.exec() == QMessageBox.StandardButton.Yes
+
     def toggle_pause(self) -> None:
         self.paused = not self.paused
         if self.paused:
             self._timer.stop()
         else:
-            # the eyes wandered off while paused: travel back to this dot before recording again
-            # (frames already recorded for it are kept)
-            self._phase = "settle"
+            # the eyes wandered off while paused. The head step starts over;
+            # a dot goes back to settle (its frames are kept)
+            if self._phase == "head":
+                self._head = CalibrationSession([(0.5, 0.5)])
+                self._head_step = HeadStep()
+            else:
+                self._phase = "settle"
             self._clock.restart()
             self._timer.start(TICK_MS)
         self.update()
@@ -105,26 +139,50 @@ class CalibrationWindow(QWidget):
         # A webcam keeps a few frames buffered: if we stop reading while the
         # eye travels, the first "collect" frames could be those stale ones.
         # From the camera's thread (app.py) most ticks come before the next frame: NO_FRAME. The
-        # ring moves on with the clock, and nothing is recorded, as for a skipped frame.
+        # ring moves on with the clock, but nothing is recorded, and it isn't a blink: `fresh`.
         features = self._get_features()
-        if features is NO_FRAME:
+        fresh = features is not NO_FRAME
+        if not fresh:
             features = None
         elapsed = self._clock.elapsed()
 
-        if self._phase == "settle" and elapsed >= SETTLE_MS:
+        if self._phase == "head":                     # step 2: centre dot, the head moves
+            step = self._head_step.feed(features, elapsed)
+            if step is None:
+                self._head.next_target()              # step over: flush the session; on to the grid
+                self._active, self._phase = self._session, "settle"
+                self._clock.restart()
+            else:
+                self._prompt, record = step
+                if record and fresh:
+                    self._head.add_sample(features)
+
+        elif self._phase == "settle" and elapsed >= SETTLE_MS:
             self._phase = "collect"
             self._clock.restart()
+            self._still.reset()                       # the head's place for this dot: its first frame
 
-        elif self._phase == "collect":
-            if features is not None:   # None = no face or a blink: skip that frame
-                self._session.add_sample(features)
-
-            if elapsed >= COLLECT_MS:
-                self._session.next_target()
-                if self._session.is_complete():
-                    self._finish()
-                    return
-                self._phase = "settle"
+        elif self._phase == "collect":                # a still dot: record it
+            # a head that turned since the dot's first frame: the frame is left out and
+            # the dot waits (like for a blink), with "keep your head still" under it.
+            # None (no face / blink / eyes reopening) also drops the frames held
+            # back just before it: see CalibrationSession.add_sample
+            if fresh:
+                self._head_moved = features is not None and self._still.moved(features)
+                if not self._head_moved:
+                    self._active.add_sample(features)
+            # move on after COLLECT_MS once the dot has enough good frames;
+            # blinks extend the dot, up to MAX_COLLECT_MS
+            enough = self._active.current_count() >= DOT_SAMPLES
+            if (elapsed >= COLLECT_MS and enough) or elapsed >= MAX_COLLECT_MS:
+                self._active.next_target()
+                if self._active.is_complete():
+                    if self._active is self._session:   # the grid is done: every step is
+                        self._finish()
+                        return
+                    self._phase = "head"              # the line dots are done: on to the head step
+                else:
+                    self._phase = "settle"
                 self._clock.restart()
 
         self.update()   # ask Qt to repaint (it calls paintEvent)
@@ -134,100 +192,139 @@ class CalibrationWindow(QWidget):
         self._phase = "done"
         self.update()
         # the window doesn't close itself: whoever listens to `finished` decides
-        self.finished.emit(self._session.samples())
+        self.finished.emit(CalibrationRecording(tuple(self._line.samples()), tuple(self._head.samples()),
+                                                tuple(self._session.samples())))
 
     # ---- drawing ---------------------------------------------------
+    def _text(self, p: QPainter, size: int, colour: QColor = QColor("white")) -> None:
+        font = p.font()
+        font.setPointSize(size)
+        p.setFont(font)
+        p.setPen(colour)
+
+    def _draw_gauge(self, p: QPainter, centre: QPointF) -> None:
+        """Head step: a bar under the dot showing how far the head has moved, the two
+        targets (green once reached) and where the head is now."""
+        g = self._head_step.gauge()
+        if g is None:
+            return
+        value, target, too_far, reached = g
+        w, y0 = 360, int(centre.y()) + 70
+        x0 = int(centre.x()) - w // 2
+        p.setPen(QPen(QColor(90, 90, 90), 2))
+        p.drawLine(x0, y0, x0 + w, y0)                       # the bar: -too far .. +too far
+        for sign, hit in ((-1, reached[0]), (1, reached[1])):
+            tx = int(centre.x() + sign * target / too_far * w / 2)
+            p.setPen(QPen(GREEN if hit else QColor(160, 160, 160), 3))
+            p.drawLine(tx, y0 - 10, tx, y0 + 10)             # a target mark
+        vx = int(centre.x() + max(-1.0, min(1.0, value / too_far)) * w / 2)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("white"))
+        p.drawEllipse(QPointF(vx, y0), 6, 6)                 # the head now
+        self._text(p, 12, QColor(160, 160, 160))
+        p.drawText(QRectF(x0, y0 + 12, w, 30), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextDontClip,
+                   "move until both marks turn green" if not all(reached) else "good, keep going")
+
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.fillRect(self.rect(), QColor("black"))
 
         if self._phase in ("intro", "done"):
-            text = ("Look at each dot until it moves on.\n"
-                    "Keep your head still.\n\nPress Space to start, Space again to pause,\nEsc to leave at any time."
-                    if self._phase == "intro" else "Calibration done.")
-            font = p.font()
-            font.setPointSize(18)
-            p.setFont(font)
-            p.setPen(QColor("white"))
+            self._text(p, 18)
+            if self._phase == "done":
+                text = "Calibration done."
+            else:
+                steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(STEPS))
+                text = (f"Calibration: three steps, about two minutes\n\n{steps}\n\n"
+                        "Press Space to start, Space again to pause,\nEsc to leave at any time.")
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
             return
 
-        x, y = self._session.current_target()
-        centre = QPointF(x * self.width(), y * self.height())
-
         if self.paused:
-            font = p.font()
-            font.setPointSize(18)
-            p.setFont(font)
-            p.setPen(QColor("white"))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                       "Paused.\n\nSpace to carry on, Esc to leave.")
-            p.setPen(QPen(QColor(90, 90, 90), 3))     # the dot you'll go back to
-            p.drawEllipse(centre, RING_END, RING_END)
+            x, y = (0.5, 0.5) if self._phase == "head" else self._active.current_target()
+            self._text(p, 18)
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Paused.\n\nSpace to carry on, Esc to leave.")
+            p.setPen(QPen(QColor(90, 90, 90), 3))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QPointF(x * self.width(), y * self.height()), RING_END, RING_END)   # the dot you'll go back to
             return
 
+        if self._phase == "head":                     # the centre dot + an instruction + the gauge
+            centre = QPointF(0.5 * self.width(), 0.5 * self.height())
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(GREEN)
+            p.drawEllipse(centre, 10, 10)
+            self._text(p, 14, QColor(200, 200, 200))
+            p.drawText(self.rect().adjusted(0, int(centre.y()) + 30, 0, 0),
+                       Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._prompt)
+            self._draw_gauge(p, centre)
+            self._text(p, 12, GREY)
+            p.drawText(20, 34, "Step 2 of 3: the head     Space: pause     Esc: leave")
+            return
+
+        x, y = self._active.current_target()
+        centre = QPointF(x * self.width(), y * self.height())
         if self._phase == "settle":
             # ring shrinks onto the dot: pulls the eye to its exact centre
             t = min(1.0, self._clock.elapsed() / SETTLE_MS)
-            radius = RING_START - (RING_START - RING_END) * t
-            colour = QColor("white")
+            radius, colour = RING_START - (RING_START - RING_END) * t, QColor("white")
         else:
-            radius = RING_END
-            colour = QColor(80, 220, 120)   # green = recording
-
+            radius, colour = RING_END, GREEN           # green = recording
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(colour, 3))
         p.drawEllipse(centre, radius, radius)
-
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(colour)
         p.drawEllipse(centre, 4, 4)
 
-        n, total = self._session.progress()
-        font = p.font()
-        font.setPointSize(12)
-        p.setFont(font)
-        p.setPen(QColor(120, 120, 120))
-        p.drawText(20, 34, f"Dot {n} / {total}     Space: pause     Esc: leave")
+        if self._phase == "collect" and self._head_moved:
+            self._text(p, 12, AMBER)
+            p.drawText(QRectF(centre.x() - 120, centre.y() + 22, 240, 24), Qt.AlignmentFlag.AlignCenter,
+                       "keep your head still")
+        elif self._phase == "collect" and self._clock.elapsed() > COLLECT_MS:
+            self._text(p, 12, GREEN)                      # extended because of blinks: say why the dot stays
+            p.drawText(QRectF(centre.x() - 100, centre.y() + 22, 200, 24), Qt.AlignmentFlag.AlignCenter,
+                       "keep looking...")
+
+        n, total = self._active.progress()
+        step = "Step 1 of 3: line dot" if self._active is self._line else "Step 3 of 3: dot"
+        self._text(p, 12, GREY)
+        p.drawText(20, 34, f"{step} {n} / {total}     Space: pause     Esc: leave")
 
 
 # =====================================================================
 # RUNNER: real camera by default, or `--mouse` to test the page alone
 # =====================================================================
 
-def fake_features_from_mouse() -> tuple[float, float]:
-    """Stand-in for real eye features: the mouse position as 0..1 fractions."""
+def fake_features_from_mouse() -> tuple[float, ...]:
+    """Stand-in for real eye features: the mouse position as 0..1 fractions where the iris numbers go,
+    a still head ~60 cm away, so the head-still rule and the head step have numbers to read."""
     screen = QApplication.primaryScreen().geometry()
     pos = QCursor.pos()
-    return pos.x() / screen.width(), pos.y() / screen.height()
+    x, y = pos.x() / screen.width(), pos.y() / screen.height()
+    return (x, x, y, y, 0.0, 0.0, 0.0, 0.0, 0.0, -60.0, 0.0, 0.0)
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
+    from eyetracking.services.storage import save_calibration
+    from eyetracking.services.tracker import EyeTracker
 
+    app = QApplication(sys.argv)
     if "--mouse" in sys.argv:
-        tracker = None
-        get_features = fake_features_from_mouse
+        tracker, get_features = None, fake_features_from_mouse
     else:
         tracker = EyeTracker()             # asks which camera, in the console
         get_features = tracker.read_features
+    window = CalibrationWindow(get_features)
 
-    window = CalibrationWindow(get_features=get_features)
-
-    def on_finished(samples: list[CalibrationSample]) -> None:
-        print(f"Collected {len(samples)} samples")
-        for tx, ty in point_grid():
-            count = sum(1 for s in samples if (s.target_x, s.target_y) == (tx, ty))
-            print(f"  dot ({tx:.2f}, {ty:.2f}): {count} samples")
-
+    def on_finished(rec: CalibrationRecording) -> None:
+        print(f"{len(rec.sweep)} line-dot frames, {len(rec.head)} head frames, {len(rec.dots)} dot samples")
         if tracker is None:
             print("--mouse mode: fake data, not saved")
-        elif samples:
-            print(f"Saved to {save_calibration(samples)}")
-        else:
-            print("No samples (was your face in view?), nothing saved")
-        QTimer.singleShot(800, window.close)   # show "done" briefly, then close
+        elif rec.dots:
+            print(f"Saved to {save_calibration(rec)}")
+        QTimer.singleShot(800, window.close)
 
     window.finished.connect(on_finished)
     window.showFullScreen()
@@ -235,7 +332,7 @@ def main() -> int:
         return app.exec()
     finally:
         if tracker is not None:
-            tracker.close()                # camera light off, MediaPipe freed
+            tracker.close()
 
 
 if __name__ == "__main__":

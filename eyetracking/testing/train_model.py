@@ -1,46 +1,38 @@
 """
-Train on the saved calibrations and print how accurate the model is.
+Train the gaze model on the saved calibrations and print how it did.
 
     python -m eyetracking.testing.train_model
 
-Compares two models, both scored on the NEWEST session's dots, each dot
-held out (leave-one-dot-out):
-    newest only    trained on the newest calibration
-    all, weighted  trained on every calibration, the newest weighted most
-data/ is ignored by git, so every branch is measured on the same data.
+For every calibration: does it pass the quality check (core/quality.py), and if not, why.
+Then the model (core/points_model.py, Points + Random 4x4) and its mean error on the newest
+calibration's own dots, in pixels. data/ is ignored by git, so every branch is measured on the same data.
 """
+import numpy as np
 from PySide6.QtGui import QGuiApplication
 
-from eyetracking.core.features import N_FEATURES
-from eyetracking.core.gaze_model import GazeModel, leave_one_dot_out, mean_error_px
-from eyetracking.services.storage import load_all_calibrations
+from eyetracking.core.points_model import kept_recordings, train
+from eyetracking.services.storage import list_calibrations, load_all_calibrations
 
 
 def main() -> None:
-    samples, weights = load_all_calibrations(N_FEATURES)
-    if not samples:
+    recordings = load_all_calibrations()
+    if not recordings:
         print("No calibration with the current features yet: run the calibration window first")
         return
-    newest = samples[:weights.count(1.0)]     # newest first, and only the newest has weight 1.0
-    print(f"{len(samples)} samples from all calibrations; "
-          f"newest: {len(newest)} samples, {N_FEATURES} features each")
-
+    kept, skipped = kept_recordings(recordings)
+    print(f"{len(list_calibrations())} calibration files, {len(recordings)} readable, {len(kept)} pass the check")
+    for why in skipped:
+        print(f"  not used: {why}")
+    model, n = train(recordings)
+    if model is None:
+        return
     # the dots were placed using Qt's screen size, so measure with the same size
-    app = QGuiApplication([])
-    size = app.primaryScreen().size()
+    size = QGuiApplication([]).primaryScreen().size()
     w, h = size.width(), size.height()
-    print(f"screen: {w} x {h}")
-
-    model = GazeModel().fit(samples, weights)
-    print(f"\nTested on the SAME dots it trained on: {mean_error_px(model, newest, w, h):.0f} px")
-
-    only = leave_one_dot_out(newest, w, h)
-    both = leave_one_dot_out(samples, w, h, weights, test=newest)
-    print("Each dot tested by a model that never saw it:   newest only | all, weighted")
-    for dot in only:
-        print(f"  dot ({dot[0]:.2f}, {dot[1]:.2f}): {only[dot]:5.0f} px | {both[dot]:5.0f} px")
-    print(f"  average:            {sum(only.values()) / len(only):5.0f} px | "
-          f"{sum(both.values()) / len(both):5.0f} px")
+    err = [np.hypot((p[0] - s.target_x) * w, (p[1] - s.target_y) * h)
+           for s in kept[0].dots if (p := model.predict(s.features)) is not None]
+    print(f"Trained on {n} samples, head turns corrected with {model.k_source}")
+    print(f"Mean error on the newest calibration's own dots: {np.mean(err):.0f} px (screen {w} x {h})")
 
 
 if __name__ == "__main__":

@@ -150,15 +150,14 @@ def run(seconds: float, camera: int, mouse: bool) -> tuple[list[Sample], Reading
     W, H = ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
     tracker, model, smoother = None, None, None
     if not mouse:
-        from eyetracking.core.features import N_FEATURES
-        from eyetracking.core.gaze_model import GazeModel
+        from eyetracking.core.points_model import train
         from eyetracking.core.smoothing import GazeSmoother
         from eyetracking.services.storage import load_all_calibrations
         from eyetracking.services.tracker import EyeTracker
-        samples_, weights = load_all_calibrations(N_FEATURES)   # as App._load_model
-        if not samples_:
+        model, _ = train(load_all_calibrations())           # as App._load_model
+        if model is None:
             raise SystemExit("No calibration yet: calibrate in the app first (or use --mouse).")
-        model, smoother = GazeModel().fit(samples_, weights), GazeSmoother()
+        smoother = GazeSmoother()
         tracker = EyeTracker(camera)
     reader, samples, lines, hwnd = ReadingTracker(), [], [], 0
     pool, job, last_capture, point = ThreadPoolExecutor(1), None, -1e9, None

@@ -26,8 +26,7 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from eyetracking.core.calibration import point_grid
-from eyetracking.core.features import N_FEATURES
-from eyetracking.core.gaze_model import GazeModel
+from eyetracking.core.points_model import train
 from eyetracking.core.models import NO_FRAME
 from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services.storage import load_all_calibrations, load_calibration, save_gaze_check
@@ -199,16 +198,11 @@ def main() -> int:
     else:
         # one file if given, otherwise every saved calibration, the newest weighted most
         files = [a for a in sys.argv[1:] if not a.startswith("--")]
-        if files:
-            samples, weights = load_calibration(Path(files[0])), None
-        else:
-            samples, weights = load_all_calibrations(N_FEATURES)
-        if not samples:
-            print("No calibration saved yet: run the calibration window first")
+        model, n = train([load_calibration(Path(files[0]))] if files else load_all_calibrations())
+        if model is None:
+            print("No usable calibration saved yet: run the calibration window first")
             return 1
-
-        model = GazeModel().fit(samples, weights)
-        print(f"Trained on {len(samples)} samples")
+        print(f"Trained on {n} samples, head turns corrected with {model.k_source}")
         tracker = EyeTracker()             # asks which camera, in the console
         smoother = GazeSmoother()          # the 1-euro filter on the live point, as in the app
 

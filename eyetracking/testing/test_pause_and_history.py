@@ -5,7 +5,8 @@ Self-check (no webcam):  python -m eyetracking.testing.test_pause_and_history
    Space carries on (back to "settle" for the same dot), as often as you like;
    Esc leaves at any time
 2. Gaze data: usable or not (format + feature count); disable / enable (data/disabled/); a calibration in words, per dot;
-   removing samples or the whole file (the original kept in data/trash), "#n came from dot (c, r) of the 5x5 grid"
+   removing samples or the whole file (the original kept in data/trash), "#n came from dot (c, r) of the 4x4 grid";
+   a simulated person's three-step calibration saved, read back and trained on (Points + Random 4x4)
 4. One folder per kind of data, older files moved in; gaze-check and blink-score files in words
 3. History: a reading's AI results (summary, questions, answers, scores) are saved and listed
 """
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import QApplication
 import eyetracking.services.storage as storage
 from eyetracking.core.calibration import describe_target, point_grid
 from eyetracking.core.features import N_FEATURES
+from eyetracking.core.models import CalibrationRecording
 from eyetracking.ui.calibration_window import CalibrationWindow
 
 qt = QApplication([])
@@ -53,10 +55,10 @@ assert left and not window._timer.isActive()
 assert describe_target(*point_grid()[1]) == "dot (2, 1) of the 5x5 grid"      # 2nd dot = column 2, row 1
 assert describe_target(0.43, 0.61) == "the point 43% across, 61% down"
 from eyetracking.core.models import CalibrationSample
-x, y = point_grid()[1]
-path = storage.save_calibration([CalibrationSample((0.1, 0.2) + (0.0,) * (N_FEATURES - 2), x, y)] * 2)
+x, y = point_grid(4)[1]
+path = storage.save_calibration(CalibrationRecording((), (), (CalibrationSample((0.1, 0.2) + (0.0,) * (N_FEATURES - 2), x, y),) * 2))
 text = storage.calibration_text(path)
-assert "dot (2, 1) of the 5x5 grid: 2 samples" in text and "#2: eyes: iris 10% across" in text, text
+assert "dot (2, 1) of the 4x4 grid: 2 samples" in text and "#2: eyes: iris 10% across" in text, text
 assert storage.list_calibrations() == [path] and storage.calibration_usable(path)
 broken = storage.CALIB_DIR / "calibration_2026-01-01_000000.json"
 broken.write_text("{}")
@@ -88,11 +90,34 @@ assert storage.reading_messages(reading) == [("Heat moves.", False), ("Question 
                                              ("Score 7/10. Close.\nModel answer: Because.", False),
                                              ("Question 2: How?", False)], storage.reading_messages(reading)
 try:                                                            # an empty calibration is never written
-    storage.save_calibration([])
+    storage.save_calibration(CalibrationRecording((), (), ()))
     raise AssertionError("an empty calibration was saved")
 except ValueError:
     pass
 assert storage.list_calibrations() == [broken]
+# a simulated person (core/line_model.features_for) through the three steps: saved, in words, trained on
+import numpy as np
+from eyetracking.core.calibration import sweep_points
+from eyetracking.core.line_model import ScreenGeometry, features_for
+from eyetracking.core.points_model import train
+rng, screen = np.random.default_rng(2), ScreenGeometry(27.7, 18.9)
+look = lambda t, n, sd=1.0: tuple(CalibrationSample(features_for(screen, t, [rng.normal(0, 2 * sd), rng.normal(0, 2 * sd),
+                                  rng.normal(0, sd), 0, -5, -65], (2, -1), 0.9, rng), *t) for _ in range(n))
+rec = CalibrationRecording(sum((look(t, 20) for t in sweep_points()), ()), look((0.5, 0.5), 150, 6),
+                           sum((look(t, 25) for t in point_grid(4)), ()))
+person = storage.save_calibration(rec)
+assert storage.load_calibration(person) == rec and storage.calibration_usable(person)
+text = storage.calibration_text(person)
+assert all(step in text for step in storage.STEP_NAMES.values()) and "of the 4x4 grid: 25 samples" in text
+model, n = train(storage.load_all_calibrations())                              # the old v1 'broken' file is skipped
+assert model is not None and model.k_source == "your own head step" and n > 400, (model, n)
+assert storage.remove_samples(person, set(range(len(rec.sweep)))) == len(rec.sweep)     # step 1 out, the rest kept
+assert storage.load_calibration(person).sweep == () and storage.load_calibration(person).dots == rec.dots
+v1 = storage.CALIB_DIR / "calibration_2026-01-02_000000.json"                 # this app's files before the port
+v1.write_text('{"format": "gaze-calibration-v1", "samples": [{"features": [0.5, 0.5], "target_x": 0.5, "target_y": 0.5}]}')
+assert not storage.calibration_usable(v1) and "Can't show this file" in storage.calibration_text(v1)
+for p in (person, v1):
+    storage.remove_calibration(p)
 # ---- 4. one folder per kind of data; older loose files are moved in; csv files in words
 loose = tmp / "gaze_check_2026-01-02_000000.csv"
 loose.write_text("index,x,y\n0,0.5,0.5\n")

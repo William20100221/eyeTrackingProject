@@ -8,7 +8,7 @@ The whole app, wired together.
 The main window (ui/control_window.py) has three tabs:
     Chat         replies, quiz; "Go Reading" closes the window and locks the ball
     Testing      sample text, gaze check, saved gaze data (active / not usable)
-    Calibration  25 dots, saves the data, retrains the gaze model
+    Calibration  14 line dots, the head step, 16 random dots (core/calibration.py), saves, retrains the gaze model
     Settings     camera, AI key, theme
 The camera is on only while something uses the gaze (calibration, the gaze
 check, the sample text, Go Reading with the ball's eyes open), then off again
@@ -42,9 +42,8 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from eyetracking.core.features import N_FEATURES
-from eyetracking.core.gaze_model import GazeModel
-from eyetracking.core.models import NO_FRAME
+from eyetracking.core.points_model import TrainedModel, kept_recordings, train
+from eyetracking.core.models import NO_FRAME, CalibrationRecording
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services import reading_ai
@@ -462,14 +461,14 @@ class App(QObject):
         self._show_window(self.control.settings_page)
 
     # ---- gaze ------------------------------------------------------
-    def _load_model(self) -> GazeModel | None:
-        """Train on every saved calibration, the newest weighted most."""
+    def _load_model(self) -> TrainedModel | None:
+        """Train the testers' best model, Points + Random 4x4 (core/points_model.py), on every saved
+        calibration that passes its quality check, the newest weighted most."""
         self.samples_used = 0
         if self.mouse:
             return None
-        samples, weights = load_all_calibrations(N_FEATURES)
-        self.samples_used = len(samples)
-        return GazeModel().fit(samples, weights) if samples else None
+        model, self.samples_used = train(load_all_calibrations())
+        return model
 
     def _retrain(self) -> None:
         """Gaze data was removed in the Practice tab: train again on what is left. Asked while other slow
@@ -486,7 +485,8 @@ class App(QObject):
             return "Mouse mode: the mouse plays your eyes."
         if self.model is None:
             return "No calibration yet: open the Calibration tab first."
-        return f"Gaze model trained on {self.samples_used} samples, the newest calibration counting most."
+        return (f"Gaze model trained on {self.samples_used} samples, the newest calibration counting most, "
+                f"head turns corrected with {self.model.k_source}.")
 
     def predict(self, features) -> tuple[float, float] | None:
         """Eye features -> (x, y) screen fractions, or None."""
@@ -688,17 +688,23 @@ class App(QObject):
         window.finished.connect(lambda samples: self._calibrated(window, samples))
         self._open_fullscreen(window)
 
-    def _calibrated(self, window: CalibrationWindow, samples: list) -> None:
+    def _calibrated(self, window: CalibrationWindow, rec: CalibrationRecording) -> None:
         QTimer.singleShot(800, window.close)      # show "done" briefly
         if self.mouse:
             self.panel.reply("Mouse mode: calibration not saved.")
-        elif not samples:
+        elif not rec.dots:
             self.panel.reply("No samples: was your face in view? Try calibrate again.")
         else:
-            path = save_calibration(samples)
+            path = save_calibration(rec)
+            _, rejected = kept_recordings([rec])  # the quality check: did the eyes follow the dots?
             self.model = self._train_model()       # the new file + all older ones
-            self.panel.reply(f"Calibrated with {len(samples)} samples, saved to {path.name}. "
-                             f"Gaze model retrained on {self.samples_used} samples.")
+            said = (f"Calibrated: {len(rec.sweep)} line-dot frames, {len(rec.head)} head-step frames and "
+                    f"{len(rec.dots)} dot samples, saved to {path.name}. ")
+            if rejected:
+                said += f"This one can't be used ({rejected[0]}), so try calibrate again. "
+            if self.model is not None:
+                said += f"Gaze model retrained on {self.samples_used} samples, head turns corrected with {self.model.k_source}."
+            self.panel.reply(said)
 
     def check(self) -> None:
         if not self.mouse and self.model is None:

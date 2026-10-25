@@ -77,7 +77,9 @@ from eyetracking.core.calibration import point_grid
 from eyetracking.ui.blink_window import BlinkWindow
 from eyetracking.ui.gaze_window import GazeWindow
 
+import eyetracking.core.calibration as cal
 cw.SETTLE_MS, cw.COLLECT_MS, cw.TICK_MS = 30, 250, 5                           # quick
+cal.HEAD_SETTLE_MS, cal.HEAD_MOVE_MIN_MS, cal.HEAD_MOVE_MAX_MS = 30, 20, 120   # the head step too
 qt = QApplication.instance() or QApplication([])
 errors = []
 sys.excepthook = lambda *e: errors.append(e[1])                                # a tick's exception is only printed
@@ -90,7 +92,7 @@ def get_features():
     if ticks[0] % 3:
         return NO_FRAME
     frame[0] += 1
-    return (float(frame[0]),) + (0.5,) * 9
+    return (float(frame[0]),) + (0.5,) * 11
 
 
 win = cw.CalibrationWindow(get_features=get_features)
@@ -104,12 +106,16 @@ qt.exec()
 sys.excepthook = sys.__excepthook__
 assert not errors, (len(errors), errors[0])                                    # NO_FRAME passed on raw raises
 assert out, "the calibration didn't finish"
-ids = [s.features[0] for s in out[0]]
+rec = out[0]                                                                   # line dots, head step, 4x4 grid
+ids = [s.features[0] for s in rec.sweep + rec.head + rec.dots]
 per_dot = {}
-for s in out[0]:
+for s in rec.dots:
     per_dot[(s.target_x, s.target_y)] = per_dot.get((s.target_x, s.target_y), 0) + 1
 assert len(ids) == len(set(ids)), "a frame recorded twice"
-assert len(per_dot) == len(point_grid()) and min(per_dot.values()) >= 3, per_dot
+assert len(per_dot) == len(point_grid(cal.GRID)) and min(per_dot.values()) >= 3, per_dot
+assert len({(s.target_x, s.target_y) for s in rec.sweep}) == 13 and rec.head      # 14 line dots (the centre twice)
+order = list(dict.fromkeys((s.target_x, s.target_y) for s in rec.dots))
+assert order != point_grid(cal.GRID), "the grid wasn't shuffled"                 # random order
 print(f"2. calibration ok: {len(ids)} frames recorded once each over {ticks[0]} ticks")
 
 seq = iter([NO_FRAME, (0.2, 0.3), NO_FRAME, NO_FRAME, None, NO_FRAME])
