@@ -16,6 +16,7 @@ Older files (v1: 10 features, the 25-dot grid only) are listed as not usable: ca
 from __future__ import annotations
 
 import csv
+import os
 import json
 import math
 import shutil
@@ -245,6 +246,19 @@ def remove_calibration(path: Path) -> Path:
     return target
 
 
+def list_removed() -> list[Path]:
+    """The calibrations in the trash (removed, or the untouched original of an edited one), newest first."""
+    return sorted(TRASH_DIR.glob("calibration_*.json"), reverse=True)
+
+
+def restore(path: Path) -> Path:
+    """A calibration from the trash back into data/calibrations. A file of the same name there is the
+    edited version of this original: it is replaced. Returns the new path."""
+    target = CALIB_DIR / path.name
+    os.replace(path, target)
+    return target
+
+
 # ---- history: the AI's results, one file per reading ------------------------
 def new_reading_path() -> Path:
     return HISTORY_DIR / f"reading_{datetime.now():{STAMP}}.json"
@@ -299,15 +313,19 @@ def latest_calibration() -> Path | None:
 
 
 # ---- gaze checks: the samples recorded with Enter ----------------------------
-def save_gaze_check(samples: list[tuple[int, float, float]], folder: Path | None = None) -> Path:
-    """(index, x, y) rows -> data/gaze_checks/gaze_check_<time>.csv. Returns the path."""
+CHECK_GRID = 4     # the gaze check's rings (4x4, 16), one lit at a time, as in calibration-lab: the same test every time
+Check = tuple[int, float, float, float, float]   # index, where the model said (x, y), the lit ring (x, y)
+
+
+def save_gaze_check(samples: list[Check], folder: Path | None = None) -> Path:
+    """(index, x, y, ring x, ring y) rows -> data/gaze_checks/gaze_check_<time>.csv. Returns the path."""
     folder = folder or GAZE_CHECK_DIR
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"gaze_check_{datetime.now():{STAMP}}.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["index", "x", "y"])
-        w.writerows((i, f"{x:.4f}", f"{y:.4f}") for i, x, y in samples)
+        w.writerow(["index", "x", "y", "target_x", "target_y"])
+        w.writerows((i, f"{x:.4f}", f"{y:.4f}", f"{tx:.4f}", f"{ty:.4f}") for i, x, y, tx, ty in samples)
     return path
 
 
@@ -315,30 +333,43 @@ def list_gaze_checks() -> list[Path]:
     return sorted(GAZE_CHECK_DIR.glob("gaze_check_*.csv"), reverse=True)
 
 
-def _nearest_dot(x: float, y: float) -> tuple[int, int, float]:
-    """(column, row) of the closest calibration dot, counted from the top left, and how far it is
-    (as a fraction of the screen)."""
-    positions = grid_positions()
-    col = min(range(len(positions)), key=lambda i: abs(positions[i] - x))
-    row = min(range(len(positions)), key=lambda i: abs(positions[i] - y))
-    return col + 1, row + 1, math.hypot(positions[col] - x, positions[row] - y)
+def read_gaze_check(path: Path) -> list[Check]:
+    """The rows of a gaze check. A file from before the lit rings (index, x, y only) gets the nearest
+    of the 5x5 rings it showed as its target: an estimate, it can't tell where the eyes really were."""
+    positions = grid_positions(5)
+    near = lambda v: min(positions, key=lambda p: abs(p - v))
+    with open(path, newline="") as f:
+        rows = list(csv.reader(f))[1:]
+    return [(int(r[0]), float(r[1]), float(r[2]), *((float(r[3]), float(r[4])) if len(r) >= 5
+                                                     else (near(float(r[1])), near(float(r[2])))))
+            for r in rows]
+
+
+def check_grid(rows: list[Check]) -> int:
+    """Which rings a gaze check used (4x4, or 5x5 before the lit rings), from its targets."""
+    for n in (CHECK_GRID, 5):
+        if rows and all(round(tx, 4) in grid_positions(n) and round(ty, 4) in grid_positions(n) for _, _, _, tx, ty in rows):
+            return n
+    return CHECK_GRID
+
+
+def check_error(rows: list[Check]) -> float | None:
+    """The mean distance from where the model said to the lit ring, as a fraction of the screen."""
+    return sum(math.hypot(x - tx, y - ty) for _, x, y, tx, ty in rows) / len(rows) if rows else None
 
 
 def gaze_check_lines(path: Path) -> list[str]:
-    """A gaze check in words: one line per sample, with the nearest calibration dot and the distance."""
+    """A gaze check in words: the average error, then each sample against the ring it was looking at."""
     try:
-        with open(path, newline="") as f:
-            rows = [(int(i), float(x), float(y)) for i, x, y in list(csv.reader(f))[1:]]
-    except (OSError, ValueError) as e:
+        rows = read_gaze_check(path)
+    except (OSError, ValueError, IndexError) as e:
         return [f"Can't read {path.name} ({e})."]
-    near = [_nearest_dot(x, y) for _, x, y in rows]
-    average = sum(d for _, _, d in near) / len(near) if near else 0.0
-    spacing = grid_positions()[1] - grid_positions()[0]
-    lines = [f"Gaze check of {file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples. If you were looking at the "
-             f"rings, the average distance to the nearest calibration dot is the error: {average:.0%} of the screen "
-             f"(the dots are {spacing:.1%} apart).", ""]
-    for (i, x, y), (col, row, d) in zip(rows, near):
-        lines.append(f"#{i}: {x:.0%} across, {y:.0%} down; nearest calibration dot ({col}, {row}), {d:.0%} of the screen away")
+    grid = check_grid(rows)
+    lines = [f"Gaze check of {file_date(path):%d %b %Y, %H:%M}: {len(rows)} samples on {grid}x{grid} rings, average "
+             f"error {check_error(rows) or 0:.1%} of the screen (from where the model said to the lit ring).", ""]
+    for i, x, y, tx, ty in rows:
+        lines.append(f"#{i}: looking at {describe_target(tx, ty, grid)}; the model said {x:.0%} across, "
+                     f"{y:.0%} down, {math.hypot(x - tx, y - ty):.1%} of the screen away")
     return lines
 
 

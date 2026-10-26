@@ -72,7 +72,7 @@ counts = lambda: (page.active_list.count(), page.disabled_list.count(), page.ina
 assert counts() == (1, 1, 1) and page.active_list.item(0).data(0x0100) is None, counts()   # active: placeholder only
 retrained = []
 page.data_changed.connect(lambda: retrained.append(True))
-page.set_enabled(off, True)                                     # Enable: back in data/, the model retrains
+page.set_enabled([off], True)                                   # Enable: back in data/, the model retrains
 assert storage.list_calibrations() == [path, broken] and storage.list_disabled() == [] and retrained
 assert page.active_list.item(0).data(0x0100) == str(path) and page.disabled_list.item(0).data(0x0100) is None
 assert storage.remove_samples(path, {0}) == 1 and "1 sample," in storage.calibration_text(path)
@@ -123,11 +123,13 @@ loose = tmp / "gaze_check_2026-01-02_000000.csv"
 loose.write_text("index,x,y\n0,0.5,0.5\n")
 assert storage.migrate_layout() == 1 and storage.list_gaze_checks() == [storage.GAZE_CHECK_DIR / loose.name] and not loose.exists()
 assert storage.file_date(loose).day == 2
-check = storage.save_gaze_check([(0, 0.05, 0.05), (1, 0.5, 0.52)])
+check = storage.save_gaze_check([(0, 0.05, 0.05, 0.05, 0.05), (1, 0.5, 0.52, 0.35, 0.35)])   # with the lit ring
 words = storage.gaze_check_lines(check)
-assert words[0].startswith("Gaze check of") and "2 samples" in words[0], words[0]
-assert words[2] == "#0: 5% across, 5% down; nearest calibration dot (1, 1), 0% of the screen away", words
-assert words[3] == "#1: 50% across, 52% down; nearest calibration dot (3, 3), 2% of the screen away", words
+assert words[0].startswith("Gaze check of") and "2 samples on 4x4 rings, average error 11.3%" in words[0], words[0]
+assert words[2] == "#0: looking at dot (1, 1) of the 4x4 grid; the model said 5% across, 5% down, 0.0% of the screen away", words
+assert words[3] == "#1: looking at dot (2, 2) of the 4x4 grid; the model said 50% across, 52% down, 22.7% of the screen away", words
+old = storage.gaze_check_lines(storage.GAZE_CHECK_DIR / loose.name)            # before the lit rings: the nearest 5x5 ring
+assert "1 samples on 5x5 rings" in old[0] and old[2].startswith("#0: looking at dot (3, 3) of the 5x5 grid"), old
 rows = [("open", 0, 0.05, 0.06), ("open", 33, 0.07, 0.05), ("down", 66, 0.2, 0.21), ("closed", 99, 0.8, 0.85),
         ("closed", 132, 0.9, 0.88), ("wink_left", 165, 0.9, 0.1)]
 blink = storage.save_blink_scores(rows)

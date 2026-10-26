@@ -26,8 +26,8 @@ from materialyoucolor.hct import Hct
 from materialyoucolor.scheme.scheme_fidelity import SchemeFidelity
 from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpression, QSettings, QSize, Qt, QTimer,
                             QUrl, QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen,
-                           QPixmap, QRegularExpressionValidator)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPainterPath,
+                           QPalette, QPen, QPixmap, QRegularExpressionValidator, QShortcut)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
                                QColorDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
@@ -40,7 +40,7 @@ from eyetracking.services.secret_store import protect, unprotect
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
                                           trash_file,
-                                          list_disabled, set_calibration_enabled,
+                                          list_disabled, list_removed, restore, set_calibration_enabled,
                                           list_readings, reading_messages, reading_title, remove_calibration,
                                           remove_samples)
 
@@ -95,7 +95,7 @@ I_KEY = "\uE8D7"   # Permissions (key)
 I_ADD = "\uE710"   # Add (+)
 I_TESTING = "\uE9D9"   # Diagnostic
 I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
-I_BACK, I_DELETE = "\uE72B", "\uE74D"
+I_BACK, I_DELETE, I_UNDO = "\uE72B", "\uE74D", "\uE7A7"
 I_CHAT, I_READ, I_SKIP = "\uE8BD", "\uE736", "\uE893"   # Message, ReadingMode, Next
 
 
@@ -716,11 +716,25 @@ class Grip(QWidget):
 # ---------------------------------------------------------------- dated file lists
 
 def side_list(on_open) -> QListWidget:
-    """A list of dated files; double-click (or Enter) calls on_open(path)."""
+    """A list of dated files; double-click (or Enter) calls on_open(path). Ctrl / Shift-click picks several."""
     lst = QListWidget(objectName="sideList")
-    lst.setToolTip("Double-click to open")
+    lst.setToolTip("Double-click to open. Ctrl- or Shift-click to pick several, then right-click or Delete")
+    lst.setSelectionMode(QListWidget.ExtendedSelection)
     lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and on_open(Path(it.data(Qt.UserRole))))
     return lst
+
+
+def picked(lst: QListWidget, pos=None) -> list[Path]:
+    """The files picked in a list. A right-click on a file that isn't picked picks it alone first."""
+    item = lst.itemAt(pos) if pos is not None else None
+    if item is not None and item.data(Qt.UserRole) and not item.isSelected():
+        lst.clearSelection()
+        item.setSelected(True)
+    return [Path(it.data(Qt.UserRole)) for it in lst.selectedItems() if it.data(Qt.UserRole)]
+
+
+def count(paths: list[Path], what: str) -> str:
+    return f"{len(paths)} {what}s" if len(paths) != 1 else paths[0].name
 
 
 def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
@@ -826,7 +840,8 @@ class TestingPage(QWidget):
     scores, each by date and readable in words."""
 
     command = Signal(str)          # a start button: "read" | "check" | "blink"
-    data_changed = Signal()        # samples or a file removed: the app retrains the gaze model
+    data_changed = Signal()        # samples or a file removed / disabled / enabled / restored: the app retrains
+    undo_requested = Signal()      # the Undo button (or Ctrl+Z): the last calibration / gaze check goes
 
     def __init__(self):
         super().__init__()
@@ -853,6 +868,16 @@ class TestingPage(QWidget):
                 i += 1
             sv.addSpacing(8)
         sv.addStretch(1)
+        self.status = label("", "rowsub")                # the latest word from the app (the model, a saved file)
+        self.status.setWordWrap(True)
+        sv.addWidget(self.status)
+        # Undo the last calibration or gaze check (a snackbar's action, M3): shown while there is one to undo
+        self.undo_btn = button(f"{I_UNDO}  Undo", "text")
+        self.undo_btn.clicked.connect(self.undo_requested.emit)
+        self.undo_btn.hide()
+        sv.addWidget(self.undo_btn, 0, Qt.AlignLeft)
+        QShortcut(QKeySequence.Undo, self, lambda: self.undo_btn.isVisible() and self.undo_requested.emit(),
+                  context=Qt.WidgetWithChildrenShortcut)
         h.addWidget(side)
 
         # 0-2: the tests (what they do + a start button); 3: calibrations; 4: gaze checks; 5: blink scores;
@@ -866,12 +891,13 @@ class TestingPage(QWidget):
              "Open .txt loads a text of your own. Esc leaves without the AI part."],
             "Open the sample text", "read"))
         self.main.addWidget(self._intro(
-            I_EYE, "Gaze check", "A full-screen test of the gaze model: how accurate is it today?",
-            ["A green dot follows where the model thinks you look. The faint rings are the calibration dots: look at one "
-             "and see where the dot lands.",
-             "Press Enter to record a sample of where you are looking. Samples are numbered on screen (#index  x  y) and "
-             "saved to data/gaze_check_<time>.csv when you leave.",
-             "Space pauses. Esc saves and leaves. It needs a calibration first."],
+            I_EYE, "Gaze check", "A full-screen test of the gaze model on 16 rings (4×4): how accurate is it today?",
+            ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, and "
+             "the next ring lights up. A sample's error is its distance to the lit ring.",
+             "A green dot follows where the model thinks you look; it turns grey while your face is lost or you blink.",
+             "Do a full round (16) for a fair number. Space pauses. Esc saves and leaves: the file goes to "
+             "data/gaze_checks, and Data > Gaze checks shows the average error. Undo (under this sidebar, or Ctrl+Z) "
+             "takes it back. It needs a calibration first."],
             "Start the gaze check", "check"))
         self.main.addWidget(self._intro(
             I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off can be set from "
@@ -889,8 +915,9 @@ class TestingPage(QWidget):
         mv.setContentsMargins(24, 20, 24, 24)
         mv.setSpacing(8)
         mv.addWidget(label("Calibrations", "sheetTitle"))
-        hint = label("Saved calibrations by date. Double-click one to read it in words. Right-click to disable it "
-                     "(it is kept, but stops training the gaze model), enable it again, or remove it. "
+        hint = label("Saved calibrations by date. Double-click one to read it in words. Ctrl- or Shift-click to pick "
+                     "several; right-click (or Delete) to disable them (kept, but they stop training the gaze model), "
+                     "enable them again, remove them, or restore removed ones. Removed calibrations wait in the trash. "
                      "Only the active ones train the gaze model.", "sheetText")
         hint.setWordWrap(True)
         mv.addWidget(hint)
@@ -899,11 +926,15 @@ class TestingPage(QWidget):
         self.active_list = side_list(self.open_detail)
         self.disabled_list = side_list(self.open_detail)
         self.inactive_list = side_list(self.open_detail)
+        self.removed_list = side_list(self.open_detail)
         for title, sub, lst in [("Active", "Trains the gaze model", self.active_list),
                                 ("Non-active", "Works, but you turned it off", self.disabled_list),
-                                ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list)]:
+                                ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list),
+                                ("Removed", "In the trash: restore them any time", self.removed_list)]:
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
+            QShortcut(QKeySequence.Delete, lst, lambda lst=lst: self.remove_files(picked(lst)),
+                      context=Qt.WidgetShortcut)                    # Delete = Remove the picked ones
             col = QVBoxLayout()
             col.setSpacing(2)
             col.addWidget(label(title, "gh"))
@@ -938,8 +969,9 @@ class TestingPage(QWidget):
         self.remove_btn.clicked.connect(self.remove_selected)
         dv.addWidget(self.remove_btn, 0, Qt.AlignLeft)
         self.gaze_checks = DataPage(
-            "Gaze checks", "Each gaze check's samples (recorded with Enter), with the nearest calibration dot and how "
-            "far off it was. Right-click a file to remove it.", list_gaze_checks, gaze_check_lines, "No gaze check yet")
+            "Gaze checks", "Each gaze check's samples (recorded with Enter): the lit ring you looked at, where the "
+            "model said, and how far off it was; the average is the error. Right-click a file to remove it.",
+            list_gaze_checks, gaze_check_lines, "No gaze check yet")
         self.blink_scores = DataPage(
             "Blink scores", "Each blink test: your scores per eye state, and the cut-off they suggest. Right-click a "
             "file to remove it.", list_blink_scores, blink_score_lines, "No blink test yet")
@@ -989,10 +1021,24 @@ class TestingPage(QWidget):
                 item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
             removable |= dot is not None
             self.detail.addItem(item)
-        self.remove_btn.setVisible(removable)
+        self.remove_btn.setVisible(removable and path.parent.name != "trash")   # a removed file: restore it first
         self.main.setCurrentIndex(6)
 
+    def say(self, text: str):
+        """A line from the app, in the sidebar's status."""
+        self.status.setText(text)
+
+    def set_undo(self, what: str):
+        """The Undo button under the status line: "Undo <what>", hidden when there is nothing to undo."""
+        self.undo_btn.setText(f"{I_UNDO}  Undo {what}")
+        self.undo_btn.setToolTip(f"Undo {what} (Ctrl+Z): its file goes to the trash; Removed restores a calibration")
+        self.undo_btn.setVisible(bool(what))
+
     def remove_selected(self):
+        if not (self.detail_path and self.detail_path.exists()):
+            self.refresh()                               # gone meanwhile (Undo, a removal): back to the lists
+            self.main.setCurrentIndex(3)
+            return
         chosen = set()
         for item in self.detail.selectedItems():
             index, dot = item.data(Qt.UserRole), item.data(Qt.UserRole + 1)
@@ -1012,32 +1058,52 @@ class TestingPage(QWidget):
             self.data_changed.emit()
 
     def _list_menu(self, lst: QListWidget, pos):
-        item = lst.itemAt(pos)
-        if item is None or not item.data(Qt.UserRole):
+        paths = picked(lst, pos)
+        if not paths:
             return
-        path = Path(item.data(Qt.UserRole))
         menu = QMenu(lst)
-        if lst is self.active_list:
-            menu.addAction("Disable (keep it, stop training on it)", lambda: self.set_enabled(path, False))
-        elif lst is self.disabled_list:
-            menu.addAction("Enable (train on it again)", lambda: self.set_enabled(path, True))
-        menu.addAction(f"{I_DELETE}  Remove this calibration", lambda: self.remove_file(path))
+        if lst is self.removed_list:
+            menu.addAction(f"Restore {count(paths, 'calibration')}", lambda: self.restore_files(paths))
+        else:
+            if lst is self.active_list:
+                menu.addAction("Disable (keep, stop training on it)", lambda: self.set_enabled(paths, False))
+            elif lst is self.disabled_list:
+                menu.addAction("Enable (train on it again)", lambda: self.set_enabled(paths, True))
+            menu.addAction(f"{I_DELETE}  Remove {count(paths, 'calibration')}", lambda: self.remove_files(paths))
         menu.exec(lst.mapToGlobal(pos))
 
-    def set_enabled(self, path: Path, enabled: bool):
-        """Right-click > Disable / Enable: the file moves between data/ and data/disabled/; the model retrains."""
-        set_calibration_enabled(path, enabled)
+    def _changed(self, text: str):
+        """Files removed, restored, enabled or disabled: the lists, the model (the app retrains), the status line."""
         self.refresh()
         self.data_changed.emit()
+        self.say(text)
 
-    def remove_file(self, path: Path):
-        """Right-click > Remove: the file moves to data/trash (move it back to undo); the model retrains."""
-        if QMessageBox.question(self, "Remove calibration", f"Move {path.name} to data/trash?\n"
-                                "The gaze model is retrained without it.") != QMessageBox.Yes:
+    def set_enabled(self, paths: list[Path], enabled: bool):
+        """Right-click > Disable / Enable: the files move between data/calibrations and its disabled/."""
+        for p in paths:
+            set_calibration_enabled(p, enabled)
+        self._changed(f"{'Enabled' if enabled else 'Disabled'} {count(paths, 'calibration')}.")
+
+    def remove_files(self, paths: list[Path]):
+        """Right-click > Remove (or Delete): into the trash; Removed lists them to restore."""
+        if not paths or QMessageBox.question(self, "Remove calibrations", f"Move {count(paths, 'calibration')} to the "
+                                             "trash? Restore from Removed any time.") != QMessageBox.Yes:
             return
-        remove_calibration(path)
-        self.refresh()
-        self.data_changed.emit()
+        for p in paths:
+            remove_calibration(p)
+        self._changed(f"Removed {count(paths, 'calibration')}.")
+
+    def restore_files(self, paths: list[Path]):
+        """Removed > Restore. A trash file whose name is still in use is the original of an edited
+        calibration: restoring it undoes the edits, so that asks first."""
+        edited = [p for p in paths if (p.parent.parent / p.name).exists()]
+        if edited and QMessageBox.question(self, "Restore", f"{count(edited, 'calibration')}: the untouched original "
+                                           "of an edited calibration. Restore it in place of the edited one?"
+                                           ) != QMessageBox.Yes:
+            return
+        for p in paths:
+            restore(p)
+        self._changed(f"Restored {count(paths, 'calibration')}.")
 
     def refresh(self):
         """Re-read data/ (new calibrations). Runs whenever the page shows."""
@@ -1045,8 +1111,11 @@ class TestingPage(QWidget):
         fill_list(self.active_list, [p for p, ok in usable.items() if ok], "None active: enable one, or calibrate")
         fill_list(self.disabled_list, list_disabled(), "None")
         fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
+        fill_list(self.removed_list, list_removed(), "None")
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
+        if self.main.currentIndex() == 6 and not (self.detail_path and self.detail_path.exists()):
+            self.main.setCurrentIndex(3)                 # the file on the detail page is gone (Undo, a removal)
 
     def showEvent(self, e):
         self.refresh()

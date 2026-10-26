@@ -45,6 +45,6 @@ for _ in range(5):
 
 assert app.fullscreen is None and app.smoothed == (0.62, 0.41), app.smoothed  # carries on from the check's point
 rows = list(csv.reader(open(next(tmp.glob("gaze_check_*.csv")))))
-assert rows == [["index", "x", "y"], ["0", "0.6200", "0.4100"]], rows       # the Enter sample, saved
+assert rows == [["index", "x", "y", "target_x", "target_y"], ["0", "0.6200", "0.4100", "0.0500", "0.0500"]], rows   # the Enter sample, with the lit ring
 assert "Gaze samples saved" in app.panel.said[-1]
 print("check carry-on ok")

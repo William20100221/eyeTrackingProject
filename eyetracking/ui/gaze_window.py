@@ -1,14 +1,15 @@
 """
-Live gaze demo: a dot on a full-screen window where the model thinks you look.
+The gaze check, full screen (as calibration-lab's): test rings, one lit at a time, and the model's dot.
 
     python -m eyetracking.ui.gaze_window                    (all calibrations, newest weighted most)
     python -m eyetracking.ui.gaze_window data/<file>.json   (just that one)
     python -m eyetracking.ui.gaze_window --mouse            (no camera: dot follows the mouse)
 
-The faint rings are the calibration positions (5x5 grid). Look at one and see where
-the dot lands: a quick visual accuracy check. Press Enter to record a sample
-(where the dot is right now). Samples are listed as "#index  x  y" on screen
-and saved to data/gaze_checks/gaze_check_<time>.csv on Esc; nothing is saved without one.
+A green dot is drawn where the model thinks you look. One of the 16 rings (4x4) is lit:
+look at it and press Enter, which records where the model says you look against that
+ring and lights the next one (row by row, round again after the last). A sample's error
+is its distance to the lit ring. Samples are listed as "#index  x  y  off" on screen and
+saved to data/gaze_checks/gaze_check_<time>.csv on Esc; nothing is saved without one.
 Space pauses.
 
 Like CalibrationWindow, this window does NOT know about the camera or the
@@ -17,6 +18,7 @@ model: it calls `get_point()` every tick and draws whatever comes back
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Callable, Sequence
@@ -29,13 +31,13 @@ from eyetracking.core.calibration import point_grid
 from eyetracking.core.points_model import train
 from eyetracking.core.models import NO_FRAME
 from eyetracking.core.smoothing import GazeSmoother
-from eyetracking.services.storage import load_all_calibrations, load_calibration, save_gaze_check
+from eyetracking.services.storage import CHECK_GRID, Check, load_all_calibrations, load_calibration, save_gaze_check
 from eyetracking.services.tracker import EyeTracker
 
 TICK_MS = 16         # asks for the newest camera frame (read on its own thread) at the screen's pace
 DOT_RADIUS = 18      # px
-RING_RADIUS = 12     # px, the faint calibration positions
-SHOWN_SAMPLES = 12   # how many of the latest "#index x y" lines are drawn
+RING_RADIUS = 12     # px, the faint test rings
+SHOWN_SAMPLES = 12   # how many of the latest "#index x y off" lines are drawn
 
 LIVE = QColor(80, 220, 120)      # green: a prediction from this frame
 STALE = QColor(90, 90, 90)       # grey: face lost / blink, showing the last one
@@ -52,10 +54,11 @@ class GazeWindow(QWidget):
         super().__init__(parent)
         self._get_point = get_point
         self.paused = False
-        self._targets = list(targets or point_grid())
+        self._targets = list(targets or point_grid(CHECK_GRID))
+        self._lit = 0                                     # the ring to look at now: Enter records it and lights the next
         self._point: tuple[float, float] | None = None   # last prediction, 0..1
         self._stale = True                                # no prediction this tick
-        self.log: list[tuple[int, float, float]] = []   # (index, x, y), one per Enter
+        self.log: list[Check] = []                        # (index, x, y, ring x, ring y), one per Enter
 
         # frames per second, worked out once a second: the number to compare
         # when testing speed changes (e.g. a threaded camera)
@@ -104,18 +107,24 @@ class GazeWindow(QWidget):
         self.update()   # ask Qt to repaint (it calls paintEvent)
 
     def record(self) -> None:
-        """Enter: one sample of where the dot is now (index first, then x, y)."""
-        if self._point is not None:
-            self.log.append((len(self.log), *self._point))
-            self.update()
+        """Enter: one sample of where the dot is now (index first, then x, y) and the lit ring; then the
+        next ring lights up (row by row, round again after the last)."""
+        if self._point is None:
+            return                                        # no face yet: nothing to record
+        tx, ty = self._targets[self._lit]
+        self.log.append((len(self.log), *self._point, tx, ty))
+        self._lit = (self._lit + 1) % len(self._targets)
+        self.update()
 
     def save_log(self, folder: Path | None = None) -> Path:
-        """Every sample as index,x,y, to data/gaze_checks (or `folder`): to compare after a test."""
+        """Every sample as index,x,y,target_x,target_y, to data/gaze_checks (or `folder`)."""
         return save_gaze_check(self.log, folder)
 
     def sample_lines(self) -> list[str]:
-        """The latest samples, newest last: "#0042  x 0.430  y 0.610" (index first)."""
-        return [f"#{i:04d}  x {x:.3f}  y {y:.3f}" for i, x, y in self.log[-SHOWN_SAMPLES:]]
+        """The latest samples, newest last: "#0042  x 0.430  y 0.610  off 0.032" (index first; off = the
+        distance from the lit ring)."""
+        return [f"#{i:04d}  x {x:.3f}  y {y:.3f}  off {math.hypot(x - tx, y - ty):.3f}"
+                for i, x, y, tx, ty in self.log[-SHOWN_SAMPLES:]]
 
     def dot_position(self) -> QPointF | None:
         """Where the dot is drawn, in window pixels. A guess past the edge is
@@ -141,12 +150,15 @@ class GazeWindow(QWidget):
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Paused.\n\nSpace to carry on, Esc to leave.")
             return
 
-        # where the calibration dots were: look at one to check the accuracy
+        # the test rings: look at the lit one
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor(70, 70, 70), 2))
         for tx, ty in self._targets:
             p.drawEllipse(QPointF(tx * self.width(), ty * self.height()),
                           RING_RADIUS, RING_RADIUS)
+        tx, ty = self._targets[self._lit]                  # the ring to look at: bright, larger
+        p.setPen(QPen(QColor("white"), 3))
+        p.drawEllipse(QPointF(tx * self.width(), ty * self.height()), RING_RADIUS + 6, RING_RADIUS + 6)
 
         centre = self.dot_position()
         if centre is not None:
@@ -174,7 +186,7 @@ class GazeWindow(QWidget):
             gaze = f"x {x:.2f}  y {y:.2f}"
             if self._stale:
                 gaze += "   (no face / blink: showing the last point)"
-        return (f"{gaze}     {self._fps:.0f} fps     {len(self.log)} samples (Enter records one)"
+        return (f"{gaze}     {self._fps:.0f} fps     {len(self.log)} samples (look at the lit ring, Enter records one)"
                 "     Space: pause     Esc: save and quit")
 
 

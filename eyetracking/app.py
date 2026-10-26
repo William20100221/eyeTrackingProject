@@ -52,8 +52,9 @@ from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (KEY_ENV, MODELS, PROVIDER_NAMES, grade_answer, key_from_environment,
                                              list_models, make_questions, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
-from eyetracking.services.storage import (load_all_calibrations, migrate_layout, new_reading_path, save_blink_scores,
-                                          save_calibration, save_reading)
+from eyetracking.services.storage import (list_calibrations, load_all_calibrations, migrate_layout, new_reading_path,
+                                          remove_calibration, save_blink_scores, save_calibration, save_reading,
+                                          trash_file)
 from eyetracking.services.tracker import EyeTracker, FrameFeed
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, GazeCursor
@@ -261,6 +262,8 @@ class App(QObject):
         self.panel.message_sent.connect(self.answer)
         self.control.testing.command.connect(lambda c: {"read": self.read, "check": self.check, "blink": self.blink_test}[c]())
         self.control.testing.data_changed.connect(self._retrain)
+        self.control.testing.undo_requested.connect(self.undo)
+        self.undo_stack: list[tuple[str, list[Path]]] = []   # (what, the files it made): the newest last
         self.panel.go_reading.connect(self.go_reading)
         self.ball.clicked.connect(self.ball_clicked)
         self.ball.double_clicked.connect(self.toggle_reading)
@@ -471,6 +474,37 @@ class App(QObject):
         model, self.samples_used = train(load_all_calibrations())
         return model
 
+    def _say(self, text: str) -> None:
+        """What happened (a calibration, a gaze check, an undo): in the chat, and in the Testing sidebar's status."""
+        self.panel.reply(text)
+        self.control.testing.say(text)
+
+    def _did(self, what: str, paths: list[Path]) -> None:
+        """A calibration or gaze check just saved these files: Undo can take them back."""
+        self.undo_stack.append((what, list(paths)))
+        self.control.testing.set_undo(what)
+
+    def undo(self) -> None:
+        """Undo the newest calibration or gaze check (as calibration-lab's): its file goes into its trash
+        folder, so even an undo can be undone (Data > Calibrations > Removed restores a calibration).
+        Never during a full-screen page or while something else runs."""
+        if not self.undo_stack or self.fullscreen is not None or self._working:
+            return
+        what, paths = self.undo_stack.pop()
+        gone = [p for p in paths if not p.exists()]          # moved or removed on the Data pages since
+        for p in paths:
+            if p.exists():
+                (remove_calibration if p.suffix == ".json" else trash_file)(p)
+        self.control.testing.set_undo(self.undo_stack[-1][0] if self.undo_stack else "")
+        self.control.testing.refresh()
+        if any(p.suffix == ".json" for p in paths):
+            self.model = self._train_model()
+            self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
+        left = len(paths) - len(gone)
+        self._say(f"Undid {what}: {left} file{'s' if left != 1 else ''} moved to the trash"
+                  + (" (Data > Calibrations > Removed restores it)" if any(p.suffix == ".json" for p in paths) else "")
+                  + (f"; already gone: {', '.join(p.name for p in gone)}" if gone else "") + ".")
+
     def _retrain(self) -> None:
         """Gaze data was removed in the Practice tab: train again on what is left. Asked while other slow
         work runs (a click answered meanwhile), it waits for it: its model must be the last one kept."""
@@ -479,7 +513,7 @@ class App(QObject):
             return
         self.model = self._train_model()
         self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
-        self.panel.reply(f"Gaze model retrained on {self.samples_used} samples.")
+        self._say(f"Gaze model retrained on {self.samples_used} samples.")
 
     def _model_status(self) -> str:
         if self.mouse:
@@ -695,11 +729,12 @@ class App(QObject):
         so both of the lab's checks run: the grid's (check_recording) and steps 1-2's (check_special)."""
         QTimer.singleShot(800, window.close)      # show "done" briefly
         if self.mouse:
-            self.panel.reply("Mouse mode: calibration not saved.")
+            self._say("Mouse mode: calibration not saved.")
             return
         if not rec.dots:
-            self.panel.reply("No samples: was your face in view? Try calibrate again.")
+            self._say("No samples: was your face in view? Try calibrate again.")
             return
+        made: list[Path] = []
 
         def check_and_save() -> str:              # on a worker thread: the checks and big files take seconds here
             grid = check_recording(rec)
@@ -707,6 +742,7 @@ class App(QObject):
                 return f"Calibration rejected ({grid.summary()}). Try calibrate again."
             steps = check_special(rec, "points")  # the line dots and the head step: the user's own head matrix
             path = save_calibration(rec)          # saved RAW: the checks run again when it trains
+            made.append(path)
             said = f"Calibrated with {len(grid.kept.dots)} good dot samples"
             if steps.ok:
                 said += (f", {len(steps.kept.sweep)} good line-dot and {len(steps.kept.head)} head-step frames, "
@@ -718,10 +754,16 @@ class App(QObject):
             return said + (f" Cleaned: {'; '.join(cleaned)}." if cleaned else "")
 
         said = self._busy("Checking and saving the calibration…", check_and_save)
+        if made:
+            self._did("the calibration", made)
         self.model = self._train_model()          # the new file + all older ones
         if self.model is not None:
             said += f" Gaze model retrained on {self.samples_used} samples, head turns corrected with {self.model.k_source}."
-        self.panel.reply(said)
+        if made and len(list_calibrations()) == 1:
+            # measured on 9 testers (26 Oct): a second sitting in training, 17.3% -> 16.0% of the screen, better for 7 of 9
+            said += " A second calibration another day makes the model more accurate: it learns from both sittings."
+        self.control.testing.refresh()
+        self._say(said)
 
     def check(self) -> None:
         if not self.mouse and self.model is None:
@@ -744,11 +786,13 @@ class App(QObject):
             return point
         window = GazeWindow(get_point=get)
         window.logged.connect(self._gaze_logged)
+        self.control.testing.say("Gaze check: look at the lit ring and press Enter; Esc saves and leaves.")
         self._open_fullscreen(window)
 
     def _gaze_logged(self, path: str) -> None:
+        self._did("the gaze check", [Path(path)])
         self.control.testing.refresh()            # Data > Gaze checks lists it
-        self.panel.reply(f"Gaze samples saved: {Path(path).name}. See Testing > Data > Gaze checks.")
+        self._say(f"Gaze samples saved: {Path(path).name}. See Testing > Data > Gaze checks.")
 
     def blink_test(self) -> None:
         """Testing > Blink test: record blink scores in six eye states, saved under data/blink_scores."""
@@ -772,7 +816,7 @@ class App(QObject):
         QTimer.singleShot(800, window.close)      # show "done" briefly
         path = save_blink_scores(rows)
         self.control.testing.refresh()
-        self.panel.reply(f"Blink scores saved to {path.name}. {blink_advice(rows)}")
+        self._say(f"Blink scores saved to {path.name}. {blink_advice(rows)}")
 
     def read(self) -> None:
         if self.model is None and not self.mouse:
