@@ -43,7 +43,9 @@ from ctypes import wintypes
 
 from eyetracking.core.reading import Line
 
-OCR_LANG = "en"        # the language OCR reads: the chat's language picker sets it (ocr_languages lists them)
+OCR_LANG = "en"        # the language OCR reads: the chat's language picker sets it (reading_languages lists them)
+# offered in the language picker even when Windows can't read them yet (it can install their OCR pack)
+COMMON_LANGUAGES = ("en-US", "zh-Hans-CN", "es-ES", "fr-FR", "de-DE", "ja-JP", "ko-KR", "ru-RU")
 MIN_WORDS = 20         # fewer words than this from UIA = probably a toolbar only: try OCR too, keep whichever found more
 NO_DOCUMENT_RETRY_S = 2.0   # a window that showed no text: its UI tree is walked again at most this often
 
@@ -241,15 +243,49 @@ def _cut(text: str, widths: list[int]) -> list[str]:
     return out + [text[pos:]]
 
 
-def ocr_languages() -> list[tuple[str, str]]:
-    """The languages Windows can OCR on this PC, as (tag, name in its own language): one per language pack
-    installed in Settings > Time & language > Language & region. UI Automation needs no language (the app
-    hands over its text as it is); only OCR has to be told what script it is looking at."""
+def reading_languages() -> list[tuple[str, str, bool]]:
+    """The languages to offer, as (tag, name in its own language, ready): the user's own Windows languages
+    (Settings > Time & language > Language & region) first, then the ones Windows can already OCR, then
+    COMMON_LANGUAGES. ready = Windows can read it from a screen picture now. UI Automation needs no
+    language (the app hands over its text as it is); only OCR has to be told what script it looks at."""
     try:
         import winocr
-        return [(lang.language_tag, lang.native_name) for lang in winocr.OcrEngine.available_recognizer_languages]
+        from winrt.windows.globalization import ApplicationLanguages, Language
     except Exception:                                    # winocr not installed, or not Windows
         return []
+    tags = [*ApplicationLanguages.languages, *(lang.language_tag for lang in winocr.OcrEngine.available_recognizer_languages),
+            *COMMON_LANGUAGES]
+    seen, out = set(), []
+    for tag in tags:
+        if tag.lower() not in seen:
+            seen.add(tag.lower())
+            lang = Language(tag)
+            out.append((tag, lang.native_name, bool(winocr.OcrEngine.is_language_supported(lang))))
+    return out
+
+
+def ocr_tag(tag: str) -> str | None:
+    """The language OCR can actually use for `tag`: itself if its pack is installed, else an installed
+    one of the same language (en-NZ -> en-GB), else any installed one; None without Windows OCR."""
+    try:
+        import winocr
+        from winrt.windows.globalization import Language
+    except Exception:
+        return None
+    if winocr.OcrEngine.is_language_supported(Language(tag)):
+        return tag
+    installed = [lang.language_tag for lang in winocr.OcrEngine.available_recognizer_languages]
+    same = [t for t in installed if t.split("-")[0].lower() == tag.split("-")[0].lower()]
+    return (same or installed or [None])[0]
+
+
+def install_ocr(tag: str) -> None:
+    """Install Windows' OCR pack for a language: an elevated PowerShell (Windows asks the user first) runs
+    Add-WindowsCapability for it. The capability names have no script part (zh-Hans-CN -> zh-CN)."""
+    short = "-".join(p for p in tag.split("-") if len(p) != 4)
+    command = (f"Get-WindowsCapability -Online | Where-Object Name -like 'Language.OCR~~~{short}~*' | "
+               "Add-WindowsCapability -Online; Read-Host 'Done. Press Enter to close'")
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", "powershell.exe", f'-NoProfile -Command "{command}"', None, 1)
 
 
 def _ocr_lines(hwnd: int) -> list[Line]:
@@ -263,10 +299,13 @@ def _ocr_lines(hwnd: int) -> list[Line]:
     if right <= left or bottom <= top:
         return []
     image = ImageGrab.grab((left, top, right, bottom), all_screens=True)
-    seen = (left, top, right, bottom, image.resize((32, 24)).tobytes(), OCR_LANG)   # another language: OCR again
+    lang = ocr_tag(OCR_LANG)                             # a language without its OCR pack: the nearest installed one
+    if lang is None:
+        return []
+    seen = (left, top, right, bottom, image.resize((32, 24)).tobytes(), lang)   # another language: OCR again
     if hwnd in _ocr_seen and _ocr_seen[hwnd][0] == seen:
         return _ocr_seen[hwnd][1]                        # the same picture as last time: the same lines, no OCR
-    result = asyncio.run(winocr.recognize_pil(image, OCR_LANG))
+    result = asyncio.run(winocr.recognize_pil(image, lang))
     lines = []
     for ln in result.lines:
         boxes = [(left + w.bounding_rect.x, left + w.bounding_rect.x + w.bounding_rect.width) for w in ln.words]

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (DEFAULT_HOSTS, KEY_URLS, KNOWN_MODELS, MAKERS, MODELS, PROVIDER_NAMES,
                                              default_model, list_models, provider_for_key)
-from eyetracking.services.screen_text import ocr_languages
+from eyetracking.services.screen_text import install_ocr, reading_languages
 from eyetracking.services.secret_store import protect, unprotect
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
@@ -2067,19 +2067,37 @@ class SettingsWindow(QWidget):
         self.chat.lang_btn.setText(f"{I_LANGUAGE}  {self.reading_language()[1]}  {I_CHEVRON}")
 
     def _fill_language_menu(self):
-        """Every language Windows can read on this PC, the picked one ticked, and where to add more."""
+        """Your Windows languages, the ones Windows can read, and 8 common ones: ready ones first (the
+        picked one ticked), then the ones whose reading pack Windows would have to install."""
         menu = self.chat.lang_btn.menu()
         menu.clear()
         current = self.reading_language()[0]
-        for tag, name in ocr_languages():
-            act = menu.addAction(f"{name}   ({tag})", lambda t=tag, n=name: self.set_reading_language(t, n))
-            act.setCheckable(True)
-            act.setChecked(tag == current)
-        if menu.isEmpty():
+        langs = reading_languages()
+        for ready, heading in ((True, "Ready on this PC"), (False, "Windows needs its reading pack (offered when picked)")):
+            group = [(t, n) for t, n, r in langs if r == ready]
+            if group:
+                menu.addSection(heading)
+            for tag, name in group:
+                act = menu.addAction(f"{name}   ({tag})", lambda t=tag, n=name, r=ready: self.pick_language(t, n, r))
+                act.setCheckable(True)
+                act.setChecked(tag == current)
+        if not langs:
             menu.addAction("Windows OCR isn't available: the text is read through the apps only").setEnabled(False)
         menu.addSeparator()
         menu.addAction("Add a language… (Windows settings)",
                        lambda: QDesktopServices.openUrl(QUrl("ms-settings:regionlanguage")))
+
+    def pick_language(self, tag: str, name: str, ready: bool):
+        """A language from the menu. One Windows can't read from a screen picture yet is picked all the same
+        (apps like Chrome or Word give their text in any language), and its reading pack is offered."""
+        self.set_reading_language(tag, name)
+        if not ready and QMessageBox.question(
+                self, "Install the reading pack?",
+                f"Windows can't read {name} from a picture of the screen yet: PDFs and some apps need that. "
+                "(Chrome, Edge, Word and Notepad hand over their text in any language, so they work already.)\n\n"
+                "Install Windows' reading pack for it now? Windows asks for permission first; it takes a minute "
+                "or two. Until it is in, the nearest installed language is used.") == QMessageBox.Yes:
+            install_ocr(tag)
 
     def _open_key_url(self):
         QDesktopServices.openUrl(QUrl(KEY_URLS[self.provider(self.shown_id)["kind"]]))

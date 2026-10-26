@@ -19,7 +19,12 @@ import eyetracking.ui.control_window as cw
 
 ini = Path(tempfile.mkdtemp()) / "settings.ini"
 cw.QSettings = lambda *_: QSettings(str(ini), QSettings.IniFormat)
-cw.ocr_languages = lambda: [("en-US", "English (United States)"), ("zh-Hans-CN", "中文(中华人民共和国)")]
+LANGS = [("en-NZ", "English (New Zealand)", True), ("zh-Hans-CN", "中文(中华人民共和国)", True),
+         ("fr-FR", "Français (France)", False)]
+cw.reading_languages = lambda: LANGS
+installed = []
+cw.install_ocr = installed.append
+cw.QMessageBox.question = staticmethod(lambda *a, **k: cw.QMessageBox.Yes)
 import eyetracking.app as appmod
 
 qt = QApplication([])
@@ -43,15 +48,26 @@ w = app.control
 assert w.reading_language() == ("en", "English") and screen_text.OCR_LANG == "en" and "English" in w.chat.lang_btn.text()
 w._fill_language_menu()
 acts = [a.text() for a in w.chat.lang_btn.menu().actions() if a.text()]
-assert acts == ["English (United States)   (en-US)", "中文(中华人民共和国)   (zh-Hans-CN)",
+assert acts == ["Ready on this PC", "English (New Zealand)   (en-NZ)", "中文(中华人民共和国)   (zh-Hans-CN)",
+                "Windows needs its reading pack (offered when picked)", "Français (France)   (fr-FR)",
                 "Add a language… (Windows settings)"], acts
 next(a for a in w.chat.lang_btn.menu().actions() if "zh-Hans-CN" in a.text()).trigger()
-assert screen_text.OCR_LANG == "zh-Hans-CN" and "中文" in w.chat.lang_btn.text()
+assert screen_text.OCR_LANG == "zh-Hans-CN" and "中文" in w.chat.lang_btn.text() and installed == []   # ready: no install
 w2 = cw.SettingsWindow()                                                         # a restart: remembered
 assert w2.reading_language() == ("zh-Hans-CN", "中文(中华人民共和国)")
 w._fill_language_menu()
 assert next(a for a in w.chat.lang_btn.menu().actions() if "zh-Hans-CN" in a.text()).isChecked()
-cw.ocr_languages = lambda: []                                                    # no Windows OCR: said, not empty
+next(a for a in w.chat.lang_btn.menu().actions() if "fr-FR" in a.text()).trigger()   # not ready: picked, install offered
+assert screen_text.OCR_LANG == "fr-FR" and installed == ["fr-FR"]
+cw.reading_languages = lambda: []                                                # no Windows OCR: said, not empty
 w._fill_language_menu()
 assert "isn't available" in w.chat.lang_btn.menu().actions()[0].text()
+
+# ---- the real OCR side on this PC: a language without its pack falls back to an installed one of it, or any
+if screen_text.ocr_tag("en") is not None:
+    assert screen_text.ocr_tag("en-US") in ("en-US", "en-GB") and screen_text.ocr_tag("en-NZ").startswith("en")
+    assert screen_text.ocr_tag("xx-XX") is not None                               # nothing alike: any installed one
+    offered = [t for t, _, _ in screen_text.reading_languages()]
+    assert all(t in offered for t in screen_text.COMMON_LANGUAGES)               # the 8 common ones always offered
+assert "-".join(p for p in "zh-Hans-CN".split("-") if len(p) != 4) == "zh-CN"   # install_ocr's capability name
 print("chat format and language ok")
