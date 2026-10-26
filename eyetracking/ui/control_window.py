@@ -1549,7 +1549,7 @@ class SettingsWindow(QWidget):
 
         self.words = QSpinBox(minimum=50, maximum=500, singleStep=25, alignment=Qt.AlignRight)
         self.words.setButtonSymbols(QSpinBox.NoButtons)
-        self.words.setAccessibleName("Summary length in words")
+        self.words.setAccessibleName("Maximum summary length in words")
         words = QWidget()
         wl = QHBoxLayout(words)
         wl.setContentsMargins(0, 0, 0, 0)
@@ -1558,7 +1558,7 @@ class SettingsWindow(QWidget):
         wl.addWidget(label("words", "unit"))
         self.group("AI", [
             self._providers_block(),
-            self.row(I_LINES, "Summary length", "About this many words", words),
+            self.row(I_LINES, "Maximum summary length", "At most this many words: shorter when less was missed", words),
         ])
         self.camera_btn = button("", "assist")
         self.camera_menu = QMenu(self.camera_btn)

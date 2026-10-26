@@ -188,7 +188,8 @@ def summarize(full_text: str, read_text: str, mode: str = "unread",
                 "it connects to what the student read. If nothing is unread, say so.")
     else:
         raise ValueError(f"mode must be 'unread' or 'outline', not {mode!r}")
-    length = f"Use about {words} words." if words else LENGTH   # words: Settings > Summary length
+    # words: Settings > Maximum summary length, a ceiling, not a target: little missed, a short summary
+    length = f"Use at most {words} words; fewer when less was missed. {LENGTH}" if words else LENGTH
     return _ask(provider, f"<text>\n{marked}\n</text>\n\n{task} {length}")
 
 
