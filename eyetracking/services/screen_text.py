@@ -43,7 +43,7 @@ from ctypes import wintypes
 
 from eyetracking.core.reading import Line
 
-OCR_LANG = "en"        # a Windows OCR language pack (Settings > Time & language); "zh-Hans-CN" for simplified Chinese
+OCR_LANG = "en"        # the language OCR reads: the chat's language picker sets it (ocr_languages lists them)
 MIN_WORDS = 20         # fewer words than this from UIA = probably a toolbar only: try OCR too, keep whichever found more
 NO_DOCUMENT_RETRY_S = 2.0   # a window that showed no text: its UI tree is walked again at most this often
 
@@ -241,6 +241,17 @@ def _cut(text: str, widths: list[int]) -> list[str]:
     return out + [text[pos:]]
 
 
+def ocr_languages() -> list[tuple[str, str]]:
+    """The languages Windows can OCR on this PC, as (tag, name in its own language): one per language pack
+    installed in Settings > Time & language > Language & region. UI Automation needs no language (the app
+    hands over its text as it is); only OCR has to be told what script it is looking at."""
+    try:
+        import winocr
+        return [(lang.language_tag, lang.native_name) for lang in winocr.OcrEngine.available_recognizer_languages]
+    except Exception:                                    # winocr not installed, or not Windows
+        return []
+
+
 def _ocr_lines(hwnd: int) -> list[Line]:
     try:
         import winocr                                    # optional: uv pip install winocr
@@ -252,7 +263,7 @@ def _ocr_lines(hwnd: int) -> list[Line]:
     if right <= left or bottom <= top:
         return []
     image = ImageGrab.grab((left, top, right, bottom), all_screens=True)
-    seen = (left, top, right, bottom, image.resize((32, 24)).tobytes())
+    seen = (left, top, right, bottom, image.resize((32, 24)).tobytes(), OCR_LANG)   # another language: OCR again
     if hwnd in _ocr_seen and _ocr_seen[hwnd][0] == seen:
         return _ocr_seen[hwnd][1]                        # the same picture as last time: the same lines, no OCR
     result = asyncio.run(winocr.recognize_pil(image, OCR_LANG))

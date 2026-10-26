@@ -46,7 +46,7 @@ from eyetracking.core.quality import check_recording, check_special
 from eyetracking.core.models import NO_FRAME, CalibrationRecording
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.core.smoothing import GazeSmoother
-from eyetracking.services import reading_ai
+from eyetracking.services import reading_ai, screen_text
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (KEY_ENV, MODELS, PROVIDER_NAMES, grade_answer, key_from_environment,
                                              list_models, make_questions, summarize)
@@ -279,6 +279,8 @@ class App(QObject):
         # last: the first-run key check answers clicks while it waits, so everything they reach exists by now
         self._choose_ai(provider)
         self.control.ai_changed.connect(self._ai_changed)
+        self._set_language(self.control.reading_language()[0])   # the chat's language picker: what OCR reads
+        self.control.language_changed.connect(self._set_language)
         self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
         self.control.show_last()
 
@@ -419,6 +421,12 @@ class App(QObject):
             reading_ai.MODELS[p["kind"]] = p["model"]
             reading_ai.HOSTS[p["kind"]] = p["host"]
         self.provider = self.forced_provider or (p["kind"] if p else "claude")
+
+    @staticmethod
+    def _set_language(tag: str) -> None:
+        """The language of the text being read. UI Automation hands over text in any language as it is;
+        OCR (PDFs, apps that give no text) must be told which language's letters to look for."""
+        screen_text.OCR_LANG = tag
 
     def _ai_changed(self) -> None:
         self._use_entry()

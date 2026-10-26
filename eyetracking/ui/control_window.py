@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (DEFAULT_HOSTS, KEY_URLS, KNOWN_MODELS, MAKERS, MODELS, PROVIDER_NAMES,
                                              default_model, list_models, provider_for_key)
+from eyetracking.services.screen_text import ocr_languages
 from eyetracking.services.secret_store import protect, unprotect
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
@@ -93,6 +94,7 @@ I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
 I_ADD = "\uE710"   # Add (+)
+I_LANGUAGE = "\uF2B7"   # LocaleLanguage (a globe with an A)
 I_TESTING = "\uE9D9"   # Diagnostic
 I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
 I_BACK, I_DELETE, I_UNDO = "\uE72B", "\uE74D", "\uE7A7"
@@ -765,7 +767,9 @@ def message_widget(text: str, mine: bool) -> tuple[QWidget, QLabel]:
     text_label.setWordWrap(True)
     text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
     if not mine:
+        text_label.setTextFormat(Qt.MarkdownText)       # the AI answers in Markdown: **bold**, bullet lists, headings
         return text_label, text_label
+    text_label.setTextFormat(Qt.PlainText)              # yours as typed: a * or _ in an answer is just a character
     bubble = QFrame(objectName="mine")
     QVBoxLayout(bubble).addWidget(text_label)
     bubble.setMaximumWidth(520)
@@ -1197,9 +1201,14 @@ class ChatPage(QWidget):
         self.model_btn = button("", "assist")            # which key and model answer, like Ollama's model picker
         self.model_btn.setToolTip("The AI that writes summaries and marks quizzes")
         self.model_btn.setMenu(QMenu(self.model_btn))
-        bottom = QHBoxLayout()                           # 4: the AI picker, then Go Reading
+        self.lang_btn = button("", "assist")             # the language of the text you are going to read
+        self.lang_btn.setToolTip("The language of the text you will read: the screen is read in it when the app "
+                                 "has to read its picture (PDFs, some apps)")
+        self.lang_btn.setMenu(QMenu(self.lang_btn))
+        bottom = QHBoxLayout()                           # 4: the AI and language pickers, then Go Reading
         bottom.setSpacing(12)
         bottom.addWidget(self.model_btn)
+        bottom.addWidget(self.lang_btn)
         bottom.addWidget(self.go, 1)
         v.addLayout(bottom)
         v.addStretch(1)                                  # 5
@@ -1310,6 +1319,7 @@ class SettingsWindow(QWidget):
     calibrate_requested = Signal()    # Calibration tab clicked
     shown = Signal(bool)              # the window appeared / went away (the ball's eye follows it)
     ai_changed = Signal()             # a key added / removed / renamed, or another key or model chosen
+    language_changed = Signal(str)    # the reading language picked in the chat: its tag ("en-US", "zh-Hans-CN"...)
 
     def __init__(self):
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint)
@@ -1363,6 +1373,8 @@ class SettingsWindow(QWidget):
         self._migrate_keys()
         self.refresh_providers()
         self.chat.model_btn.menu().aboutToShow.connect(self._fill_ai_menu)
+        self.chat.lang_btn.menu().aboutToShow.connect(self._fill_language_menu)
+        self._show_language()
         # the window reopens where it was left (page, and the Testing entry); an AI answer still opens the chat
         self.pages.currentChanged.connect(lambda i: i < 3 and self.store.setValue("last_page", i))
         self.testing.side_nav.idClicked.connect(lambda i: self.store.setValue("testing_page", i))
@@ -2038,6 +2050,36 @@ class SettingsWindow(QWidget):
     def _note(self, text: str):
         self.keys_note.setText(text)
         self.keys_note.setVisible(bool(text))
+
+    # ----- the reading language: the chat's picker beside the AI's
+
+    def reading_language(self) -> tuple[str, str]:
+        """(tag, name) of the language picked for reading; English until one is picked."""
+        return self.store.value("reading_language", "en"), self.store.value("reading_language_name", "English")
+
+    def set_reading_language(self, tag: str, name: str):
+        self.store.setValue("reading_language", tag)
+        self.store.setValue("reading_language_name", name)
+        self._show_language()
+        self.language_changed.emit(tag)
+
+    def _show_language(self):
+        self.chat.lang_btn.setText(f"{I_LANGUAGE}  {self.reading_language()[1]}  {I_CHEVRON}")
+
+    def _fill_language_menu(self):
+        """Every language Windows can read on this PC, the picked one ticked, and where to add more."""
+        menu = self.chat.lang_btn.menu()
+        menu.clear()
+        current = self.reading_language()[0]
+        for tag, name in ocr_languages():
+            act = menu.addAction(f"{name}   ({tag})", lambda t=tag, n=name: self.set_reading_language(t, n))
+            act.setCheckable(True)
+            act.setChecked(tag == current)
+        if menu.isEmpty():
+            menu.addAction("Windows OCR isn't available: the text is read through the apps only").setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Add a language… (Windows settings)",
+                       lambda: QDesktopServices.openUrl(QUrl("ms-settings:regionlanguage")))
 
     def _open_key_url(self):
         QDesktopServices.openUrl(QUrl(KEY_URLS[self.provider(self.shown_id)["kind"]]))
