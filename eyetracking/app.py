@@ -49,8 +49,8 @@ from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_co
 from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
-from eyetracking.services.reading_ai import (KEY_ENV, PROVIDER_NAMES, grade_answer, key_from_environment, list_models,
-                                             make_questions, summarize)
+from eyetracking.services.reading_ai import (KEY_ENV, MODELS, PROVIDER_NAMES, grade_answer, key_from_environment,
+                                             list_models, make_questions, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
 from eyetracking.services.storage import (load_all_calibrations, migrate_layout, new_reading_path, save_blink_scores,
                                           save_calibration, save_reading)
