@@ -133,8 +133,10 @@ def ollama_model() -> str | None:
 SYSTEM = (
     "You help a student who is reading a text on screen. An eye tracker recorded what "
     "they read. In the text, the parts they did NOT read are wrapped in "
-    "<unread>...</unread>; they read everything else. Talk to the student as 'you'. "
-    "Always write in the same language as the text."
+    "<unread>...</unread>; they read everything else. A short <unread> run of one or two "
+    "words inside a sentence they otherwise read is a key word they skipped (a name, a "
+    "number, a thing, an action): always state it in the summary and test it with a "
+    "question. Talk to the student as 'you'. Always write in the same language as the text."
 )
 LENGTH = "Keep it as short as you can, but never drop an important point just to keep it short."
 

@@ -23,14 +23,35 @@ Self-checks:  python -m eyetracking.core.reading
               python -m eyetracking.testing.test_screen_reading
 """
 import re
+import string
 from dataclasses import dataclass
 
 # A word counts as read when it sits inside a run of this many words that also
 # appears in read_text. Shorter runs ("of the", "it is") match by chance, so a
-# read piece shorter than this can't be matched.
+# read piece shorter than this can't be matched on its own (see the pair rule below).
 MATCH_WORDS = 4
 
 OPEN, CLOSE = "<unread>", "</unread>"
+
+# Words that carry no information of their own (articles, conjunctions, prepositions, pronouns,
+# auxiliaries). A skipped one between two read words counts as read: the reader took it in through
+# the perceptual span, and it changes nothing for understanding ("William and Anna": "and" only says
+# the two go together). A skipped CONTENT word ("chips") stays unread: it is a key word the reader
+# may have missed, and the AI is told so (reading_ai.SYSTEM). English only; in another language the
+# rule simply never fires.
+FUNCTION_WORDS = frozenset("""
+a an the and or but nor so yet for of in on at to by with from as into onto than then that this these
+those it its is are was were be been being am do does did has have had not no he she they we you i me
+him her them us my your his our their who whom whose which what when where while if because although
+though until unless also too very just only such some any each every all both either neither more
+most much many few less own same up down out off over under again further here there about above
+below between through during before after will would shall should can could may might must
+""".split())
+
+
+def _plain(word: str) -> str:
+    """A word as it is read: no punctuation, lower case."""
+    return word.strip(string.punctuation + "“”‘’…").lower()
 
 
 def mark_unread(full_text: str, read_text: str) -> str:
@@ -39,12 +60,28 @@ def mark_unread(full_text: str, read_text: str) -> str:
     words = [full_text[a:b] for a, b in spans]
     read_words = read_text.split()
     read_runs = {tuple(read_words[i:i + n]) for i in range(len(read_words) - n + 1)}
+    read_pairs = {tuple(read_words[i:i + 2]) for i in range(len(read_words) - 1)}
 
     # ponytail: a 4-word phrase that repeats inside a skipped part also counts as read
     is_read = [False] * len(words)
     for i in range(len(words) - n + 1):
         if tuple(words[i:i + n]) in read_runs:
             is_read[i:i + n] = [True] * n
+    # the pair rule: read_text leaves a skipped word out, so "buy some chips together" read without
+    # "chips" gives the pair (some, together) in read_text. A word that makes such a pair with the
+    # nearest read word (either side) was read; the words between them are what the reader missed
+    for order in (range(len(words)), range(len(words) - 1, -1, -1)):
+        anchor = None
+        for i in order:
+            if is_read[i]:
+                anchor = i
+            elif anchor is not None and (words[min(anchor, i)], words[max(anchor, i)]) in read_pairs:
+                is_read[i] = True
+                anchor = i
+    # a skipped function word between two read words: read (the reader took it in, it changes no meaning)
+    for i in range(1, len(words) - 1):
+        if not is_read[i] and is_read[i - 1] and is_read[i + 1] and _plain(words[i]) in FUNCTION_WORDS:
+            is_read[i] = True
 
     out, pos = [], 0
     for i, (a, b) in enumerate(spans):
@@ -121,9 +158,10 @@ class ReadingTracker:
     A word is judged read once it has spent one fixation's time (FIXATION_S)
     inside the reader's perceptual span: the few letters left and the ~15
     letters right of where the gaze is. Fast skimming never leaves a word that
-    long in the span, so skimmed text stays unread. A single unread word between
-    two read ones counts as read: readers skip about a third of the words
-    (short ones) and still take them in, through the span.
+    long in the span, so skimmed text stays unread. A single unread FUNCTION word
+    between two read ones counts as read: readers skip about a third of the words
+    (short ones) and still take them in, through the span. A skipped content word
+    stays unread: a key word the reader may have missed.
 
     Lines that scroll away keep their dwell: show() the new lines and carry on.
     """
@@ -204,8 +242,10 @@ class ReadingTracker:
 
     # ---- what was read ---------------------------------------------------
     def read_flags(self, key: str) -> list[bool]:
-        read = [d >= FIXATION_S for d in self._state[key].dwell]
-        return [r or (0 < i < len(read) - 1 and read[i - 1] and read[i + 1])   # a skipped word
+        st = self._state[key]
+        read = [d >= FIXATION_S for d in st.dwell]
+        return [r or (0 < i < len(read) - 1 and read[i - 1] and read[i + 1]       # a skipped function word
+                      and _plain(st.words[i][0]) in FUNCTION_WORDS)
                 for i, r in enumerate(read)]
 
     def read_text(self) -> str:
@@ -240,4 +280,20 @@ if __name__ == "__main__":
     assert unread_word_count(marked) == 11
     assert mark_unread(full, "") == f"<unread>{full}</unread>"
     assert mark_unread(full, full) == full
+    # a skipped function word between read words is read; a skipped content word is a key word missed
+    full = "William and Anna went to buy some chips together."
+    assert mark_unread(full, "William Anna went to buy some together.") == \
+        "William and Anna went to buy some <unread>chips</unread> together."
+    assert mark_unread(full, "William Anna went to buy") == "William and Anna went to buy <unread>some chips together.</unread>"
+    assert mark_unread(full, "Anna went to buy some") == "<unread>William and</unread> Anna went to buy some <unread>chips together.</unread>"
+    # the tracker: a content word the gaze never rested on stays unread even between read words
+    t = ReadingTracker()
+    t.show([Line(full, 0, 0, 490, 20)])                     # 10 px a letter
+    for i, w in enumerate(full.split()):
+        if w not in ("and", "chips"):
+            x = sum(len(v) + 1 for v in full.split()[:i]) * 10 + 5
+            t.feed(x, 10, i * 10.0)
+            t.feed(x, 10, i * 10.0 + FIXATION_S)             # one fixation on the word; the span reaches 15 letters right
+    flags = t.read_flags(full)
+    assert flags[full.split().index("and")] and t.read_text().startswith("William and Anna"), t.read_text()
     print("ok")
