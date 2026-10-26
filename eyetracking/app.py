@@ -44,24 +44,24 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, Q
 from eyetracking.core.points_model import TrainedModel, train
 from eyetracking.core.quality import check_recording, check_special
 from eyetracking.core.models import NO_FRAME, CalibrationRecording
-from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
+from eyetracking.core.reading import ReadingTracker, count_unit, mark_unread, tokens, unread_word_count, word_count
 from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services import reading_ai, screen_text
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (KEY_ENV, MODELS, PROVIDER_NAMES, grade_answer, key_from_environment,
                                              list_models, make_questions, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
-from eyetracking.services.storage import (list_calibrations, load_all_calibrations, migrate_layout, new_reading_path,
-                                          remove_calibration, save_blink_scores, save_calibration, save_reading,
-                                          trash_file)
+from eyetracking.services.storage import (list_calibrations, load_all_calibrations, load_reading, log_calibration,
+                                          migrate_layout, new_reading_path, remove_calibration, save_blink_scores,
+                                          save_calibration, save_reading, trash_file)
 from eyetracking.services.tracker import EyeTracker, FrameFeed
 from eyetracking.testing.try_reading_ai import SAMPLE_FULL
 from eyetracking.ui.assistant_overlay import DwellController, FloatingBall, GazeCursor
 from eyetracking.core.blink_scores import advice as blink_advice
 from eyetracking.ui.blink_window import BlinkWindow, fake_scores_from_mouse
 from eyetracking.ui.calibration_window import CalibrationWindow, fake_features_from_mouse
-from eyetracking.ui.control_window import (app_icon, TEXT_FONTS, SettingsWindow, busy, model_label, pick_ai,
-                                          pick_camera, run_busy)
+from eyetracking.ui.control_window import (app_icon, TEXT_FONTS, SettingsWindow, busy, full_text_dialog, model_label,
+                                          pick_ai, pick_camera, run_busy)
 from eyetracking.ui.gaze_window import GazeWindow, fake_point_from_mouse
 
 TICK_MS = 16             # asks for the newest camera frame (read on its own thread) at the screen's pace
@@ -233,6 +233,7 @@ class App(QObject):
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
         self.panel.chats_deleted.connect(self._chats_deleted)
+        self.panel.retry_requested.connect(lambda path: self.retry(Path(path)))
         self.record_path: Path | None = None       # the reading being written (its summary, then its quiz)
         self.control.testing.command.connect(lambda c: {"read": self.read, "check": self.check, "blink": self.blink_test}[c]())
         self.control.testing.data_changed.connect(self._retrain)
@@ -482,9 +483,10 @@ class App(QObject):
             self.model = self._train_model()
             self.panel.status.setText(f"{self._model_status()} {self._ai_status()}")
         left = len(paths) - len(gone)
-        self._say(f"Undid {what}: {left} file{'s' if left != 1 else ''} moved to the trash"
-                  + (" (Data > Calibrations > Removed restores it)" if any(p.suffix == ".json" for p in paths) else "")
-                  + (f"; already gone: {', '.join(p.name for p in gone)}" if gone else "") + ".")
+        said = (f"Undid {what}: {left} file{'s' if left != 1 else ''} moved to the trash"
+                + (" (Data > Calibrations > Removed restores it)" if any(p.suffix == ".json" for p in paths) else "")
+                + (f"; already gone: {', '.join(p.name for p in gone)}" if gone else "") + ".")
+        (self._log_calibration if any(p.suffix == ".json" for p in paths) else self._say)(said)
 
     def _retrain(self) -> None:
         """Gaze data was removed in the Practice tab: train again on what is left. Asked while other slow
@@ -609,35 +611,80 @@ class App(QObject):
         if reader is None:
             return
         full, read = reader.full_text(), reader.read_text()
-        self._start_record(full)
         self.ball.set_locked(False)
         self.control.show_page(self.panel)        # the response goes to the chat
-        if not read.split():
+        if not word_count(read):
             self.panel.reply(f"I didn't see you read anything on {self.reader_title or 'that window'}.")
             return
-        unread = unread_word_count(mark_unread(full, read))
-        self.panel.reply(f"{self.reader_title}: you read {len(read.split())} of {len(full.split())} words, "
-                         f"{unread} unread. Asking {self.provider} for what you missed...")
-        self.background.run(lambda: summarize(full, read, "unread", self.provider, self.summary_words),
-                            self._summary_ready)
+        # a copy of the whole text, if the user has one: everything, exactly as written (Skip: the screen's text)
+        pasted = full_text_dialog(self.control, self.control.c, self.reader_title)
+        full = pasted or full
+        unit, marked = count_unit(full), mark_unread(full, read)
+        intro = (f"{self.reader_title or 'The text'}: you read {word_count(full) - unread_word_count(marked)} of "
+                 f"{word_count(full)} {unit}, {unread_word_count(marked)} unread"
+                 + (" (in the copy you pasted)." if pasted else "."))
+        self._start_record(full, read, intro)
+        self._save_record()                       # saved now: an AI that doesn't answer leaves it to try again
+        self.panel.reply(f"{intro} Asking {self._ai_name()} for what you missed...")
+        self._ask_ai()
+
+    def _ai_name(self) -> str:
+        """The model that answers, as the chat's picker shows it."""
+        return model_label(self.ai_entry) if self.ai_entry else self.provider
+
+    def _ask_ai(self) -> None:
+        """Ask the AI about the reading in self.record: the summary (and the questions, for the sample text)."""
+        r = self.record
+        full, read = r["full_text"], r["read_text"]
+        self.full_text = full                     # the quiz's grading reads it
+        if r.get("quiz"):
+            self.background.run(lambda: (summarize(full, read, "unread", self.provider, self.summary_words),
+                                         make_questions(full, read, "unread", self.provider)), self._ai_ready)
+        else:
+            self.background.run(lambda: summarize(full, read, "unread", self.provider, self.summary_words),
+                                self._summary_ready)
 
     def _summary_ready(self, result) -> None:
         if isinstance(result, Exception):
-            self._ai_error(result)
+            self._ai_error(result, reading=True)
             return
         self.panel.reply(result)
         self.record["summary"] = result
+        self.record.pop("error", None)
         self._save_record()
+        if self.record_path is not None:
+            self.panel.add_ask_again(str(self.record_path))
+
+    def retry(self, path: Path) -> None:
+        """Try again / Ask again on a reading (in the live chat, or a past one in Chats): the AI is asked
+        about the same text again, and the reading's file gets the new answer."""
+        r = load_reading(path)
+        if not r or not r.get("full_text"):
+            self.panel.show_live()
+            self.panel.reply("This reading was saved before the app kept its text, so it can't be asked again. "
+                             "Read it again with Go Reading.")
+            return
+        self.quiz = []                            # a quiz still waiting belongs to the reading before
+        self.panel.set_answering(False)
+        self.record, self.record_path = r, path
+        self.panel.show_live()
+        self.panel.reply(f"Asking {self._ai_name()} again about {r.get('title') or 'that reading'}...")
+        self._ask_ai()
 
     # ---- history: the AI's results, one file per reading --------------------
-    def _start_record(self, full_text: str) -> None:
-        self.record = {"title": " ".join(full_text.split()[:6]), "when": datetime.now().isoformat(timespec="seconds"),
-                       "summary": "", "questions": []}
+    def _start_record(self, full_text: str, read_text: str, intro: str, quiz: bool = False) -> None:
+        """A reading's file: saved as soon as something was read, with its text, so an AI that didn't answer
+        can be asked again later (Chats > the reading > Try again)."""
+        words = [m for m in tokens(full_text) if m.group().strip()]
+        n = 16 if count_unit(full_text) == "characters" else 6          # the title: the first words / characters
+        title = " ".join(full_text[:words[min(n, len(words)) - 1].end()].split()) if words else "A reading"
+        self.record = {"title": title, "when": datetime.now().isoformat(timespec="seconds"), "intro": intro,
+                       "full_text": full_text, "read_text": read_text, "quiz": quiz, "summary": "", "questions": []}
         self.record_path = new_reading_path()
 
     def _save_record(self) -> None:
-        if self.record_path is None or not (self.record["summary"] or self.record["questions"]):
-            return                                # nothing worth a file yet, or deleted in the Chats list
+        if self.record_path is None:
+            return                                # deleted in the Chats list
         save_reading(self.record_path, self.record)
         self.panel.refresh()                      # the History list shows it at once
 
@@ -715,7 +762,7 @@ class App(QObject):
             self._say("Mouse mode: calibration not saved.")
             return
         if not rec.dots:
-            self._say("No samples: was your face in view? Try calibrate again.")
+            self._log_calibration("No samples: was your face in view? Try calibrate again.")
             return
         made: list[Path] = []
 
@@ -745,8 +792,14 @@ class App(QObject):
         if made and len(list_calibrations()) == 1:
             # measured on 9 testers (26 Oct): a second sitting in training, 17.3% -> 16.0% of the screen, better for 7 of 9
             said += " A second calibration another day makes the model more accurate: it learns from both sittings."
+        self._log_calibration(said)
+
+    def _log_calibration(self, text: str) -> None:
+        """What a calibration gave (or why it was rejected, or that it was undone): said, and kept in
+        Testing > Data > Calibration log."""
+        log_calibration(text)
         self.control.testing.refresh()
-        self._say(said)
+        self._say(text)
 
     def check(self) -> None:
         if not self.mouse and self.model is None:
@@ -819,25 +872,25 @@ class App(QObject):
 
     # ---- the reading AI ------------------------------------------------
     def _read_finished(self, full_text: str, read_text: str) -> None:
-        self.full_text = full_text
-        self._start_record(full_text)
         unread = unread_word_count(mark_unread(full_text, read_text))
+        intro = f"You skipped {unread} of {word_count(full_text)} {count_unit(full_text)}."
+        self._start_record(full_text, read_text, intro, quiz=True)   # the sample text: its own text, no copy needed
+        self._save_record()
         self.control.show_page(self.panel)        # the summary and quiz show in the chat
-        self.panel.reply(f"You skipped {unread} of {len(full_text.split())} words. "
-                         f"Asking {self.provider}...")
-        self.background.run(
-            lambda: (summarize(full_text, read_text, "unread", self.provider, self.summary_words),
-                     make_questions(full_text, read_text, "unread", self.provider)),
-            self._ai_ready)
+        self.panel.reply(f"{intro} Asking {self._ai_name()}...")
+        self._ask_ai()
 
     def _ai_ready(self, result) -> None:
         if isinstance(result, Exception):
-            self._ai_error(result)
+            self._ai_error(result, reading=True)
             return
         summary, self.quiz = result
         self.record["summary"], self.record["questions"] = summary, list(self.quiz)   # the same dicts: answers land in them
+        self.record.pop("error", None)
         self._save_record()
         self.panel.reply(summary)
+        if self.record_path is not None:
+            self.panel.add_ask_again(str(self.record_path))
         self._ask_next()
 
     def _ask_next(self) -> None:
@@ -871,10 +924,14 @@ class App(QObject):
                              f"Model answer: {question['model_answer']}")
         self._ask_next()
 
-    def _ai_error(self, error: Exception) -> None:
-        self.panel.reply(f"The AI didn't answer ({type(error).__name__}: {error}). "
-                         f"Is the {self.provider} package installed and its API key set? "
-                         "See services/reading_ai.py.")
+    def _ai_error(self, error: Exception, reading: bool = False) -> None:
+        """The AI didn't answer: a "Something went wrong" card in the chat. For a reading's summary the error
+        is kept in its file and the card has Try again (now, or later from Chats); a quiz grade just moves on."""
+        text = f"{type(error).__name__}: {error}"
+        if reading:
+            self.record["error"] = text
+            self._save_record()
+        self.panel.add_error(text, str(self.record_path) if reading and self.record_path is not None else None)
 
     def close(self) -> None:
         self._stop_feed()

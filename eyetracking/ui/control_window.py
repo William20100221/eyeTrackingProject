@@ -30,17 +30,17 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIc
                            QPalette, QPen, QPixmap, QRegularExpressionValidator, QShortcut)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
-                               QColorDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QColorDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (DEFAULT_HOSTS, KEY_URLS, KNOWN_MODELS, MAKERS, MODELS, PROVIDER_NAMES,
                                              default_model, list_models, provider_for_key)
 from eyetracking.services.screen_text import install_ocr, reading_languages
 from eyetracking.services.secret_store import protect, unprotect
-from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
-                                          gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
-                                          trash_file,
+from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_log, calibration_usable,
+                                          file_date, gaze_check_lines, list_blink_scores, list_calibrations,
+                                          list_gaze_checks, load_reading, trash_file,
                                           list_disabled, list_removed, restore, set_calibration_enabled,
                                           list_readings, reading_messages, reading_title, remove_calibration,
                                           remove_samples)
@@ -95,6 +95,7 @@ I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
 I_ADD = "\uE710"   # Add (+)
 I_LANGUAGE = "\uF2B7"   # LocaleLanguage (a globe with an A)
+I_LOG, I_RETRY, I_WARN, I_COPY = "\uE81C", "\uE72C", "\uE7BA", "\uE8C8"   # History, Refresh, Warning, Copy
 I_TESTING = "\uE9D9"   # Diagnostic
 I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
 I_BACK, I_DELETE, I_UNDO = "\uE72B", "\uE74D", "\uE7A7"
@@ -224,6 +225,14 @@ QMenu { background: $surfaceContainer; border: 1px solid $outlineVariant; paddin
 QMenu::item { padding: 8px 32px 8px 12px; border-radius: 4px; }
 QMenu::item:selected { background: $hover; }
 
+/* the chat: an AI that didn't answer (as Claude's "Something went wrong" box); the full-text paste box */
+#errorCard { background: $warnBg; border: 1px solid $warnLine; border-radius: 12px; }
+#errorTitle { font-size: 14px; font-weight: 600; }
+#errorText { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; }
+QPlainTextEdit#pasteBox { border: 1px solid $outlineVariant; border-radius: 8px; background: $surfaceContainerLow;
+    padding: 6px; font-size: 13px; selection-background-color: $primary; selection-color: $onPrimary; }
+QPlainTextEdit#pasteBox:focus { border: 2px solid $primary; padding: 5px; }
+
 /* Settings > AI > Providers: the providers down the left, the chosen one's key, host and models on the right */
 #providers { border-top: 1px solid $outlineVariant; }
 #providerSide { border-right: 1px solid $outlineVariant; }
@@ -299,6 +308,8 @@ def build_qss(c: dict) -> str:
         primaryHover=mix(c["onPrimary"], c["primary"], .08),
         primaryPress=mix(c["onPrimary"], c["primary"], .12),
         secContainerHover=mix(c["onSecondaryContainer"], c["secondaryContainer"], .08),
+        warnBg=mix("#E8B400", c["surface"], .14),   # amber over the surface: a warning in either theme
+        warnLine=mix("#E8B400", c["surface"], .55),
     )
 
 
@@ -859,17 +870,17 @@ class TestingPage(QWidget):
         sv.setContentsMargins(12, 12, 12, 12)
         sv.setSpacing(2)
         self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
-        sections = [("Tests", [(I_READ, "Sample text"), (I_EYE, "Gaze check"), (I_BLINK, "Blink test")]),
-                    ("Data", [(I_LINES, "Calibrations"), (I_CHART, "Gaze checks"), (I_BLINK, "Blink scores")])]
-        i = 0
+        # (glyph, name, page index on the right): the index stays when an entry is added (a saved page still fits)
+        sections = [("Tests", [(I_READ, "Sample text", 0), (I_EYE, "Gaze check", 1), (I_BLINK, "Blink test", 2)]),
+                    ("Data", [(I_LINES, "Calibrations", 3), (I_LOG, "Calibration log", 7), (I_CHART, "Gaze checks", 4),
+                              (I_BLINK, "Blink scores", 5)])]
         for section, items in sections:
             sv.addWidget(label(section, "sideTitle"))
-            for glyph, text in items:
+            for glyph, text, i in items:
                 b = button(f"{glyph}   {text}", "nav")
                 b.setCheckable(True)
                 self.side_nav.addButton(b, i)                # its id = the page index on the right
                 sv.addWidget(b)
-                i += 1
             sv.addSpacing(8)
         sv.addStretch(1)
         self.status = label("", "rowsub")                # the latest word from the app (the model, a saved file)
@@ -982,14 +993,30 @@ class TestingPage(QWidget):
         self.main.addWidget(self.gaze_checks)
         self.main.addWidget(self.blink_scores)
         self.main.addWidget(detail)
+        log = QWidget()                                  # 7: what every calibration gave, newest first
+        lv = QVBoxLayout(log)
+        lv.setContentsMargins(24, 20, 24, 24)
+        lv.setSpacing(8)
+        lv.addWidget(label("Calibration log", "sheetTitle"))
+        hint = label("What each calibration gave: how many good samples it kept, what the checks cleaned out, why "
+                     "one was rejected, and undone calibrations. Newest first.", "sheetText")
+        hint.setWordWrap(True)
+        lv.addWidget(hint)
+        self.log_list = QListWidget(objectName="linesList")
+        self.log_list.setWordWrap(True)
+        self.log_list.setSelectionMode(QListWidget.ExtendedSelection)   # select lines to copy them (Ctrl+C)
+        QShortcut(QKeySequence.Copy, self.log_list, lambda: QApplication.clipboard().setText(
+            "\n".join(it.text() for it in self.log_list.selectedItems())), context=Qt.WidgetShortcut)
+        lv.addWidget(self.log_list, 1)
+        self.main.addWidget(log)
         self.detail_path: Path | None = None
         h.addWidget(self.main, 1)
         self.side_nav.idClicked.connect(lambda i: cross_fade(self.main, i))
         self.show_page(3)                                # Calibrations first: what the model learns from
 
     def show_page(self, i: int):
-        """Open sidebar entry `i` (0-5; the calibration detail, 6, opens as its list)."""
-        i = 3 if i == 6 else max(0, min(i, 5))
+        """Open sidebar entry `i` (0-5, 7 the calibration log; the calibration detail, 6, opens as its list)."""
+        i = 3 if i == 6 else max(0, min(i, 7))
         self.side_nav.button(i).setChecked(True)
         self.main.setCurrentIndex(i)
 
@@ -1116,6 +1143,11 @@ class TestingPage(QWidget):
         fill_list(self.disabled_list, list_disabled(), "None")
         fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
         fill_list(self.removed_list, list_removed(), "None")
+        self.log_list.clear()
+        for when, text in calibration_log():
+            self.log_list.addItem(f"{when:%d %b %Y, %H:%M}    {text}")
+        if not self.log_list.count():
+            self.log_list.addItem("No calibration yet: what each one gives is written here.")
         self.gaze_checks.refresh()
         self.blink_scores.refresh()
         if self.main.currentIndex() == 6 and not (self.detail_path and self.detail_path.exists()):
@@ -1135,6 +1167,7 @@ class ChatPage(QWidget):
     message_sent = Signal(str)     # a quiz answer (or "skip")
     go_reading = Signal()          # the big button: close the window (the ball is still there)
     chats_deleted = Signal(list)   # past readings moved to the trash: their paths
+    retry_requested = Signal(str)  # Try again / Ask again on a reading: its file's path
 
     def __init__(self):
         super().__init__()
@@ -1276,10 +1309,18 @@ class ChatPage(QWidget):
         col = QVBoxLayout(host)
         col.setContentsMargins(24, 24, 32, 32)
         col.setSpacing(20)
-        col.addWidget(label(reading_title(path), "sheetTitle"))
+        title = label(reading_title(path), "sheetTitle")
+        title.setWordWrap(True)
+        col.addWidget(title)
         col.addWidget(label(f"{file_date(path):%d %b %Y, %H:%M}", "sheetText"))
         for text, mine in reading_messages(path):
             col.addWidget(message_widget(text, mine)[0])
+        record = load_reading(path) or {}
+        can_ask = bool(record.get("full_text"))           # readings from before 27 Oct kept no text to ask about
+        if record.get("error"):
+            col.addWidget(self.error_card(record["error"], str(path) if can_ask else None))
+        elif can_ask:
+            col.addWidget(self.ask_again(str(path)))
         col.addStretch(1)
         self.archive.setWidget(host)                     # replaces (and frees) the previous one
         self.view.setCurrentIndex(1)
@@ -1305,13 +1346,17 @@ class ChatPage(QWidget):
         self.add_message(text, mine=True)
         self.message_sent.emit(text)
 
-    def add_message(self, text: str, mine: bool) -> QLabel:
-        if not self.hero.isHidden():   # first message: hero out, messages fill (not isVisible: the window may be hidden)
+    def _first_message(self):
+        """The first message: the hero makes way, the messages fill (isHidden, not isVisible: the window may be hidden)."""
+        if not self.hero.isHidden():
             self.hero.hide()
             self.scroll.show()
             self.v.setStretch(0, 0)
             self.v.setStretch(1, 1)
             self.v.setStretch(5, 0)
+
+    def add_message(self, text: str, mine: bool) -> QLabel:
+        self._first_message()
         w, text_label = message_widget(text, mine)       # you: a bubble on the right; the assistant: plain text
         self.msgs.insertWidget(self.msgs.count() - 1, w)
         QTimer.singleShot(0, self._scroll_to_bottom)
@@ -1320,6 +1365,66 @@ class ChatPage(QWidget):
     def _scroll_to_bottom(self):
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+
+    def show_live(self):
+        """Back to the live chat ("Today"), from a past reading."""
+        self.chat_list.setCurrentRow(0)
+        self.view.setCurrentIndex(0)
+
+    def _add(self, w: QWidget):
+        """A widget (an error card, Ask again) in the live chat, after the messages."""
+        self._first_message()
+        self.msgs.insertWidget(self.msgs.count() - 1, w)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def add_error(self, text: str, path: str | None):
+        """The AI didn't answer: a card with what went wrong; Try again when there is a reading to ask about."""
+        self._add(self.error_card(text, path))
+
+    def add_ask_again(self, path: str):
+        self._add(self.ask_again(path))
+
+    def error_card(self, text: str, path: str | None) -> QWidget:
+        """As Claude's "Something went wrong" box: the error itself, what to do, Copy and Try again."""
+        card = QFrame(objectName="errorCard")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(16, 12, 16, 12)
+        v.setSpacing(8)
+        v.addWidget(label(f"{I_WARN}  Something went wrong", "errorTitle"))
+        err = label(text, "errorText")
+        err.setWordWrap(True)
+        err.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        err.setTextFormat(Qt.PlainText)
+        v.addWidget(err)
+        hint = label("The AI didn't answer. If it runs on this PC, check that it is running and has room (other big "
+                     "jobs take its memory); else check its key and the internet. This reading is saved in Chats: "
+                     "try again now, or later from there.", "sheetText")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        copy = button(f"{I_COPY}  Copy", "outlined")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(text))
+        row.addWidget(copy)
+        if path:
+            again = button(f"{I_RETRY}  Try again", "outlined")
+            again.clicked.connect(lambda: self.retry_requested.emit(path))
+            row.addWidget(again)
+        row.addStretch(1)
+        v.addLayout(row)
+        return card
+
+    def ask_again(self, path: str) -> QWidget:
+        """Under an answer: ask the AI again about the same reading (a new summary)."""
+        again = button(f"{I_RETRY}  Ask again", "text")
+        again.setToolTip("Ask the AI again about this reading: a new summary replaces this one")
+        again.clicked.connect(lambda: self.retry_requested.emit(path))
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(again)
+        h.addStretch(1)
+        return row
 
     def reply(self, text: str):
         """Stream the assistant's text in, two characters a tick."""
@@ -2409,6 +2514,46 @@ def new_custom_id(providers: list[dict]) -> str:
 def model_label(p: dict) -> str:
     """The display name of the model this provider uses."""
     return next((name for model_id, name in p["models"] if model_id == p["model"]), p["model"] or "no model")
+
+
+def full_text_dialog(parent, c: dict, where: str) -> str | None:
+    """Before the AI is asked: a copy of the whole text, if the user has one (pasted), or None (Skip). With it
+    the AI sees everything, parts that never came onto the screen too, and no screen-reading slips."""
+    dlg = QDialog(parent, Qt.Dialog | Qt.WindowCloseButtonHint)
+    dlg.setObjectName("root")
+    dlg.setAttribute(Qt.WA_StyledBackground)
+    dlg.setWindowTitle("The full text")
+    dlg.setStyleSheet(build_qss(c))
+    dlg.resize(620, 460)
+    v = QVBoxLayout(dlg)
+    v.setContentsMargins(24, 20, 24, 20)
+    v.setSpacing(10)
+    v.addWidget(label("Do you have a copy of the full text?", "sheetTitle"))
+    hint = label(f"Paste the whole text you read{f' ({where})' if where else ''}: from the page, the PDF or the "
+                 "document (Ctrl+A, Ctrl+C there). The AI then sees all of it, including parts that never came onto "
+                 "the screen, exactly as written. No copy? Skip: the app uses the text it read off the screen.",
+                 "sheetText")
+    hint.setWordWrap(True)
+    v.addWidget(hint)
+    box = QPlainTextEdit(objectName="pasteBox")
+    box.setPlaceholderText("Paste the full text here (Ctrl+V)")
+    v.addWidget(box, 1)
+    actions = QHBoxLayout()
+    actions.setSpacing(8)
+    paste = button("Paste from clipboard", "text")
+    paste.clicked.connect(lambda: box.setPlainText(QApplication.clipboard().text()))
+    actions.addWidget(paste)
+    actions.addStretch(1)
+    skip = button("Skip", "text")
+    skip.clicked.connect(dlg.reject)
+    use = button("Use this text", "filled")
+    use.clicked.connect(dlg.accept)
+    use.setEnabled(False)
+    box.textChanged.connect(lambda: use.setEnabled(bool(box.toPlainText().strip())))
+    actions.addWidget(skip)
+    actions.addWidget(use)
+    v.addLayout(actions)
+    return box.toPlainText().strip() or None if dlg.exec() == QDialog.Accepted else None
 
 
 def add_provider_dialog(parent, c: dict) -> dict | None:

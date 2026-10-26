@@ -4,7 +4,9 @@ Self-check for the chat's AI text and the reading language (no webcam, no networ
 
 The AI's Markdown is shown formatted (bold, bullet lists), the user's own answers as typed; the
 language picker beside the AI picker lists the languages Windows can read, remembers the choice, and
-the app reads the screen (OCR) in it. Temp settings only.
+the app reads the screen (OCR) in it; past readings can be deleted; a reading is saved before the AI
+answers, an AI error is kept with it and shown as a "Something went wrong" card with Try again (in
+the live chat and in Chats), and an answer has Ask again. Temp settings and history only.
 """
 import os
 import tempfile
@@ -100,4 +102,58 @@ assert storage.list_readings() == [paths[0]]
 chat.delete_chats([])                                                           # "Today" picked: nothing to delete
 assert storage.list_readings() == [paths[0]]
 assert "·" not in chat.model_btn.text()                                          # the model only, not its provider
+
+# ---- an AI that doesn't answer: the reading is saved with its error; Try again (now or from Chats) asks again
+import time
+from PySide6.QtWidgets import QPushButton
+answers = [RuntimeError("Failed to load model \"gemma-4-e4b-it\""), "You missed **the seeds**."]
+
+
+def fake_summarize(full, read, mode, provider, words):
+    a = answers.pop(0)
+    if isinstance(a, Exception):
+        raise a
+    return a
+
+
+appmod.summarize = fake_summarize
+
+
+full ="Seeds from every country are kept in a mountain.\nThe vault opened in 2008."
+app.reader_title = "Seed vault - Chrome"
+app._start_record(full, "Seeds from every country are kept in a mountain.", "Seed vault: you read 9 of 14 words.")
+app._save_record()
+saved = app.record_path
+assert storage.load_reading(saved)["full_text"] == full                         # saved before the AI answered
+app._ask_ai()
+for _ in range(200):
+    qt.processEvents()
+    time.sleep(0.01)
+    if storage.load_reading(saved).get("error"):
+        break
+record = storage.load_reading(saved)
+assert record["error"] == 'RuntimeError: Failed to load model "gemma-4-e4b-it"' and not record["summary"], record
+cards = [w for w in chat.findChildren(cw.QFrame, "errorCard")]
+assert cards and "Something went wrong" in cards[-1].findChild(cw.QLabel, "errorTitle").text()
+again = [b for b in cards[-1].findChildren(QPushButton) if "Try again" in b.text()]
+assert again                                                                     # the card offers Try again
+chat.refresh()
+chat.chat_list.setCurrentRow([chat.chat_list.item(i).data(0x0100) for i in range(chat.chat_list.count())].index(str(saved)))
+assert chat.view.currentIndex() == 1                                             # the saved reading in Chats...
+archive_cards = chat.archive.widget().findChildren(cw.QFrame, "errorCard")
+assert archive_cards and [b for b in archive_cards[0].findChildren(QPushButton) if "Try again" in b.text()]   # ...with Try again
+[b for b in archive_cards[0].findChildren(QPushButton) if "Try again" in b.text()][0].click()   # tried again from Chats
+assert chat.view.currentIndex() == 0 and "again about Seeds from every country" in chat.said[-1], chat.said[-1]
+for _ in range(200):
+    qt.processEvents()
+    time.sleep(0.01)
+    if storage.load_reading(saved).get("summary"):
+        break
+record = storage.load_reading(saved)
+assert record["summary"] == "You missed **the seeds**." and "error" not in record, record
+assert [b for b in chat.findChildren(QPushButton) if "Ask again" in b.text()]    # under the answer: Ask again
+old = storage.HISTORY_DIR / "reading_2026-01-01_000000.json"                     # saved before the app kept its text
+storage.save_reading(old, {"title": "Old", "when": "", "summary": "x", "questions": []})
+app.retry(old)
+assert "can't be asked again" in chat.said[-1]
 print("chat format and language ok")

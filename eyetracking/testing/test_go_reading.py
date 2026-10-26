@@ -3,7 +3,8 @@ Self-check for Go Reading (no camera, no real screen, no AI):
     python -m eyetracking.testing.test_go_reading
 
 Go Reading locks the ball. Click: eyes open, the page under the gaze is captured
-and the gaze is tracked over it. Click: eyes closed, the chat comes back with
+and the gaze is tracked over it. Click: eyes closed, a copy of the full text is
+asked for (Skip, or paste one: the AI is asked about it), the chat comes back with
 "you read X of Y words" and the AI's summary of what was missed. "Open assistant"
 from the ball's menu ends a reading the same way.
 """
@@ -22,6 +23,8 @@ import eyetracking.ui.control_window as cw
 cw.QSettings = lambda *_: QSettings(str(Path(tempfile.mkdtemp()) / "settings.ini"), QSettings.IniFormat)
 import eyetracking.app as appmod
 appmod.save_reading = lambda path, record: None          # no history files from a test
+pasted, asked_copy = [], []                               # the "full text?" dialog: what the user pastes (none: Skip)
+appmod.full_text_dialog = lambda *a: (asked_copy.append(a[2]), pasted.pop() if pasted else None)[1]
 from eyetracking.core.reading import FIXATION_S, Line
 
 qt = QApplication([])
@@ -103,8 +106,31 @@ app.tick()                                                # reading over: the ga
 assert app.cursor.isVisible()
 wait(lambda: asked)
 assert asked[0][2] == "unread" and asked[0][1].split() == LINES[0].text.split()
+assert asked_copy == ["Water cycle - Notepad"]                     # the full text was asked for (Skipped here)
 wait(lambda: app.panel.said[-1] == "SUMMARY")
 assert app.record["summary"] == "SUMMARY" and app.record["title"] == "The water cycle moves heat around"
+assert app.record["full_text"] == "\n".join(ln.text for ln in LINES) and app.record["read_text"] == LINES[0].text
+
+# 4b. the same reading with a pasted copy of the whole text: the AI is asked about the copy
+COPY = "\n".join(ln.text for ln in LINES) + "\nA third paragraph that never came onto the screen at all."
+pasted.append(COPY)
+app.panel.go.click()
+app.ball.clicked.emit()
+pump()
+app._lines_ready(LINES)
+look(LINES[0].x + 3 * letter, LINES[0].y + 15)
+app._feed_reader()
+for pos in range(3, len(LINES[0].text), 8):
+    look(LINES[0].x + pos * letter, LINES[0].y + 15)
+    for _ in range(int(FIXATION_S * 30) + 1):
+        clock[0] += 1 / 30
+        app._feed_reader()
+app.ball.clicked.emit()
+pump()
+wait(lambda: len(asked) == 2)
+assert asked[1][0] == COPY and "(in the copy you pasted)" in app.record["intro"], app.record["intro"]
+total = len(COPY.split())
+assert f"you read {n} of {total} words, {total - n} unread" in app.record["intro"], app.record["intro"]
 
 # 5. a reading where nothing was read, ended by "Open assistant" from the menu
 app.panel.go.click()
@@ -114,7 +140,7 @@ assert app.reader is not None and app.ball.locked
 app.ball.open_requested.emit()
 pump()
 assert app.reader is None and not app.ball.locked and app.control.isVisible()
-assert "didn't see you read" in app.panel.said[-1]
+assert "didn't see you read" in app.panel.said[-1] and len(asked_copy) == 2   # nothing read: no copy asked for
 # 6. a double-click on the ball records without Go Reading, and a second one stops
 app.ball.double_clicked.emit()
 pump()

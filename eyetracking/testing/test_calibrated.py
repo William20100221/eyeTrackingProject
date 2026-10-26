@@ -69,4 +69,14 @@ assert len(saved()) == 2 and said[-1].startswith("Calibration rejected (") and "
 
 app._calibrated(QWidget(), CalibrationRecording(line, head, ()))             # no face in view
 assert len(saved()) == 2 and said[-1].startswith("No samples")
+
+# every outcome is kept in Testing > Data > Calibration log, newest first (the "fresh" folder's one stays there)
+log = [text for _, text in storage.calibration_log()]
+assert len(log) == 4 and log[0].startswith("No samples") and log[1].startswith("Calibration rejected"), log
+assert log[2].startswith("Calibrated with") and "can't be used" in log[2] and log[3].startswith("Calibrated with"), log
+page = app.control.testing
+page.show_page(7)
+assert page.main.currentIndex() == 7 and page.side_nav.button(7).isChecked()
+rows = [page.log_list.item(i).text() for i in range(page.log_list.count())]
+assert len(rows) == 4 and rows[0].endswith(log[0]) and rows[3].endswith(log[3]), rows
 print("calibrated ok:", said[0][:60] + "…")

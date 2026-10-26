@@ -246,6 +246,30 @@ def remove_calibration(path: Path) -> Path:
     return target
 
 
+def log_calibration(text: str) -> None:
+    """One line in the calibration log (Testing > Data > Calibration log): what a calibration gave, or why
+    it was rejected, or that it was undone. Kept beside the calibrations it is about."""
+    CALIB_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CALIB_DIR / "log.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"when": datetime.now().isoformat(timespec="seconds"), "text": text}, ensure_ascii=False) + "\n")
+
+
+def calibration_log() -> list[tuple[datetime, str]]:
+    """The calibration log, newest first; a damaged line is skipped."""
+    try:
+        rows = (CALIB_DIR / "log.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for row in rows:
+        try:
+            entry = json.loads(row)
+            out.append((datetime.fromisoformat(entry["when"]), str(entry["text"])))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return out[::-1]
+
+
 def list_removed() -> list[Path]:
     """The calibrations in the trash (removed, or the untouched original of an edited one), newest first."""
     return sorted(TRASH_DIR.glob("calibration_*.json"), reverse=True)
@@ -266,10 +290,23 @@ def new_reading_path() -> Path:
 
 def save_reading(path: Path, record: dict) -> None:
     """record: {"title": the text's first words, "when": iso time, "summary": str,
-    "questions": [{"question", "model_answer", "answer"?, "score"?, "explanation"?}, ...]}"""
+    "questions": [{"question", "model_answer", "answer"?, "score"?, "explanation"?}, ...],
+    and since 27 Oct: "full_text", "read_text" (what the AI is asked about, so it can be asked again),
+    "intro" (what was read, in words), "quiz" (summary + questions, or the summary only),
+    "error" (the AI's error while it hasn't answered)}. A reading is saved as soon as something was read."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
+
+
+def load_reading(path: Path) -> dict | None:
+    """A saved reading's record (see save_reading), or None if it can't be read."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
 
 
 def list_readings() -> list[Path]:
@@ -293,7 +330,8 @@ def reading_messages(path: Path) -> list[tuple[str, bool]]:
             r = json.load(f)
     except (OSError, ValueError) as e:
         return [(f"Can't read {path.name} ({e}).", False)]
-    out = [(r["summary"], False)] if r.get("summary") else []
+    out = [(r["intro"], False)] if r.get("intro") else []          # "you read 314 of 424 words, ..."
+    out += [(r["summary"], False)] if r.get("summary") else []
     for i, q in enumerate(r.get("questions", []), 1):
         out.append((f"Question {i}: {q['question']}", False))
         if "answer" in q:
