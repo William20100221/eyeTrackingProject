@@ -2,8 +2,8 @@
 Self-check for issue #13 (Windows):  python -m eyetracking.testing.test_secret_store
 
 AI keys never land in the settings as plain text: they round-trip through DPAPI,
-an old single key (plain or encrypted) becomes Key 1 the first time the window
-opens, and the new-key field's eye button shows and hides what is typed.
+an old single key (plain or encrypted) becomes its brand's key the first time the
+window opens, and the key field's eye button shows and hides what is typed.
 """
 import os
 import tempfile
@@ -27,12 +27,12 @@ qt = QApplication([])
 QSettings(str(ini), QSettings.IniFormat).setValue("api_key", key)        # one key, as an older version saved it
 w = cw.SettingsWindow()
 w.store.sync()
-keys = w.stored_keys()
-assert [k["name"] for k in keys] == ["Key 1"] and w.entry_secret(keys[0]) == key   # it became Key 1...
-assert key not in ini.read_text() and "api_key" not in ini.read_text()            # ...encrypted, the old entry gone
-assert w.key.echoMode() == QLineEdit.Password
+claude = w.provider("claude")
+assert claude["last4"] == "6789" and w.secret_of(claude) == key          # it became Claude's key...
+assert key not in ini.read_text() and "api_key" not in ini.read_text()   # ...encrypted, the old entry gone
+assert w.key_field.echoMode() == QLineEdit.Password
 w.key_eye.trigger()
-assert w.key.echoMode() == QLineEdit.Normal
+assert w.key_field.echoMode() == QLineEdit.Normal
 w.key_eye.trigger()
-assert w.key.echoMode() == QLineEdit.Password
+assert w.key_field.echoMode() == QLineEdit.Password
 print("secret store ok")

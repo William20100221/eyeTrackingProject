@@ -18,24 +18,24 @@ import ctypes
 import threading
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 from string import Template
 
 from materialyoucolor.dynamiccolor.material_dynamic_colors import MaterialDynamicColors
 from materialyoucolor.hct import Hct
 from materialyoucolor.scheme.scheme_fidelity import SchemeFidelity
-from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpression, QSettings, Qt, QTimer,
-                            QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
-                           QRegularExpressionValidator)
+from PySide6.QtCore import (QEasingCurve, QEvent, QPointF, QRectF, QRegularExpression, QSettings, QSize, Qt, QTimer,
+                            QUrl, QVariantAnimation, Signal)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPainterPath, QPalette, QPen,
+                           QPixmap, QRegularExpressionValidator)
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
                                QColorDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from eyetracking.services.camera import camera_names
-from eyetracking.services.reading_ai import KNOWN_MODELS, PROVIDER_NAMES, default_model, list_models, provider_for_key
+from eyetracking.services.reading_ai import (DEFAULT_HOSTS, KEY_URLS, KNOWN_MODELS, MAKERS, MODELS, PROVIDER_NAMES,
+                                             default_model, list_models, provider_for_key)
 from eyetracking.services.secret_store import protect, unprotect
 from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_usable, file_date,
                                           gaze_check_lines, list_blink_scores, list_calibrations, list_gaze_checks,
@@ -92,6 +92,7 @@ I_THEME, I_PALETTE, I_BALL, I_LAYERS = "", "", "", ""
 I_FULLSCREEN, I_SPARKLE, I_LINES = "", "", ""
 I_EYE, I_CAMERA = "", ""   # View (eye), Camera
 I_KEY = "\uE8D7"   # Permissions (key)
+I_ADD = "\uE710"   # Add (+)
 I_TESTING = "\uE9D9"   # Diagnostic
 I_BLINK, I_CHART = "\uE7B3", "\uE9D2"   # RedEye, AreaChart
 I_BACK, I_DELETE = "\uE72B", "\uE74D"
@@ -221,6 +222,29 @@ QMenu { background: $surfaceContainer; border: 1px solid $outlineVariant; paddin
 QMenu::item { padding: 8px 32px 8px 12px; border-radius: 4px; }
 QMenu::item:selected { background: $hover; }
 
+/* Settings > AI > Providers: the providers down the left, the chosen one's key, host and models on the right */
+#providers { border-top: 1px solid $outlineVariant; }
+#providerSide { border-right: 1px solid $outlineVariant; }
+QListWidget#providerList { background: transparent; border: none; outline: none; font-size: 14px; }
+QListWidget#providerList::item { padding: 7px 8px; border-radius: 8px; }
+QListWidget#providerList::item:hover { background: $hover; }
+QListWidget#providerList::item:selected { background: $selected; color: $onSurface; }
+#providers QLineEdit, #addProvider QLineEdit { min-height: 32px; max-height: 32px; padding: 0 8px; border: 1px solid $outlineVariant;
+    border-radius: 6px; background: $surfaceContainerLow; selection-background-color: $primary; selection-color: $onPrimary; }
+#providers QLineEdit:focus, #addProvider QLineEdit:focus { border-bottom: 2px solid $primary; }
+#providers QLineEdit:disabled { color: $onSurfaceVariant; }
+#providerName { font-size: 16px; font-weight: 600; }
+#fieldLabel { font-size: 13px; font-weight: 600; }
+QPushButton[kind="link"] { color: $primary; font-size: 12px; font-weight: 400; padding: 0 4px; min-height: 20px; max-height: 20px;
+    border-radius: 4px; }
+QPushButton[kind="link"]:hover { text-decoration: underline; }
+QPushButton[kind="link"]:focus { padding: 0 2px; }
+QListWidget#modelList { background: $surfaceContainerLow; border: 1px solid $outlineVariant; border-radius: 6px; outline: none;
+    font-size: 13px; }
+QListWidget#modelList::item { padding: 6px 10px; }
+QListWidget#modelList::item:hover { background: $hover; }
+QListWidget#modelList::item:selected { background: $selected; color: $onSurface; }
+
 /* chat page */
 #side { background: $surfaceContainerLow; border-right: 1px solid $outlineVariant; }
 #sideTitle { font-size: 12px; font-weight: 600; color: $onSurfaceVariant; padding: 8px 12px 4px 12px; }
@@ -282,6 +306,26 @@ def label(text: str, name: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setObjectName(name)
     return lbl
+
+
+def letter_icon(letter: str, bg: str, fg: str, px: int = 24) -> QIcon:
+    """A round mark with one letter: a provider's avatar in Settings > AI (no picture upload: a letter is enough)."""
+    pm = QPixmap(px * 2, px * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(bg))
+    p.drawEllipse(QRectF(0, 0, px, px))
+    f = QFont()
+    f.setPixelSize(px // 2)
+    f.setBold(True)
+    p.setFont(f)
+    p.setPen(QColor(fg))
+    p.drawText(QRectF(0, 0, px, px), Qt.AlignCenter, letter[:1].upper())
+    p.end()
+    return QIcon(pm)
 
 
 def button(text: str, kind: str) -> QPushButton:
@@ -1206,7 +1250,9 @@ class SettingsWindow(QWidget):
         self.resize(1100, 700)
         self.setMinimumSize(920, 560)
         self.store = QSettings("StudyAssistant", "StudyAssistant")
-        self.extra_entries: list[dict] = []   # a key from the environment, Ollama: set by the app, not saved
+        self.found_key: tuple[str, str] | None = None   # (provider, key) from the environment: set by the app, not saved
+        self.found_ollama: list[list[str]] = []          # the models a running Ollama has installed (set_found)
+        self.shown_id = "claude"                         # the provider whose pane Settings > AI shows
         self.seed = self.store.value("seed", DEFAULTS["seed"])
         self.c = make_scheme(self.seed, False)
 
@@ -1245,8 +1291,8 @@ class SettingsWindow(QWidget):
         self._grip = G
 
         self.load(self.read_store())
-        self._migrate_single_key()
-        self.refresh_keys()
+        self._migrate_keys()
+        self.refresh_providers()
         self.chat.model_btn.menu().aboutToShow.connect(self._fill_ai_menu)
         # the window reopens where it was left (page, and the Testing entry); an AI answer still opens the chat
         self.pages.currentChanged.connect(lambda i: i < 3 and self.store.setValue("last_page", i))
@@ -1401,41 +1447,8 @@ class SettingsWindow(QWidget):
         wl.setSpacing(8)
         wl.addWidget(self.words)
         wl.addWidget(label("words", "unit"))
-        self.key = QLineEdit(objectName="find", placeholderText="Paste a new key", echoMode=QLineEdit.Password)
-        self.key.setAccessibleName("New AI key")
-        self.key.returnPressed.connect(lambda: self.add_key(self.key.text()))
-        self.key_eye = self.key.addAction(QIcon(), QLineEdit.TrailingPosition)   # show / hide the key
-        self.key_eye.setToolTip("Show the key")
-        self.key_eye.triggered.connect(self._toggle_key)
-        add = button("Add", "outlined")
-        add.clicked.connect(lambda: self.add_key(self.key.text()))
-        manage = QWidget()                               # one block: the add row, then the keys by brand
-        mv = QVBoxLayout(manage)
-        mv.setContentsMargins(0, 0, 0, 0)
-        mv.setSpacing(0)
-        mv.addWidget(self.row(I_KEY, "Manage keys",
-                              "Paste a key from Claude (sk-ant-…), ChatGPT (sk-…) or Gemini (AQ.… or AIza…): it is filed under "
-                              "its brand as Key 1, Key 2…, so the key itself is never shown, and stored encrypted for "
-                              "your Windows login. Double-click a key to use it; right-click to pick its model, ask "
-                              "for its models again, rename or remove it.", self.key, add))
-        self.rows[-1] = (manage, self.rows[-1][1] + " keys api claude chatgpt openai gemini ollama local model")
-        self.keys_list = QListWidget(objectName="linesList")   # brand headings, each with its keys
-        self.keys_list.setSelectionMode(QListWidget.NoSelection)
-        self.keys_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.keys_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.keys_list.customContextMenuRequested.connect(self._key_menu)
-        self.keys_list.itemActivated.connect(lambda it: it.data(Qt.UserRole) and self.use_entry(it.data(Qt.UserRole)))
-        self.keys_note = label("", "rowsub")             # what the last add / refresh found; hidden when empty
-        self.keys_note.setWordWrap(True)
-        self.keys_note.hide()
-        below = QVBoxLayout()
-        below.setContentsMargins(52, 0, 16, 12)
-        below.setSpacing(4)
-        below.addWidget(self.keys_list)
-        below.addWidget(self.keys_note)
-        mv.addLayout(below)
         self.group("AI", [
-            manage,
+            self._providers_block(),
             self.row(I_LINES, "Summary length", "About this many words", words),
         ])
         self.camera_btn = button("", "assist")
@@ -1453,6 +1466,123 @@ class SettingsWindow(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # the content always fits the width
         scroll.viewport().setAutoFillBackground(False)
         return scroll
+
+    def _providers_block(self) -> QWidget:
+        """Settings > AI > Providers: the heading row, then the providers down the left (search, Add Provider)
+        and the chosen one's switch, key, host and models on the right."""
+        block = QWidget()
+        bv = QVBoxLayout(block)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(0)
+        bv.addWidget(self.row(I_KEY, "Providers",
+                              "Claude, ChatGPT, Gemini and Ollama are built in; Add Provider takes any other server that "
+                              "speaks the OpenAI or Anthropic API. Each provider keeps its own key (stored encrypted for "
+                              "your Windows login, never shown again), API host and models. Click a model to answer "
+                              "with it; the switch turns a provider off."))
+        self.rows[-1] = (block, self.rows[-1][1] + " keys api claude chatgpt openai gemini ollama local model host custom")
+        panel = QFrame(objectName="providers")
+        panel.setFixedHeight(440)
+        ph = QHBoxLayout(panel)
+        ph.setContentsMargins(0, 0, 0, 0)
+        ph.setSpacing(0)
+
+        side = QFrame(objectName="providerSide")
+        side.setFixedWidth(236)
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(12, 12, 12, 12)
+        sv.setSpacing(8)
+        self.provider_find = QLineEdit(placeholderText="Search providers…")
+        self.provider_find.setAccessibleName("Search providers")
+        self.provider_find.textChanged.connect(self._filter_providers)
+        sv.addWidget(self.provider_find)
+        self.provider_list = QListWidget(objectName="providerList")
+        self.provider_list.setIconSize(QSize(24, 24))
+        self.provider_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # a long name is cut, not scrolled
+        self.provider_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.provider_list.customContextMenuRequested.connect(self._provider_menu)
+        self.provider_list.currentItemChanged.connect(lambda cur, _: cur and self._show_provider(cur.data(Qt.UserRole)))
+        sv.addWidget(self.provider_list, 1)
+        add = button(f"{I_ADD}  Add Provider", "outlined")
+        add.clicked.connect(self.add_provider)
+        sv.addWidget(add)
+        ph.addWidget(side)
+
+        detail = QWidget()
+        dv = QVBoxLayout(detail)
+        dv.setContentsMargins(20, 12, 16, 12)
+        dv.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        self.provider_title = label("", "providerName")
+        self.provider_maker = label("", "rowsub")
+        head.addWidget(self.provider_title)
+        head.addWidget(self.provider_maker, 1)
+        self.provider_on = Switch("Provider on")
+        self.provider_on.clicked.connect(lambda: self.set_on(self.shown_id, self.provider_on.isChecked()))
+        head.addWidget(self.provider_on)
+        dv.addLayout(head)
+
+        def heading(text: str, *links) -> tuple[QHBoxLayout, list[QPushButton]]:
+            """A field's title with small link buttons beside it, as on a web settings page."""
+            h = QHBoxLayout()
+            h.setSpacing(8)
+            h.addWidget(label(text, "fieldLabel"))
+            made = []
+            for link_text, slot in links:
+                link = button(link_text, "link")
+                link.clicked.connect(slot)
+                h.addWidget(link)
+                made.append(link)
+            h.addStretch(1)
+            return h, made
+
+        h, (self.key_link, self.forget_link) = heading("API Key", ("Get API key", self._open_key_url),
+                                                       ("Forget the saved key", lambda: self.forget_key(self.shown_id)))
+        dv.addSpacing(6)
+        dv.addLayout(h)
+        self.key_field = QLineEdit(placeholderText="Add API key", echoMode=QLineEdit.Password)
+        self.key_field.setAccessibleName("API key")
+        self.key_eye = self.key_field.addAction(QIcon(), QLineEdit.TrailingPosition)   # show / hide what is typed
+        self.key_eye.setToolTip("Show the key")
+        self.key_eye.triggered.connect(self._toggle_key)
+        self.key_field.editingFinished.connect(lambda: self.set_key(self.shown_id, self.key_field.text()))
+        dv.addWidget(self.key_field)
+
+        h, (self.host_link,) = heading("API Host", ("Back to the usual host", lambda: self.set_host(self.shown_id, "")))
+        dv.addSpacing(6)
+        dv.addLayout(h)
+        self.host_field = QLineEdit(placeholderText="https://…")
+        self.host_field.setAccessibleName("API host")
+        self.host_field.editingFinished.connect(lambda: self.set_host(self.shown_id, self.host_field.text()))
+        dv.addWidget(self.host_field)
+
+        mh = QHBoxLayout()
+        mh.setSpacing(8)
+        mh.addWidget(label("Models", "fieldLabel"), 1)
+        self.sync_btn = SpinButton(I_RESET, "Sync models", "outlined")
+        self.sync_btn.setToolTip("Ask the provider which models this key can use")
+        self.sync_btn.clicked.connect(lambda: self.sync_models(self.shown_id))
+        add_model = button(I_ADD, "icon")
+        add_model.setToolTip("Add a model by its id")
+        add_model.setAccessibleName("Add a model")
+        add_model.clicked.connect(lambda: self.add_model(self.shown_id))
+        mh.addWidget(self.sync_btn)
+        mh.addWidget(add_model)
+        dv.addSpacing(6)
+        dv.addLayout(mh)
+        self.model_list = QListWidget(objectName="modelList")
+        self.model_list.setMinimumHeight(100)
+        self.model_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.model_list.customContextMenuRequested.connect(self._model_menu_at)
+        self.model_list.itemClicked.connect(lambda it: it.data(Qt.UserRole) and self.use(self.shown_id, it.data(Qt.UserRole)))
+        dv.addWidget(self.model_list, 1)
+        self.keys_note = label("", "rowsub")             # what the last key / sync found; hidden when empty
+        self.keys_note.setWordWrap(True)
+        self.keys_note.hide()
+        dv.addWidget(self.keys_note)
+        ph.addWidget(detail, 1)
+        bv.addWidget(panel)
+        return block
 
     def row(self, icon, title, sub, *trailing):
         w = QWidget()
@@ -1551,221 +1681,361 @@ class SettingsWindow(QWidget):
         return {k: self.store.value(k, d, type=type(d)) for k, d in DEFAULTS.items()}
 
     def _toggle_key(self):
-        shown = self.key.echoMode() == QLineEdit.Normal
-        self.key.setEchoMode(QLineEdit.Password if shown else QLineEdit.Normal)
+        shown = self.key_field.echoMode() == QLineEdit.Normal
+        self.key_field.setEchoMode(QLineEdit.Password if shown else QLineEdit.Normal)
         self.key_eye.setToolTip("Show the key" if shown else "Hide the key")
 
-    # ----- AI keys: Key 1, Key 2...; the key itself is only ever stored encrypted (DPAPI)
+    # ----- AI providers: Claude, ChatGPT, Gemini and Ollama built in, plus custom ones (any server that speaks the
+    # OpenAI or Anthropic API). Each has its own key, host and models; a key is only ever stored encrypted (DPAPI)
 
-    def stored_keys(self) -> list[dict]:
-        """The saved keys: {id, number, name, provider, secret (encrypted), last4, model, models, added}."""
+    def _builtin(self, kind: str) -> dict:
+        return {"id": kind, "name": PROVIDER_NAMES[kind], "kind": kind, "secret": "", "last4": "",
+                "host": DEFAULT_HOSTS[kind], "models": [list(m) for m in KNOWN_MODELS[kind]], "model": MODELS[kind],
+                "on": True, "custom": False}
+
+    def providers(self) -> list[dict]:
+        """Every provider, the built-in four first then the custom ones: {id, name, kind (the API it speaks),
+        secret (encrypted), last4, host, models [[id, name]], model, on, custom}. A key found in the
+        environment / .env fills a built-in one that has none (as "plain": not saved); Ollama's models
+        are the ones it has installed."""
+        try:
+            saved = json.loads(self.store.value("ai_providers", "[]"))
+        except ValueError:
+            saved = []
+        saved = [p for p in saved if isinstance(p, dict) and "id" in p] if isinstance(saved, list) else []
+        by_id = {p["id"]: p for p in saved}
+        out = [{**self._builtin(k), **by_id.get(k, {})} for k in BRANDS] + [p for p in saved if p.get("custom")]
+        for p in out:
+            p.pop("plain", None)
+            if self.found_key and p["id"] == self.found_key[0] and not p["secret"]:
+                p["plain"], p["last4"] = self.found_key[1], self.found_key[1][-4:]
+            if p["id"] == "ollama":
+                p["models"] = self.found_ollama
+                if self.found_ollama and p["model"] not in [m[0] for m in self.found_ollama]:
+                    p["model"] = self.found_ollama[0][0]
+        return out
+
+    def _save_providers(self, providers: list[dict]):
+        self.store.setValue("ai_providers", json.dumps([{k: v for k, v in p.items() if k != "plain"} for p in providers]))
+
+    def _update(self, pid: str, **changes):
+        self._save_providers([{**p, **changes} if p["id"] == pid else p for p in self.providers()])
+
+    def provider(self, pid: str) -> dict | None:
+        return next((p for p in self.providers() if p["id"] == pid), None)
+
+    def set_found(self, key: tuple[str, str] | None, ollama_models: list):
+        """What the app found at start: (provider, key) in the environment / .env, and Ollama's installed models."""
+        self.found_key, self.found_ollama = key, [list(m) for m in ollama_models]
+        self.refresh_providers()
+
+    def usable(self) -> list[dict]:
+        """The providers that can answer: on, with a key (a custom server may need none; Ollama needs its models)."""
+        return [p for p in self.providers() if p["on"] and
+                (bool(p["models"]) if p["id"] == "ollama" else bool(self.secret_of(p)) or p["custom"])]
+
+    def active(self) -> dict | None:
+        """The provider that answers: the chosen one if it can, else the first that can."""
+        usable = self.usable()
+        want = self.store.value("ai_active", "")
+        return next((p for p in usable if p["id"] == want), usable[0] if usable else None)
+
+    def secret_of(self, p: dict) -> str:
+        return unprotect(p["secret"]) if p.get("secret") else p.get("plain", "")
+
+    def _migrate_keys(self):
+        """Older versions saved one key as "api_key", then several as "ai_keys" (Key 1, Key 2…). Each becomes its
+        brand's key; a second key of the same brand becomes a custom provider ("Key 3 (Claude)") on the usual host."""
+        old = self.store.value("api_key", "")
         try:
             keys = json.loads(self.store.value("ai_keys", "[]"))
         except ValueError:
             keys = []
-        return keys if isinstance(keys, list) else []
-
-    def _save_keys(self, keys: list[dict]):
-        self.store.setValue("ai_keys", json.dumps(keys))
-
-    def ai_entries(self) -> list[dict]:
-        """Every AI the app can use: the saved keys, then a key from the environment and Ollama, when present."""
-        return self.stored_keys() + self.extra_entries
-
-    def set_extra_entries(self, extras: list[dict]):
-        """The app's environment key / Ollama entries (not saved); their chosen model is remembered."""
-        chosen = json.loads(self.store.value("ai_extra_models", "{}"))
-        for e in extras:
-            if chosen.get(e["id"]) in [m[0] for m in e["models"]]:
-                e["model"] = chosen[e["id"]]
-        self.extra_entries = extras
-        self.refresh_keys()
-
-    def active_entry(self) -> dict | None:
-        entries = self.ai_entries()
-        want = self.store.value("ai_active", "")
-        return next((e for e in entries if e["id"] == want), entries[0] if entries else None)
-
-    def entry_secret(self, entry: dict) -> str:
-        return unprotect(entry["secret"]) if entry.get("secret") else entry.get("plain", "")
-
-    def _new_entry(self, key: str, provider: str, models: list, keys: list[dict]) -> dict:
-        number = max([k.get("number", 0) for k in keys] + [0]) + 1   # a removed key's number is not reused
-        return {"id": f"key{number}", "number": number, "name": f"Key {number}", "provider": provider,
-                "secret": protect(key), "last4": key[-4:], "models": [list(m) for m in models],
-                "model": default_model(provider, models), "added": datetime.now().isoformat(timespec="seconds")}
-
-    def _migrate_single_key(self):
-        """Before several keys, one key was saved as "api_key": it becomes Key 1."""
-        old = self.store.value("api_key", "")
-        if not old:
+        if old and provider_for_key(unprotect(old)):
+            key = unprotect(old)
+            keys = [{"id": "api_key", "name": "Key 1", "provider": provider_for_key(key), "secret": protect(key),
+                     "last4": key[-4:]}] + keys
+        if not keys and not old:
             return
-        key = unprotect(old)
-        provider = provider_for_key(key)
-        keys = self.stored_keys()
-        if provider and not any(self.entry_secret(k) == key for k in keys):
-            self._save_keys(keys + [self._new_entry(key, provider, KNOWN_MODELS[provider], keys)])
-        self.store.remove("api_key")
+        providers = self.providers()
+        active = self.store.value("ai_active", "")
+        for e in keys:
+            kind = e.get("provider")
+            if kind not in BRANDS or kind == "ollama" or not e.get("secret"):
+                continue
+            fields = {"secret": e["secret"], "last4": e.get("last4", ""),
+                      "models": e.get("models") or [list(m) for m in KNOWN_MODELS[kind]], "model": e.get("model", MODELS[kind])}
+            mine = next(p for p in providers if p["id"] == kind)
+            if not mine["secret"]:
+                mine.update(fields)
+                new_id = kind
+            else:
+                new_id = new_custom_id(providers)
+                providers.append({**self._builtin(kind), **fields, "id": new_id, "custom": True,
+                                  "name": f"{e.get('name', 'Key')} ({PROVIDER_NAMES[kind]})"})
+            if active == e.get("id"):
+                self.store.setValue("ai_active", new_id)
+        try:
+            chosen = json.loads(self.store.value("ai_extra_models", "{}")).get("ollama")   # Ollama's remembered model
+        except (ValueError, AttributeError):
+            chosen = None
+        if chosen:
+            next(p for p in providers if p["id"] == "ollama")["model"] = chosen
+        self._save_providers(providers)
+        for k in ("api_key", "ai_keys", "ai_extra_models"):
+            self.store.remove(k)
 
     def add_key(self, text: str) -> dict | None:
-        """A pasted key becomes the next "Key N" and is used at once. The prefix says the brand;
-        the provider is asked which models the key can use (that also shows the key works)."""
+        """A pasted key (the first-run popup): its prefix says the brand, which gets the key and answers from now on."""
         key = text.strip()
-        provider = provider_for_key(key)
-        if provider is None:
+        kind = provider_for_key(key)
+        if kind is None:
             self._note("That doesn't look like a Claude (sk-ant-…), Gemini (AQ.… or AIza…) or OpenAI (sk-…) key.")
             return None
-        keys = self.stored_keys()
-        same = next((k for k in keys if self.entry_secret(k) == key), None)
-        if same is not None:
-            self._note(f"That key is already saved, as {same['name']}.")
-            self.key.clear()
-            return same
+        return self.set_key(kind, key)
+
+    def set_key(self, pid: str, text: str) -> dict | None:
+        """This provider's key (typed in its field). The provider is asked which models the key can use: that
+        also shows the key works. A built-in provider warns about another brand's key, but keeps it (a proxy
+        may hand out its own). Then the provider answers from now on."""
+        key = text.strip()
+        p = self.provider(pid)
+        if p is None or not key or key == self.secret_of(p):
+            return p                              # nothing typed (the field lost focus), or the key it already has
         if busy():
             return None                           # still asking about the last key: Enter pressed twice
+        looks = provider_for_key(key)
         self.place_busy()                         # the provider is asked on a worker thread, the bar running: a
-        models, error = run_busy(self.busy, lambda: list_models(provider, key))   # first `import anthropic` took 5 s here
-        keys = self.stored_keys()                 # again: a key removed, renamed or added during the wait counts
-        same = next((k for k in keys if self.entry_secret(k) == key), None)
-        if same is not None:
-            self._note(f"That key is already saved, as {same['name']}.")
-            self.key.clear()
-            return same
-        entry = self._new_entry(key, provider, models, keys)
-        self._save_keys(keys + [entry])
-        self.key.clear()
-        self._note(f"{entry['name']} added: {PROVIDER_NAMES[provider]}, {len(models)} model{'s' * (len(models) != 1)}."
-                               + (f" Couldn't ask {PROVIDER_NAMES[provider]} for this key's models ({error}), so "
-                                  "these are the usual ones." if error else ""))
-        self.use_entry(entry["id"])
-        return entry
+        models, error = run_busy(self.busy, lambda: list_models(p["kind"], key, p["host"]))   # first `import anthropic` took 5 s here
+        models = [list(m) for m in models] if not (error and p["custom"]) else p["models"]   # a custom host: not the usual list
+        self._update(pid, secret=protect(key), last4=key[-4:], models=models,
+                     model=p["model"] if p["model"] in [m[0] for m in models] else default_model(p["kind"], models) if models else "")
+        self.key_field.clear()
+        self._note(f"{p['name']}: key saved, {len(models)} model{'s' * (len(models) != 1)}."
+                   + (f" Couldn't ask for this key's models ({error}), so these are the usual ones." if error else "")
+                   + (f" It looks like a {PROVIDER_NAMES[looks]} key, though." if not p["custom"] and looks not in (None, p["kind"]) else ""))
+        self.use(pid)
+        return self.provider(pid)
 
-    def use_entry(self, entry_id: str, model: str | None = None):
-        """Answer with this key (and this model, if given) from now on."""
-        if model is not None:
-            keys = self.stored_keys()
-            if any(k["id"] == entry_id for k in keys):
-                self._save_keys([{**k, "model": model} if k["id"] == entry_id else k for k in keys])
-            else:
-                chosen = json.loads(self.store.value("ai_extra_models", "{}"))
-                self.store.setValue("ai_extra_models", json.dumps({**chosen, entry_id: model}))
-                for e in self.extra_entries:
-                    if e["id"] == entry_id:
-                        e["model"] = model
-        self.store.setValue("ai_active", entry_id)
-        self.refresh_keys()
+    def forget_key(self, pid: str):
+        p = self.provider(pid)
+        self._update(pid, secret="", last4="")
+        self._note(f"{p['name']}: the key is forgotten here; it keeps working on the provider's side.")
+        self.refresh_providers()
         self.ai_changed.emit()
 
-    def refresh_models(self, entry_id: str):
-        """Ask the provider again which models this key can use."""
-        entry = next(e for e in self.ai_entries() if e["id"] == entry_id)
+    def set_host(self, pid: str, text: str):
+        """Where this provider's API is (empty: back to its usual host; a custom provider keeps its own)."""
+        p = self.provider(pid)
+        host = text.strip().rstrip("/") or (p["host"] if p["custom"] else DEFAULT_HOSTS[p["kind"]])
+        if host != p["host"]:
+            self._update(pid, host=host)
+            self.ai_changed.emit()
+        self.refresh_providers()
+
+    def set_on(self, pid: str, on: bool):
+        """Off: the provider stays as it is but can't answer and leaves the chat's picker."""
+        self._update(pid, on=on)
+        if not on and self.store.value("ai_active", "") == pid:
+            self.store.setValue("ai_active", "")
+        self.refresh_providers()
+        self.ai_changed.emit()
+
+    def use(self, pid: str, model: str | None = None):
+        """Answer with this provider (and this model, if given) from now on."""
+        if model is not None:
+            self._update(pid, model=model)
+        self.store.setValue("ai_active", pid)
+        self.refresh_providers()
+        self.ai_changed.emit()
+
+    def sync_models(self, pid: str):
+        """Ask the provider (at its host) which models the key can use."""
+        p = self.provider(pid)
         if busy():
             return
         self.place_busy()
-        models, error = run_busy(self.busy, lambda: list_models(entry["provider"], self.entry_secret(entry)))
-        models = [list(m) for m in models]
-        keys = self.stored_keys()
-        if any(k["id"] == entry_id for k in keys):
-            self._save_keys([{**k, "models": models} if k["id"] == entry_id else k for k in keys])
+        models, error = run_busy(self.busy, lambda: list_models(p["kind"], self.secret_of(p), p["host"]))
+        models = [list(m) for m in models] if not (error and p["custom"]) else p["models"]
+        if pid == "ollama":
+            self.found_ollama = models
         else:
-            entry["models"] = models
-        self._note(f"{entry['name']}: {len(models)} models"
-                               + (f" (the usual ones: couldn't ask the provider, {error})." if error else "."))
-        self.refresh_keys()
+            self._update(pid, models=models,
+                         model=p["model"] if p["model"] in [m[0] for m in models] else default_model(p["kind"], models) if models else "")
+        self._note(f"{p['name']}: {len(models)} model{'s' * (len(models) != 1)}"
+                   + (f" (couldn't ask: {error})." if error else "."))
+        self.refresh_providers()
 
-    def rename_key(self, entry_id: str):
-        keys = self.stored_keys()
-        entry = next(k for k in keys if k["id"] == entry_id)
-        name, ok = QInputDialog.getText(self, "Rename key", "Name:", text=entry["name"])
-        if ok and name.strip():
-            self._save_keys([{**k, "name": name.strip()} if k["id"] == entry_id else k for k in keys])
-            self.refresh_keys()
-            self.ai_changed.emit()
-
-    def remove_key(self, entry_id: str):
-        keys = self.stored_keys()
-        entry = next(k for k in keys if k["id"] == entry_id)
-        if QMessageBox.question(self, "Remove key", f"Remove {entry['name']} ({PROVIDER_NAMES[entry['provider']]}, "
-                                f"ending …{entry['last4']})? The app forgets it; the key itself keeps working "
-                                "on the provider's side.") != QMessageBox.Yes:
+    def add_model(self, pid: str):
+        """A model the provider didn't list (a custom host with no models API): typed by its id."""
+        if pid == "ollama":
+            self._note("Ollama's models are the ones it has installed: `ollama pull <model>` in a terminal, then Sync models.")
             return
-        self._save_keys([k for k in keys if k["id"] != entry_id])
-        if self.store.value("ai_active", "") == entry_id:
-            self.store.setValue("ai_active", "")
-        self.refresh_keys()
+        mid, ok = QInputDialog.getText(self, "Add a model", "Model id, as the provider names it:")
+        mid = mid.strip()
+        if not (ok and mid):
+            return
+        p = self.provider(pid)
+        if mid not in [m[0] for m in p["models"]]:
+            self._update(pid, models=p["models"] + [[mid, mid]])
+        self.use(pid, mid)
+
+    def remove_model(self, pid: str, mid: str):
+        p = self.provider(pid)
+        models = [m for m in p["models"] if m[0] != mid]
+        self._update(pid, models=models, model=p["model"] if p["model"] != mid else (models[0][0] if models else ""))
+        self.refresh_providers()
         self.ai_changed.emit()
 
-    def _key_menu(self, pos):
-        item = self.keys_list.itemAt(pos)
+    def add_provider(self):
+        """Add Provider: a custom one from the dialog; it is asked for its models and answers from now on."""
+        got = add_provider_dialog(self, self.c)
+        if not got:
+            return
+        providers = self.providers()
+        pid = new_custom_id(providers)
+        self._save_providers(providers + [{**self._builtin(got["kind"]), "id": pid, "name": got["name"], "host": got["host"],
+                                           "models": [], "model": "", "custom": True}])
+        self.shown_id = pid
+        if got["key"]:
+            self.set_key(pid, got["key"])
+        else:
+            self.sync_models(pid)
+            self.use(pid)
+
+    def rename_provider(self, pid: str):
+        name, ok = QInputDialog.getText(self, "Rename provider", "Name:", text=self.provider(pid)["name"])
+        if ok and name.strip():
+            self._update(pid, name=name.strip())
+            self.refresh_providers()
+            self.ai_changed.emit()
+
+    def remove_provider(self, pid: str):
+        p = self.provider(pid)
+        if QMessageBox.question(self, "Remove provider", f"Remove {p['name']}? The app forgets its key, host and "
+                                "models; the key itself keeps working on the provider's side.") != QMessageBox.Yes:
+            return
+        self._save_providers([q for q in self.providers() if q["id"] != pid])
+        if self.store.value("ai_active", "") == pid:
+            self.store.setValue("ai_active", "")
+        self.shown_id = "claude"
+        self.refresh_providers()
+        self.ai_changed.emit()
+
+    def _provider_menu(self, pos):
+        item = self.provider_list.itemAt(pos)
+        if item is None:
+            return
+        p = self.provider(item.data(Qt.UserRole))
+        menu = QMenu(self.provider_list)
+        if p in self.usable():
+            menu.addAction("Use this provider", lambda: self.use(p["id"]))
+        menu.addAction("Turn off" if p["on"] else "Turn on", lambda: self.set_on(p["id"], not p["on"]))
+        if p["custom"]:                                  # the built-in four keep their names and stay
+            menu.addAction("Rename…", lambda: self.rename_provider(p["id"]))
+            menu.addAction(f"{I_DELETE}  Remove", lambda: self.remove_provider(p["id"]))
+        menu.exec(self.provider_list.mapToGlobal(pos))
+
+    def _model_menu_at(self, pos):
+        item = self.model_list.itemAt(pos)
         if item is None or not item.data(Qt.UserRole):
             return
-        entry = next(e for e in self.ai_entries() if e["id"] == item.data(Qt.UserRole))
-        menu = QMenu(self.keys_list)
-        menu.addAction("Use this key", lambda: self.use_entry(entry["id"]))
-        self._model_menu(menu.addMenu("Model"), entry)
-        menu.addAction("Ask for its models again", lambda: self.refresh_models(entry["id"]))
-        if entry.get("secret"):                          # saved keys only: the environment key and Ollama aren't ours to edit
-            menu.addAction("Rename…", lambda: self.rename_key(entry["id"]))
-            menu.addAction(f"{I_DELETE}  Remove", lambda: self.remove_key(entry["id"]))
-        menu.exec(self.keys_list.mapToGlobal(pos))
+        mid = item.data(Qt.UserRole)
+        menu = QMenu(self.model_list)
+        menu.addAction("Use this model", lambda: self.use(self.shown_id, mid))
+        if self.shown_id != "ollama":
+            menu.addAction(f"{I_DELETE}  Remove from the list", lambda: self.remove_model(self.shown_id, mid))
+        menu.exec(self.model_list.mapToGlobal(pos))
 
-    def _model_menu(self, menu: QMenu, entry: dict):
-        active = self.active_entry()
-        for model_id, name in entry["models"] or [[entry["model"], entry["model"]]]:
-            act = menu.addAction(name, lambda _=False, m=model_id: self.use_entry(entry["id"], m))
+    def _model_menu(self, menu: QMenu, p: dict):
+        active = self.active()
+        for model_id, name in p["models"] or [[p["model"], p["model"]]]:
+            act = menu.addAction(name, lambda _=False, m=model_id: self.use(p["id"], m))
             act.setCheckable(True)
-            act.setChecked(active is not None and active["id"] == entry["id"] and model_id == entry["model"])
+            act.setChecked(active is not None and active["id"] == p["id"] and model_id == p["model"])
 
     def _fill_ai_menu(self):
-        """The chat's picker: every key, each with its models; choosing one uses that key with that model."""
+        """The chat's picker: every provider that can answer, each with its models; choosing one uses it."""
         menu = self.chat.model_btn.menu()
         menu.clear()
-        for brand in BRANDS:                             # grouped by brand, like Manage keys
-            mine = [e for e in self.ai_entries() if e["provider"] == brand]
-            if mine and menu.actions():
-                menu.addSeparator()
-            for entry in mine:
-                self._model_menu(menu.addMenu(f"{entry['name']}  ·  {PROVIDER_NAMES[brand]}"), entry)
-        if not self.ai_entries():
+        usable = self.usable()
+        for p in usable:
+            self._model_menu(menu.addMenu(p["name"]), p)
+        if not usable:
             menu.addAction("No AI yet").setEnabled(False)
         menu.addSeparator()
-        menu.addAction("Manage keys…", lambda: self.show_page(self.settings_page))
+        menu.addAction("Manage providers…", lambda: self.show_page(self.settings_page))
 
     def _note(self, text: str):
         self.keys_note.setText(text)
         self.keys_note.setVisible(bool(text))
 
-    def refresh_keys(self):
-        """Manage keys: a heading per brand with its keys under it; and the chat's picker."""
-        active = self.active_entry()
-        entries = self.ai_entries()
-        self.keys_list.clear()
-        heading = QFont(self.keys_list.font())
-        heading.setBold(True)
-        for brand in BRANDS:
-            head = QListWidgetItem(PROVIDER_NAMES[brand])
-            head.setFont(heading)
-            head.setFlags(Qt.ItemIsEnabled)              # a heading: nothing to click
-            self.keys_list.addItem(head)
-            mine = [e for e in entries if e["provider"] == brand]
-            for e in mine:
-                on = active is not None and e["id"] == active["id"]
-                where = f"key ending …{e['last4']}" if e.get("last4") else "no key needed"
-                when = (f"added {datetime.fromisoformat(e['added']):%d %b %Y}" if e.get("added")
-                        else "from the environment" if e["id"] == "env" else "runs on this PC")
-                n = len(e["models"])
-                item = QListWidgetItem(f"    {'●' if on else '○'}  {e['name']}{'   (in use)' if on else ''}\n"
-                                       f"         {where} · model {model_label(e)} · {n} model{'s' * (n != 1)} · {when}")
-                item.setData(Qt.UserRole, e["id"])
-                self.keys_list.addItem(item)
-            if not mine:
-                empty = QListWidgetItem("    Not running: install Ollama (ollama.com), then start the app again"
-                                        if brand == "ollama" else "    No key yet")
-                empty.setFlags(Qt.ItemIsEnabled)
-                self.keys_list.addItem(empty)
-        self.keys_list.setFixedHeight(sum(self.keys_list.sizeHintForRow(i) for i in range(self.keys_list.count())) + 6)
+    def _open_key_url(self):
+        QDesktopServices.openUrl(QUrl(KEY_URLS[self.provider(self.shown_id)["kind"]]))
+
+    def _filter_providers(self, text: str):
+        text = text.strip().lower()
+        for i in range(self.provider_list.count()):
+            item = self.provider_list.item(i)
+            item.setHidden(text not in item.text().lower())
+
+    def refresh_providers(self):
+        """The providers list (the one in use marked, off ones said so), the shown provider's pane, and the
+        chat's picker button."""
+        active = self.active()
+        self.provider_list.blockSignals(True)
+        self.provider_list.clear()
+        for p in self.providers():
+            on = active is not None and p["id"] == active["id"]
+            icon = letter_icon(p["name"], self.c["primaryContainer" if p["on"] else "surfaceContainerHigh"],
+                               self.c["onPrimaryContainer" if p["on"] else "onSurfaceVariant"])
+            item = QListWidgetItem(icon, f"{p['name']}{'  ·  in use' if on else ''}{'  (off)' if not p['on'] else ''}")
+            item.setData(Qt.UserRole, p["id"])
+            self.provider_list.addItem(item)
+            if p["id"] == self.shown_id:
+                self.provider_list.setCurrentItem(item)
+        self.provider_list.blockSignals(False)
+        if self.provider_list.currentItem() is None:
+            self.provider_list.setCurrentRow(0)           # (a removed provider was shown) -> _show_provider
+        else:
+            self._show_provider(self.shown_id)
+        self._filter_providers(self.provider_find.text())
         self.chat.model_btn.setText(f"{I_SPARKLE}  {active['name']} · {model_label(active)}  {I_CHEVRON}" if active
                                     else f"{I_SPARKLE}  No AI yet  {I_CHEVRON}")
+
+    def _show_provider(self, pid: str):
+        """The right pane: this provider's switch, key, host and models."""
+        p = self.provider(pid)
+        if p is None:
+            return
+        self.shown_id = pid
+        active = self.active()
+        ollama = pid == "ollama"
+        self.provider_title.setText(p["name"])
+        self.provider_maker.setText(("in use  ·  " if active is not None and active["id"] == pid else "")
+                                    + (f"speaks the {MAKERS[p['kind']]} API" if p["custom"] else MAKERS[p["kind"]]))
+        self.provider_on.set_checked_now(p["on"])
+        self.key_field.clear()
+        self.key_field.setEnabled(not ollama)
+        self.key_field.setPlaceholderText(
+            "No key needed: Ollama runs on this PC" if ollama
+            else f"From the environment, ending …{p['last4']}. Paste a key to save your own" if p.get("plain")
+            else f"Saved, ending …{p['last4']}. Paste a new key to replace it" if p["secret"]
+            else "Add API key" + (" (leave empty if the server needs none)" if p["custom"] else ""))
+        self.key_link.setVisible(not p["custom"] and p["kind"] in KEY_URLS)
+        self.forget_link.setVisible(bool(p["secret"]))
+        self.host_field.setText(p["host"])
+        self.host_link.setVisible(not p["custom"] and p["host"] != DEFAULT_HOSTS[p["kind"]])
+        self.model_list.clear()
+        for mid, name in p["models"]:
+            item = QListWidgetItem(f"{'●' if mid == p['model'] else '○'}  {name}" + (f"    {mid}" if name != mid else ""))
+            item.setData(Qt.UserRole, mid)
+            self.model_list.addItem(item)
+        if not p["models"]:
+            empty = QListWidgetItem("Not running: install Ollama (ollama.com), then start the app again" if ollama
+                                    else "No models yet: add a key, then Sync models (or + to type a model's id)")
+            empty.setFlags(Qt.ItemIsEnabled)
+            self.model_list.addItem(empty)
 
     def set_ball_look(self, look: str):
         self.ball_look = look
@@ -1921,6 +2191,8 @@ class SettingsWindow(QWidget):
             edit.setPalette(pal)
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
         self.key_eye.setIcon(glyph_icon(I_EYE, c["onSurfaceVariant"]))
+        if hasattr(self, "chat"):                    # the providers' marks take the new colours
+            self.refresh_providers()
         for b in self.findChildren(SpinButton):
             b.set_color(c["primary"] if b.property("kind") == "text" else c["onSurface"])
         self.busy.color, self.busy.track = QColor(c["primary"]), QColor(c["primary"])
@@ -1969,12 +2241,88 @@ class SettingsWindow(QWidget):
             ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), attribute, ctypes.byref(v), 4)
 
 
-BRANDS = ("claude", "openai", "gemini", "ollama")   # the order brands are listed in
+BRANDS = ("claude", "openai", "gemini", "ollama")   # the built-in providers, in the order they are listed
 
 
-def model_label(entry: dict) -> str:
-    """The display name of the model this key uses."""
-    return next((name for model_id, name in entry["models"] if model_id == entry["model"]), entry["model"])
+def new_custom_id(providers: list[dict]) -> str:
+    """custom1, custom2…: one past the highest number still in use."""
+    return f"custom{max([int(p['id'][6:]) for p in providers if p.get('custom')] + [0]) + 1}"
+
+
+def model_label(p: dict) -> str:
+    """The display name of the model this provider uses."""
+    return next((name for model_id, name in p["models"] if model_id == p["model"]), p["model"] or "no model")
+
+
+def add_provider_dialog(parent, c: dict) -> dict | None:
+    """Settings > AI > Add Provider: a name, a key and the server's API root under the API it speaks
+    (OpenAI or Anthropic). Returns {name, key, host, kind}, or None."""
+    dlg = QDialog(parent, Qt.Dialog | Qt.WindowCloseButtonHint)
+    dlg.setObjectName("root")
+    dlg.setAttribute(Qt.WA_StyledBackground)
+    dlg.setWindowTitle("Add custom provider")
+    dlg.setStyleSheet(build_qss(c))
+    dlg.setFixedWidth(560)
+    v = QVBoxLayout(dlg)
+    v.setContentsMargins(24, 20, 24, 20)
+    v.setSpacing(6)
+    v.addWidget(label("Add custom provider", "sheetTitle"))
+    hint = label("Any server that speaks the OpenAI or Anthropic API: OpenRouter, DeepSeek, LM Studio, a proxy at "
+                 "work… Put its API root under the API it speaks; the request path is shown underneath.", "sheetText")
+    hint.setWordWrap(True)
+    v.addWidget(hint)
+    form = QWidget(objectName="addProvider")
+    fv = QVBoxLayout(form)
+    fv.setContentsMargins(0, 8, 0, 0)
+    fv.setSpacing(6)
+    fv.addWidget(label("Provider name *", "fieldLabel"))
+    name = QLineEdit(placeholderText="Example: OpenRouter")
+    name.setAccessibleName("Provider name")
+    fv.addWidget(name)
+    fv.addSpacing(6)
+    fv.addWidget(label("API key", "fieldLabel"))
+    key = QLineEdit(placeholderText="Leave empty if the server needs none", echoMode=QLineEdit.Password)
+    key.setAccessibleName("API key")
+    fv.addWidget(key)
+    fv.addSpacing(10)
+    fv.addWidget(label("Endpoint settings", "gh"))
+    fields = {}
+    for kind, title, path in (("openai", "OpenAI API", "/chat/completions"), ("claude", "Anthropic API", "/v1/messages")):
+        fv.addWidget(label(f"{title} base URL", "fieldLabel"))
+        edit = QLineEdit(placeholderText="https://example.com/v1")
+        edit.setAccessibleName(f"{title} base URL")
+        preview = label("Enter the API root URL to see the final request path", "sheetText")
+        edit.textChanged.connect(lambda t, pv=preview, path=path: pv.setText(
+            f"Requests go to {t.strip().rstrip('/')}{path}" if t.strip() else "Enter the API root URL to see the final request path"))
+        fv.addWidget(edit)
+        fv.addWidget(preview)
+        fv.addSpacing(6)
+        fields[kind] = edit
+    v.addWidget(form)
+    actions = QHBoxLayout()
+    actions.setSpacing(8)
+    actions.addStretch(1)
+    cancel = button("Cancel", "text")
+    cancel.clicked.connect(dlg.reject)
+    add = button("Add", "filled")
+    add.clicked.connect(dlg.accept)
+    actions.addWidget(cancel)
+    actions.addWidget(add)
+    v.addSpacing(8)
+    v.addLayout(actions)
+
+    def kind_given() -> str | None:               # OpenAI first when both are filled
+        return next((k for k in ("openai", "claude") if fields[k].text().strip()), None)
+
+    def check():
+        add.setEnabled(bool(name.text().strip()) and kind_given() is not None)
+    for edit in (name, *fields.values()):
+        edit.textChanged.connect(check)
+    check()
+    if dlg.exec() != QDialog.Accepted or not (name.text().strip() and kind_given()):
+        return None
+    kind = kind_given()
+    return {"name": name.text().strip(), "key": key.text().strip(), "host": fields[kind].text().strip().rstrip("/"), "kind": kind}
 
 
 def is_dark(mode: str) -> bool:
@@ -2027,8 +2375,8 @@ def pick_ai() -> str | None:
     v.setSpacing(12)
     v.addWidget(label("Which AI should write your summaries?", "sheetTitle"))
     hint = label("Paste a key from Claude (sk-ant-…), Gemini (AQ.… or AIza…) or OpenAI (sk-…): the app tells them apart "
-                 "and remembers it (Settings > AI > Keys; add more there). No key? Install Ollama from ollama.com and start the app "
-                 "again: it is free and runs on this PC.", "sheetText")
+                 "and remembers it (Settings > AI > Providers: other providers and hosts there). No key? Install Ollama from "
+                 "ollama.com and start the app again: it is free and runs on this PC.", "sheetText")
     hint.setWordWrap(True)
     v.addWidget(hint)
     key = QLineEdit(objectName="find", placeholderText="Paste your key", echoMode=QLineEdit.Password)

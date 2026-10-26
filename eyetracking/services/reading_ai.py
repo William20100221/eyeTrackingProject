@@ -18,6 +18,10 @@ Install only the one you use, and set that provider's API key:
 The app works the provider out from the key (provider_for_key), looks for a key
 in the environment or a .env file first (key_from_environment), and uses Ollama
 when it runs on this PC and there is no key (ollama_model).
+
+Settings > AI > Providers can point a provider at another host (HOSTS): a proxy,
+or any server that speaks the OpenAI or Anthropic API (a "custom provider" there
+is one of these two kinds with its own name, key and host).
 """
 from __future__ import annotations
 
@@ -44,8 +48,15 @@ KEY_ENV = {"claude": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "openai": 
 KEY_PREFIXES = (("sk-ant-", "claude"), ("AIza", "gemini"), ("AQ.", "gemini"), ("sk-", "openai"))
 
 
-PROVIDER_NAMES = {"claude": "Claude (Anthropic)", "gemini": "Gemini (Google)", "openai": "ChatGPT (OpenAI)",
-                  "ollama": "Local (Ollama)"}
+PROVIDER_NAMES = {"claude": "Claude", "gemini": "Gemini", "openai": "ChatGPT", "ollama": "Ollama"}
+MAKERS = {"claude": "Anthropic", "gemini": "Google", "openai": "OpenAI", "ollama": "free, runs on this PC"}
+KEY_URLS = {"claude": "https://console.anthropic.com/settings/keys", "gemini": "https://aistudio.google.com/apikey",
+            "openai": "https://platform.openai.com/api-keys"}      # where a key comes from (Settings > AI > Get API key)
+# Each provider's API root. Settings > AI > API Host can change one (a proxy, a compatible server); the app
+# sets the active provider's host here at start and whenever another is chosen.
+DEFAULT_HOSTS = {"claude": "https://api.anthropic.com", "gemini": "https://generativelanguage.googleapis.com",
+                 "openai": "https://api.openai.com/v1", "ollama": OLLAMA_URL}
+HOSTS = dict(DEFAULT_HOSTS)
 # Used when the provider can't be asked which models a key can use (offline, or its package isn't installed).
 KNOWN_MODELS = {
     "claude": [("claude-haiku-5-5", "Claude Haiku 5.5"), ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
@@ -56,22 +67,30 @@ KNOWN_MODELS = {
 }
 
 
-def list_models(provider: str, key: str = "") -> tuple[list[tuple[str, str]], str]:
-    """Ask the provider which models this key can use: ([(model id, display name)], "").
-    If it can't be asked, ([the usual models], why). A key says nothing about models by
-    itself (any key can call any model its account may use), so this is how a key's
-    models are found. Claude: the Models API through the anthropic package; Ollama: its
-    local /api/tags."""
+def list_models(provider: str, key: str = "", host: str = "") -> tuple[list[tuple[str, str]], str]:
+    """Ask the provider (at `host`, or its usual one) which models this key can use:
+    ([(model id, display name)], ""). If it can't be asked, ([the usual models], why).
+    A key says nothing about models by itself (any key can call any model its account
+    may use), so this is how a key's models are found. Each provider's package has a
+    Models API; Ollama has its local /api/tags."""
+    host = (host or HOSTS[provider]).rstrip("/")
     try:
         if provider == "claude":
             import anthropic
-            client = anthropic.Anthropic(api_key=key, timeout=10.0, max_retries=0)
+            client = anthropic.Anthropic(api_key=key, base_url=host, timeout=10.0, max_retries=0)
             return [(m.id, m.display_name) for m in client.models.list()], ""
-        if provider == "ollama":
-            with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=OLLAMA_PROBE_S) as r:
-                return [(m["name"], m["name"]) for m in json.load(r).get("models", [])], ""
-        # ponytail: Gemini / OpenAI use the built-in list; ask them live once their package is installed and tested
-        return KNOWN_MODELS[provider], "the live model list is only built for Claude and Ollama"
+        if provider == "openai":
+            from openai import OpenAI
+            client = OpenAI(api_key=key, base_url=host, timeout=10.0, max_retries=0)
+            return sorted((m.id, m.id) for m in client.models.list()), ""
+        if provider == "gemini":
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=key, http_options=types.HttpOptions(base_url=host, timeout=10000))
+            return [(m.name.removeprefix("models/"), m.display_name or m.name) for m in client.models.list()
+                    if "generateContent" in (getattr(m, "supported_actions", None) or ["generateContent"])], ""
+        with urllib.request.urlopen(host + "/api/tags", timeout=OLLAMA_PROBE_S) as r:   # ollama
+            return [(m["name"], m["name"]) for m in json.load(r).get("models", [])], ""
     except ImportError:
         return KNOWN_MODELS[provider], f"the {provider} package isn't installed"
     except Exception as e:                      # offline, key refused, Ollama not running...
@@ -105,7 +124,7 @@ def key_from_environment() -> tuple[str, str] | None:
 def ollama_model() -> str | None:
     """The first model installed in a running Ollama, or None (not running, nothing installed)."""
     try:
-        with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=OLLAMA_PROBE_S) as r:
+        with urllib.request.urlopen(HOSTS["ollama"].rstrip("/") + "/api/tags", timeout=OLLAMA_PROBE_S) as r:
             models = json.load(r).get("models", [])
     except (OSError, ValueError):
         return None
@@ -216,14 +235,14 @@ def _ask(provider: str, prompt: str, schema: dict | None = None) -> str:
     Each SDK is imported here, so you only need the one you use."""
     if provider not in MODELS:
         raise ValueError(f"provider must be one of {list(MODELS)}, not {provider!r}")
-    model = MODELS[provider]
+    model, host = MODELS[provider], HOSTS[provider].rstrip("/")
 
     if provider == "ollama":
         body = {"model": model or ollama_model(), "stream": False,
                 "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}
         if schema:
             body["format"] = schema               # Ollama's structured output takes a JSON schema
-        req = urllib.request.Request(OLLAMA_URL + "/api/chat", json.dumps(body).encode(),
+        req = urllib.request.Request(host + "/api/chat", json.dumps(body).encode(),
                                      {"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=300) as r:   # a local model can be slow
             return json.load(r)["message"]["content"]
@@ -231,7 +250,7 @@ def _ask(provider: str, prompt: str, schema: dict | None = None) -> str:
     if provider == "claude":
         import anthropic
         extra = {"output_config": {"format": {"type": "json_schema", "schema": schema}}} if schema else {}
-        reply = anthropic.Anthropic(timeout=AI_TIMEOUT_S, max_retries=1).messages.create(
+        reply = anthropic.Anthropic(base_url=host, timeout=AI_TIMEOUT_S, max_retries=1).messages.create(
             model=model, max_tokens=16000, system=SYSTEM,
             messages=[{"role": "user", "content": prompt}], **extra)
         if reply.stop_reason in ("max_tokens", "refusal"):
@@ -245,11 +264,19 @@ def _ask(provider: str, prompt: str, schema: dict | None = None) -> str:
             system_instruction=SYSTEM,
             response_mime_type="application/json" if schema else None,
             response_json_schema=schema)
-        return genai.Client(http_options=types.HttpOptions(timeout=AI_TIMEOUT_S * 1000)).models.generate_content(
+        return genai.Client(http_options=types.HttpOptions(base_url=host, timeout=AI_TIMEOUT_S * 1000)).models.generate_content(
             model=model, contents=prompt, config=config).text
 
     from openai import OpenAI
+    client = OpenAI(base_url=host, timeout=AI_TIMEOUT_S, max_retries=1)
+    if host != DEFAULT_HOSTS["openai"].rstrip("/"):
+        # another host that speaks OpenAI's API (OpenRouter, DeepSeek, LM Studio...): nearly all of them have
+        # chat/completions, few have the newer Responses API. ponytail: no feature probe; an error says what's missing
+        extra = {"response_format": {"type": "json_schema", "json_schema": {"name": "result", "schema": schema,
+                                                                            "strict": True}}} if schema else {}
+        return client.chat.completions.create(
+            model=model, messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+            **extra).choices[0].message.content
     extra = {"text": {"format": {"type": "json_schema", "name": "result",
                                  "schema": schema, "strict": True}}} if schema else {}
-    return OpenAI(timeout=AI_TIMEOUT_S, max_retries=1).responses.create(
-        model=model, instructions=SYSTEM, input=prompt, **extra).output_text
+    return client.responses.create(model=model, instructions=SYSTEM, input=prompt, **extra).output_text

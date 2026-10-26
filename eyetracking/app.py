@@ -49,8 +49,8 @@ from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_co
 from eyetracking.core.smoothing import GazeSmoother
 from eyetracking.services import reading_ai
 from eyetracking.services.camera import camera_names
-from eyetracking.services.reading_ai import (KEY_ENV, KNOWN_MODELS, MODELS, PROVIDER_NAMES, grade_answer,
-                                             key_from_environment, list_models, make_questions, summarize)
+from eyetracking.services.reading_ai import (KEY_ENV, PROVIDER_NAMES, grade_answer, key_from_environment, list_models,
+                                             make_questions, summarize)
 from eyetracking.services.screen_text import lines_on_screen, window_at, window_title
 from eyetracking.services.storage import (load_all_calibrations, migrate_layout, new_reading_path, save_blink_scores,
                                           save_calibration, save_reading)
@@ -424,36 +424,27 @@ class App(QObject):
         return self._busy("Training the gaze model…", self._load_model)
 
     def _choose_ai(self, forced: str | None) -> None:
-        """Which AI answers: the key chosen in Settings > AI (or the chat's picker). Besides the
-        saved keys, a key in the environment / a .env next to main.py and a running Ollama are
-        offered too. Nothing at all on first run: ask once with a popup. --provider overrides."""
-        extras = []
-        found = key_from_environment()
-        if found:
-            provider, key = found
-            extras.append({"id": "env", "name": "Environment key", "provider": provider, "plain": key,
-                           "last4": key[-4:], "models": [list(m) for m in KNOWN_MODELS[provider]],
-                           "model": MODELS[provider], "added": ""})
+        """Which AI answers: the provider chosen in Settings > AI (or the chat's picker). A key in the
+        environment / a .env next to main.py fills its provider in, and a running Ollama offers its
+        models. Nothing at all on first run: ask once with a popup. --provider overrides."""
         local, _ = list_models("ollama")
-        if local:
-            extras.append({"id": "ollama", "name": "Ollama", "provider": "ollama", "last4": "",
-                           "models": [list(m) for m in local], "model": local[0][0], "added": ""})
-        self.control.set_extra_entries(extras)
-        if not self.control.ai_entries() and not forced:
-            key = pick_ai()                       # first run: paste a key (it becomes Key 1)
+        self.control.set_found(key_from_environment(), local)
+        if not self.control.usable() and not forced:
+            key = pick_ai()                       # first run: paste a key (its brand gets it)
             if key:
                 self.control.add_key(key)
         self._use_entry()
 
     def _use_entry(self) -> None:
-        """Answer with the chosen key and model: the key goes where its provider's package looks."""
-        entry = self.ai_entry = self.control.active_entry()
-        if entry is not None:
-            secret = self.control.entry_secret(entry)
-            if secret:
-                os.environ[KEY_ENV[entry["provider"]]] = secret
-            reading_ai.MODELS[entry["provider"]] = entry["model"]
-        self.provider = self.forced_provider or (entry["provider"] if entry else "claude")
+        """Answer with the chosen provider and model: its key goes where its package looks, its host and
+        model into reading_ai."""
+        p = self.ai_entry = self.control.active()
+        if p is not None:
+            if p["kind"] in KEY_ENV:
+                os.environ[KEY_ENV[p["kind"]]] = self.control.secret_of(p)
+            reading_ai.MODELS[p["kind"]] = p["model"]
+            reading_ai.HOSTS[p["kind"]] = p["host"]
+        self.provider = self.forced_provider or (p["kind"] if p else "claude")
 
     def _ai_changed(self) -> None:
         self._use_entry()
@@ -465,7 +456,7 @@ class App(QObject):
             return f"AI: {PROVIDER_NAMES[self.forced_provider]} (chosen with --provider)."
         if e is None:
             return "No AI yet: add a key in Settings > AI, or install Ollama (ollama.com) for a free local AI."
-        return f"AI: {e['name']} · {PROVIDER_NAMES[e['provider']]} · {model_label(e)}."
+        return f"AI: {e['name']} · {model_label(e)}."
 
     def open_settings(self) -> None:
         self._show_window(self.control.settings_page)

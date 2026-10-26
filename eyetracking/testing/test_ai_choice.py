@@ -2,7 +2,7 @@
 Self-check for choosing the AI (no network, no popup):  python -m eyetracking.testing.test_ai_choice
 
 The key's prefix says the brand; a key in a .env file counts; on first run the
-popup's key becomes Key 1; adding another key switches to it at once.
+popup's key goes to its brand; a key given to another brand switches to it at once.
 """
 import os
 import tempfile
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as folder:            # .env next to main.py:
     ai.__file__, real = str(fake), ai.__file__
     assert ai.key_from_environment() == ("gemini", "AIza-from-dotenv")
     ai.__file__ = real
-ai.OLLAMA_URL = "http://localhost:9"                      # nothing listens there
+ai.HOSTS["ollama"] = "http://localhost:9"                 # nothing listens there
 models, why = ai.list_models("ollama")
 assert models == [] and why
 
@@ -36,15 +36,15 @@ settings_file = Path(tempfile.mkdtemp()) / "settings.ini"
 cw.QSettings = lambda *_: QSettings(str(settings_file), QSettings.IniFormat)   # never the real settings
 qt = QApplication([])
 import eyetracking.app as appmod
-offline = lambda provider, key="": (ai.KNOWN_MODELS[provider], "offline test")
+offline = lambda provider, key="", host="": (ai.KNOWN_MODELS[provider], "offline test")
 appmod.list_models = cw.list_models = offline
 appmod.key_from_environment = lambda: None
 appmod.pick_ai = lambda: "sk-ant-pasted"                  # the first-run popup, answered
 app = appmod.App(mouse=True)
 app.timer.stop()
 assert app.provider == "claude" and os.environ["ANTHROPIC_API_KEY"] == "sk-ant-pasted"
-assert [k["name"] for k in app.control.stored_keys()] == ["Key 1"]
-app.control.add_key("AIza-new")                          # another key: used at once
+assert [p["id"] for p in app.control.usable()] == ["claude"] and ai.HOSTS["claude"] == ai.DEFAULT_HOSTS["claude"]
+app.control.add_key("AIza-new")                          # Gemini's key: used at once
 assert app.provider == "gemini" and os.environ["GEMINI_API_KEY"] == "AIza-new"
-assert "Key 2 · Gemini (Google)" in app.panel.status.text(), app.panel.status.text()
+assert "AI: Gemini · gemini-3.5-flash-lite" in app.panel.status.text(), app.panel.status.text()
 print("ai choice ok")
