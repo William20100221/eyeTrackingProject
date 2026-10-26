@@ -232,6 +232,8 @@ class App(QObject):
         self.control.saved.connect(self.apply_settings)
         self.control.calibrate_requested.connect(self.calibrate)
         self.panel.message_sent.connect(self.answer)
+        self.panel.chats_deleted.connect(self._chats_deleted)
+        self.record_path: Path | None = None       # the reading being written (its summary, then its quiz)
         self.control.testing.command.connect(lambda c: {"read": self.read, "check": self.check, "blink": self.blink_test}[c]())
         self.control.testing.data_changed.connect(self._retrain)
         self.control.testing.undo_requested.connect(self.undo)
@@ -438,7 +440,7 @@ class App(QObject):
             return f"AI: {PROVIDER_NAMES[self.forced_provider]} (chosen with --provider)."
         if e is None:
             return "No AI yet: add a key in Settings > AI, or install Ollama (ollama.com) for a free local AI."
-        return f"AI: {e['name']} · {model_label(e)}."
+        return f"AI: {model_label(e)}."
 
     def open_settings(self) -> None:
         self._show_window(self.control.settings_page)
@@ -634,10 +636,15 @@ class App(QObject):
         self.record_path = new_reading_path()
 
     def _save_record(self) -> None:
-        if not (self.record["summary"] or self.record["questions"]):
-            return                                # nothing worth a file yet
+        if self.record_path is None or not (self.record["summary"] or self.record["questions"]):
+            return                                # nothing worth a file yet, or deleted in the Chats list
         save_reading(self.record_path, self.record)
         self.panel.refresh()                      # the History list shows it at once
+
+    def _chats_deleted(self, paths: list) -> None:
+        """Readings deleted in the Chats list: the one still being written (its quiz running) stays deleted."""
+        if self.record_path in paths:
+            self.record_path = None
 
     def _capture(self) -> None:
         """Once a second while recording: re-read the window under the gaze, off the GUI thread."""

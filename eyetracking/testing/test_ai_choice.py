@@ -46,5 +46,5 @@ assert app.provider == "claude" and os.environ["ANTHROPIC_API_KEY"] == "sk-ant-p
 assert [p["id"] for p in app.control.usable()] == ["claude"] and ai.HOSTS["claude"] == ai.DEFAULT_HOSTS["claude"]
 app.control.add_key("AIza-new")                          # Gemini's key: used at once
 assert app.provider == "gemini" and os.environ["GEMINI_API_KEY"] == "AIza-new"
-assert "AI: Gemini · gemini-3.5-flash-lite" in app.panel.status.text(), app.panel.status.text()
+assert "AI: gemini-3.5-flash-lite." in app.panel.status.text(), app.panel.status.text()   # the model only
 print("ai choice ok")

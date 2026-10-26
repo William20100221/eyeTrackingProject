@@ -105,7 +105,8 @@ assert "looks like a Claude key" in w.keys_note.text(), w.keys_note.text()
 
 w.use("claude", "claude-sonnet-5-5")
 assert w.active()["id"] == "claude" and w.active()["model"] == "claude-sonnet-5-5"
-assert cw.model_label(w.active()) == "Claude Sonnet 5.5" and "Claude · Claude Sonnet 5.5" in w.chat.model_btn.text()
+assert cw.model_label(w.active()) == "Claude Sonnet 5.5" and "Claude Sonnet 5.5" in w.chat.model_btn.text()
+assert "·" not in w.chat.model_btn.text()                                       # the model only, not its provider
 assert names()[0] == "Claude  ·  in use"
 w._show_provider("claude")
 rows = [w.model_list.item(i).text() for i in range(w.model_list.count())]

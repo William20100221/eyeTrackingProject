@@ -1134,6 +1134,7 @@ class ChatPage(QWidget):
 
     message_sent = Signal(str)     # a quiz answer (or "skip")
     go_reading = Signal()          # the big button: close the window (the ball is still there)
+    chats_deleted = Signal(list)   # past readings moved to the trash: their paths
 
     def __init__(self):
         super().__init__()
@@ -1150,6 +1151,12 @@ class ChatPage(QWidget):
         # the live chat first, then past readings (summary + quiz): one click shows it on the right
         self.chat_list = QListWidget(objectName="sideList")
         self.chat_list.currentItemChanged.connect(lambda it, _: self._show_chat(it))
+        self.chat_list.setSelectionMode(QListWidget.ExtendedSelection)   # Ctrl / Shift-click: several to delete
+        self.chat_list.setToolTip("Right-click (or Delete) to delete a past reading. Ctrl- or Shift-click picks several")
+        self.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.chat_list.customContextMenuRequested.connect(self._chat_menu)
+        QShortcut(QKeySequence.Delete, self.chat_list, lambda: self.delete_chats(picked(self.chat_list)),
+                  context=Qt.WidgetShortcut)
         sv.addWidget(self.chat_list, 1)
         h.addWidget(side)
         self.said: list[str] = []                # every message shown this run, newest last
@@ -1236,6 +1243,27 @@ class ChatPage(QWidget):
         self.chat_list.setCurrentItem(next((r for r in rows if r.data(Qt.UserRole) == chosen), live))
         self.chat_list.blockSignals(False)
         self._show_chat(self.chat_list.currentItem())
+
+    def _chat_menu(self, pos):
+        paths = picked(self.chat_list, pos)                 # past readings only: "Today" has no file
+        if not paths:
+            return
+        menu = QMenu(self.chat_list)
+        menu.addAction(f"{I_DELETE}  Delete {'this reading' if len(paths) == 1 else f'{len(paths)} readings'}",
+                       lambda: self.delete_chats(paths))
+        menu.exec(self.chat_list.mapToGlobal(pos))
+
+    def delete_chats(self, paths: list[Path]):
+        """Past readings (summary + quiz) into data/history/trash (move one back to undo); Today stays."""
+        if not paths or QMessageBox.question(
+                self, "Delete readings", f"Delete {'this reading' if len(paths) == 1 else f'{len(paths)} readings'}? "
+                "It moves to data/history/trash: move it back from there to undo.") != QMessageBox.Yes:
+            return
+        for p in paths:
+            if p.exists():
+                trash_file(p)
+        self.refresh()                                       # the one on screen gone: back to Today
+        self.chats_deleted.emit(paths)
 
     def _show_chat(self, item):
         """One click in the sidebar: the live chat, or a past reading on the right."""
@@ -2129,7 +2157,7 @@ class SettingsWindow(QWidget):
         else:
             self._show_provider(self.shown_id)
         self._filter_providers(self.provider_find.text())
-        self.chat.model_btn.setText(f"{I_SPARKLE}  {active['name']} · {model_label(active)}  {I_CHEVRON}" if active
+        self.chat.model_btn.setText(f"{I_SPARKLE}  {model_label(active)}  {I_CHEVRON}" if active   # the model only
                                     else f"{I_SPARKLE}  No AI yet  {I_CHEVRON}")
 
     def _show_provider(self, pid: str):

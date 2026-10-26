@@ -15,9 +15,11 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
 import eyetracking.services.screen_text as screen_text
+import eyetracking.services.storage as storage
 import eyetracking.ui.control_window as cw
 
 ini = Path(tempfile.mkdtemp()) / "settings.ini"
+storage.HISTORY_DIR = ini.parent / "history"                                     # never the real data/history
 cw.QSettings = lambda *_: QSettings(str(ini), QSettings.IniFormat)
 LANGS = [("en-NZ", "English (New Zealand)", True), ("zh-Hans-CN", "中文(中华人民共和国)", True),
          ("fr-FR", "Français (France)", False)]
@@ -70,4 +72,32 @@ if screen_text.ocr_tag("en") is not None:
     offered = [t for t, _, _ in screen_text.reading_languages()]
     assert all(t in offered for t in screen_text.COMMON_LANGUAGES)               # the 8 common ones always offered
 assert "-".join(p for p in "zh-Hans-CN".split("-") if len(p) != 4) == "zh-CN"   # install_ocr's capability name
+
+# ---- deleting chats: past readings to the trash (several at once), Today stays; the one being written stays gone
+paths = []
+for i, title in enumerate(("Bees choose a home", "The water cycle", "Saccades")):
+    p = storage.HISTORY_DIR / f"reading_2026-10-2{i}_100000.json"
+    storage.save_reading(p, {"title": title, "when": "", "summary": "Bees **swarm**.", "questions": []})
+    paths.append(p)
+chat = w.chat
+chat.refresh()
+titles = lambda: [chat.chat_list.item(i).text() for i in range(chat.chat_list.count())]
+assert len(titles()) == 4 and titles()[0].endswith("Today")
+chat.chat_list.setCurrentRow(1)                                                 # the newest reading, shown on the right
+assert chat.view.currentIndex() == 1
+app.record_path = paths[2]                                                      # its quiz still running
+chat.chat_list.clearSelection()
+for row in (1, 2):
+    chat.chat_list.item(row).setSelected(True)
+assert cw.picked(chat.chat_list) == [paths[2], paths[1]]
+chat.delete_chats(cw.picked(chat.chat_list))
+assert storage.list_readings() == [paths[0]] and (storage.HISTORY_DIR / "trash" / paths[2].name).exists()
+assert len(titles()) == 2 and chat.view.currentIndex() == 0                     # back to Today
+assert app.record_path is None
+app.record = {"title": "x", "summary": "late answer", "questions": []}
+app._save_record()                                                              # the next quiz answer: not written back
+assert storage.list_readings() == [paths[0]]
+chat.delete_chats([])                                                           # "Today" picked: nothing to delete
+assert storage.list_readings() == [paths[0]]
+assert "·" not in chat.model_btn.text()                                          # the model only, not its provider
 print("chat format and language ok")
