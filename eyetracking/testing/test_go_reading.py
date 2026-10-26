@@ -70,7 +70,9 @@ assert not app.control.isVisible() and app.ball.locked and not app.ball.eyes_ope
 # 2. click: eyes open, recording; the page under the gaze is captured (on the background thread)
 app.ball.clicked.emit()
 pump()
-assert app.ball.eyes_open and app.reader is not None and app.debug.isVisible()
+assert app.ball.eyes_open and app.reader is not None
+assert not app.cursor.isVisible() and not any(w.isVisible() for w in QApplication.topLevelWidgets()
+                                              if w not in (app.ball, app.cursor))   # nothing drawn over the page
 look(300, 315)
 app._capture()
 wait(lambda: app.reader.full_text() != "")
@@ -88,15 +90,17 @@ for pos in range(3, len(LINES[0].text), 8):
         app._feed_reader()
 assert all(app.reader.read_flags(LINES[0].text)), app.reader.read_flags(LINES[0].text)
 assert not any(app.reader.read_flags(LINES[1].text))
-assert "words read" in app.debug.text() and "Water cycle" in app.debug.text()
+app.tick()                                                # the live loop while reading: no gaze dot appears
+assert not app.cursor.isVisible()
 
 # 4. click: eyes closed -> the chat is back, the ball unlocked, "you read X of Y words", then the summary
 app.ball.clicked.emit()
 pump()
 assert not app.ball.eyes_open and not app.ball.locked and app.control.isVisible() and app.reader is None
-assert not app.debug.isVisible()
 n = len(LINES[0].text.split())
 assert any(f"you read {n} of" in m for m in app.panel.said), app.panel.said
+app.tick()                                                # reading over: the gaze dot is back
+assert app.cursor.isVisible()
 wait(lambda: asked)
 assert asked[0][2] == "unread" and asked[0][1].split() == LINES[0].text.split()
 wait(lambda: app.panel.said[-1] == "SUMMARY")

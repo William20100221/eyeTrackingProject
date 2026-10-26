@@ -29,7 +29,6 @@ What talks to what:
 from __future__ import annotations
 
 import argparse
-import html
 import os
 import sys
 import threading
@@ -177,33 +176,6 @@ class ReadingWindow(QWidget):
             super().keyPressEvent(event)
 
 
-class ReadingDebug(QLabel):
-    """Rough test window, top-left of the screen: the word and line the gaze is
-    on, and the running count, while the ball's eyes are open."""
-
-    def __init__(self) -> None:
-        super().__init__("", None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
-                         | Qt.WindowType.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setStyleSheet("background:#1F2328; color:white; font-size:16px; padding:8px 12px;")
-        self.setFixedWidth(640)
-        self.setWordWrap(True)
-        self.move(QApplication.primaryScreen().availableGeometry().topLeft() + QPoint(8, 8))
-        self._shown = None
-        if sys.platform == "win32":               # not in screen captures (WDA_EXCLUDEFROMCAPTURE, Windows 10 2004+):
-            import ctypes                         # the OCR of the page being read must not see it change every word
-            ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), 0x11)
-
-    def show_word(self, hit: tuple[str, str] | None, read: int, total: int, title: str) -> None:
-        if (hit, read, total) == self._shown:        # 30 calls a second: repaint only on a change
-            return
-        self._shown = (hit, read, total)
-        word, line = hit or ("-", "")
-        self.setText(f"<b>{html.escape(word)}</b> &nbsp; {read} / {total} words read &nbsp; "
-                     f"<span style='color:#9AA4B2'>{html.escape(title)}</span><br>"
-                     f"<span style='color:#C9D1D9'>{html.escape(line)}</span>")
-
-
 class Background(QObject):
     """Runs slow work (AI calls take seconds) on another thread, then hands the
     result back on the GUI thread: only the GUI thread may touch widgets."""
@@ -273,7 +245,6 @@ class App(QObject):
         # reading from the screen: see go_reading()
         self.reader: ReadingTracker | None = None   # set while the ball's eyes are open
         self.reader_hwnd, self.reader_title = 0, ""
-        self.debug = ReadingDebug()                  # rough test window: the word under the gaze
         self.capture_timer = QTimer(self)
         self.capture_timer.setInterval(CAPTURE_MS)
         self.capture_timer.timeout.connect(self._capture)
@@ -568,7 +539,8 @@ class App(QObject):
         # keep feeding it, so the cursor and the reading time carry on and the
         # smoothing resumes from where it was (no jump when the eyes reopen) (issue #9)
         gaze = to_screen(self.smoothed)
-        self.dwell.feed(gaze)
+        if self.reader is None:                  # while Go Reading records: no gaze dot over the page being read
+            self.dwell.feed(gaze)
         self.ball.look_at(gaze)                  # the water-eye ball looks where you look
         if self.reader is not None:
             self._feed_reader()
@@ -615,8 +587,7 @@ class App(QObject):
             return
         self.reader, self.reader_hwnd, self.reader_title = ReadingTracker(), 0, ""
         self.ball.eyes_open = True
-        self.debug.show_word(("-", "look at the text you want to read"), 0, 0, "")
-        self.debug.show()
+        self.cursor.hide()                        # nothing drawn over the page while you read
         self.capture_timer.start()
 
     def stop_reading(self) -> None:
@@ -624,7 +595,6 @@ class App(QObject):
         self._release_camera("screen")
         self.capture_timer.stop()
         self.ball.eyes_open = False
-        self.debug.hide()
         reader, self.reader = self.reader, None
         if reader is None:
             return
@@ -683,8 +653,6 @@ class App(QObject):
     def _feed_reader(self) -> None:
         px, py = self._gaze_px()
         self.reader.feed(px, py, time.monotonic())
-        read, total = self.reader.progress()
-        self.debug.show_word(self.reader.text_at(px, py), read, total, self.reader_title)
 
     def _gaze_px(self) -> tuple[float, float]:
         """The smoothed gaze in physical screen pixels (the frame of the text boxes), from Qt's scaled ones."""
@@ -693,7 +661,7 @@ class App(QObject):
         return gaze.x() * ratio, gaze.y() * ratio
 
     def _own_windows(self) -> set[int]:
-        return {int(w.winId()) for w in (self.ball, self.cursor, self.debug, self.control)}
+        return {int(w.winId()) for w in (self.ball, self.cursor, self.control)}
 
     # ---- full-screen windows that read the camera themselves -------
     def _open_fullscreen(self, window: QWidget) -> None:
