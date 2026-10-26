@@ -48,7 +48,7 @@ RING_END = 12          # px: ring radius once it has shrunk onto the dot
 GREEN, AMBER, GREY = QColor(80, 220, 120), QColor(235, 149, 46), QColor(120, 120, 120)
 STEPS = ("Look at each dot along a line across, then down the middle: 14 dots. Keep your head still.",
          "Keep looking at the centre dot and move your head as far as the bar asks: turn, nod, tilt, lean.",
-         f"Look at each dot until it moves on, head still: {GRID * GRID} dots in random order.")
+         f"Look at each dot until it moves on, head still. {GRID * GRID} dots, about 40 seconds, in random order.")
 
 
 class CalibrationWindow(QWidget):

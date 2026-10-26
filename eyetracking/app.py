@@ -42,7 +42,8 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from eyetracking.core.points_model import TrainedModel, kept_recordings, train
+from eyetracking.core.points_model import TrainedModel, train
+from eyetracking.core.quality import check_recording, check_special
 from eyetracking.core.models import NO_FRAME, CalibrationRecording
 from eyetracking.core.reading import ReadingTracker, mark_unread, unread_word_count
 from eyetracking.core.smoothing import GazeSmoother
@@ -689,22 +690,38 @@ class App(QObject):
         self._open_fullscreen(window)
 
     def _calibrated(self, window: CalibrationWindow, rec: CalibrationRecording) -> None:
+        """As calibration-lab's: impossible data is rejected and not saved ("Try again"); what the checks
+        cleaned out is said; the checks and the save run on a worker. One sitting holds all three steps,
+        so both of the lab's checks run: the grid's (check_recording) and steps 1-2's (check_special)."""
         QTimer.singleShot(800, window.close)      # show "done" briefly
         if self.mouse:
             self.panel.reply("Mouse mode: calibration not saved.")
-        elif not rec.dots:
+            return
+        if not rec.dots:
             self.panel.reply("No samples: was your face in view? Try calibrate again.")
-        else:
-            path = save_calibration(rec)
-            _, rejected = kept_recordings([rec])  # the quality check: did the eyes follow the dots?
-            self.model = self._train_model()       # the new file + all older ones
-            said = (f"Calibrated: {len(rec.sweep)} line-dot frames, {len(rec.head)} head-step frames and "
-                    f"{len(rec.dots)} dot samples, saved to {path.name}. ")
-            if rejected:
-                said += f"This one can't be used ({rejected[0]}), so try calibrate again. "
-            if self.model is not None:
-                said += f"Gaze model retrained on {self.samples_used} samples, head turns corrected with {self.model.k_source}."
-            self.panel.reply(said)
+            return
+
+        def check_and_save() -> str:              # on a worker thread: the checks and big files take seconds here
+            grid = check_recording(rec)
+            if not grid.ok:                       # the grid trains the model: without it, nothing to save
+                return f"Calibration rejected ({grid.summary()}). Try calibrate again."
+            steps = check_special(rec, "points")  # the line dots and the head step: the user's own head matrix
+            path = save_calibration(rec)          # saved RAW: the checks run again when it trains
+            said = f"Calibrated with {len(grid.kept.dots)} good dot samples"
+            if steps.ok:
+                said += (f", {len(steps.kept.sweep)} good line-dot and {len(steps.kept.head)} head-step frames, "
+                         f"saved as {path.name}.")
+            else:                                 # the grid still trains; head turns: an older sitting's step or the
+                said += (f", saved as {path.name}. The line dots / head step can't be used ({steps.summary()}): "
+                         "calibrate again to measure your own head turns.")   # built-in matrix (said below)
+            cleaned = [r.summary() for r in (grid, steps) if r.ok and r.reasons]
+            return said + (f" Cleaned: {'; '.join(cleaned)}." if cleaned else "")
+
+        said = self._busy("Checking and saving the calibration…", check_and_save)
+        self.model = self._train_model()          # the new file + all older ones
+        if self.model is not None:
+            said += f" Gaze model retrained on {self.samples_used} samples, head turns corrected with {self.model.k_source}."
+        self.panel.reply(said)
 
     def check(self) -> None:
         if not self.mouse and self.model is None:
