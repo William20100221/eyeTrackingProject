@@ -9,10 +9,10 @@ dependencies = [
     "mediapipe>=1.0.1",
     "openai>=3.35.1",
     "opencv-contrib-python>=5.0.0.93",
-    "pygrabber>=0.2",
+    "pygrabber>=0.2; sys_platform == 'win32'",          # camera names (DirectShow)
     "pyside6>=6.11.2",
     "scikit-learn>=1.9.1",
-    "winocr>=0.0.15",
+    "winocr>=0.0.15; sys_platform == 'win32'",         # OCR of a window's picture
 ]
 
 [dependency-groups]

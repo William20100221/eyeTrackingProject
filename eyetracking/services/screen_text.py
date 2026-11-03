@@ -39,7 +39,6 @@ import sys
 import threading
 import time
 from concurrent.futures import Future
-from ctypes import wintypes
 
 from eyetracking.core.reading import Line
 
@@ -49,7 +48,10 @@ COMMON_LANGUAGES = ("en-US", "zh-Hans-CN", "es-ES", "fr-FR", "de-DE", "ja-JP", "
 MIN_WORDS = 20         # fewer words than this from UIA = probably a toolbar only: try OCR too, keep whichever found more
 NO_DOCUMENT_RETRY_S = 2.0   # a window that showed no text: its UI tree is walked again at most this often
 
-if sys.platform == "win32":
+WINDOWS = sys.platform == "win32"   # UI Automation and Windows OCR: off Windows no window's text can be read (yet)
+if WINDOWS:
+    from ctypes import wintypes
+
     import comtypes
     import comtypes.client
 
@@ -69,12 +71,14 @@ def make_dpi_aware() -> None:
 
 
 def active_window() -> int:
-    return _user32.GetForegroundWindow() or 0
+    return (_user32.GetForegroundWindow() or 0) if WINDOWS else 0
 
 
 def window_at(x: float, y: float) -> int:
     """The top-level window under a screen point; 0 on the desktop. Click-through
-    windows (the gaze dot) are skipped, like the mouse skips them."""
+    windows (the gaze dot) are skipped, like the mouse skips them. Always 0 off Windows."""
+    if not WINDOWS:
+        return 0
     return _user32.GetAncestor(_user32.WindowFromPoint(wintypes.POINT(int(x), int(y))), 2) or 0   # 2 = GA_ROOT
 
 
@@ -85,6 +89,8 @@ def window_under_mouse() -> int:
 
 
 def window_title(hwnd: int) -> str:
+    if not WINDOWS:
+        return ""
     buf = ctypes.create_unicode_buffer(256)
     _user32.GetWindowTextW(wintypes.HWND(hwnd), buf, 256)
     return buf.value
@@ -107,7 +113,9 @@ _ocr_seen: dict[int, tuple[tuple, list]] = {}       # hwnd -> (where it was + a 
 
 def lines_on_screen(hwnd: int | None = None) -> list[Line]:
     """The visible text of a window, one Line per visual line, in reading order. Runs on the capture
-    thread; the caller waits for it (the app calls it from a background thread)."""
+    thread; the caller waits for it (the app calls it from a background thread). [] off Windows."""
+    if not WINDOWS:
+        return []
     hwnd = hwnd or active_window()
     done: Future = Future()
     _jobs.put((done, hwnd))

@@ -1,0 +1,62 @@
+# Build Study Assistant on Windows, macOS and Linux, and publish the three downloads as a GitHub release.
+#
+#   Push a tag v<version> (the version in pyproject.toml) -> a release with all three downloads.
+#   Actions > Release > Run workflow                          -> the same builds, kept as artifacts only.
+#
+# Each machine runs installer/build.py: PyInstaller, the frozen app's --self-test, then that system's
+# download (see installer/RELEASING.md).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # the release job creates the release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false     # one system failing doesn't stop the others' builds
+      matrix:
+        include:
+          - os: windows-latest   # x64
+          - os: macos-latest     # Apple Silicon (MediaPipe has no Intel-Mac build)
+          - os: ubuntu-latest    # x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Linux libraries Qt and MediaPipe load (the self-test runs Qt offscreen)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgles2 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup -y --no-progress
+      - run: uv sync --locked
+      - run: uv run python installer/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-${{ runner.os }}
+          path: installer/Output/StudyAssistant-*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd downloads
+          sha256sum StudyAssistant-* > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" StudyAssistant-* SHA256SUMS.txt \
+            --title "Study Assistant ${GITHUB_REF_NAME#v}" --notes-file ../installer/release-notes.md --prerelease

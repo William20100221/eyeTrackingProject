@@ -374,10 +374,10 @@ dependencies = [
     { name = "mediapipe" },
     { name = "openai" },
     { name = "opencv-contrib-python" },
-    { name = "pygrabber" },
+    { name = "pygrabber", marker = "sys_platform == 'win32'" },
     { name = "pyside6" },
     { name = "scikit-learn" },
-    { name = "winocr" },
+    { name = "winocr", marker = "sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -393,10 +393,10 @@ requires-dist = [
     { name = "mediapipe", specifier = ">=1.0.1" },
     { name = "openai", specifier = ">=3.35.1" },
     { name = "opencv-contrib-python", specifier = ">=5.0.0.93" },
-    { name = "pygrabber", specifier = ">=0.2" },
+    { name = "pygrabber", marker = "sys_platform == 'win32'", specifier = ">=0.2" },
     { name = "pyside6", specifier = ">=6.11.2" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
-    { name = "winocr", specifier = ">=0.0.15" },
+    { name = "winocr", marker = "sys_platform == 'win32'", specifier = ">=0.0.15" },
 ]
 
 [package.metadata.requires-dev]

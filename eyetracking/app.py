@@ -597,6 +597,12 @@ class App(QObject):
         if not self._use_camera("screen"):
             self._show_window(self.panel)         # the reason is in the chat
             return
+        if not screen_text.WINDOWS:               # UI Automation / Windows OCR: no other app's text to read here
+            self._release_camera("screen")
+            self._show_window(self.panel)
+            self.panel.reply("Go Reading reads other apps' text on Windows only, for now. Here, try "
+                             "Testing > Sample text: calibration, the gaze check and the sample text work on every system.")
+            return
         self.reader, self.reader_hwnd, self.reader_title = ReadingTracker(), 0, ""
         self.ball.eyes_open = True
         self.cursor.hide()                        # nothing drawn over the page while you read

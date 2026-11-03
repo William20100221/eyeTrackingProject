@@ -4,7 +4,8 @@ Two ways the app runs:
   * from source (`python main.py`): files sit in the project folder, data in `data/`.
   * installed (frozen by PyInstaller, see installer/): the read-only files are
     unpacked into the bundle folder (`sys._MEIPASS`), and the program folder can't
-    be written to, so data goes to %LOCALAPPDATA%\\StudyAssistant\\data instead.
+    be written to, so data goes to the user's app-data folder instead (_user_data: %LOCALAPPDATA%,
+    ~/Library/Application Support or ~/.local/share; then StudyAssistant/data).
 """
 
 import os
@@ -27,8 +28,18 @@ MODEL_RELPATH = Path("models") / "face_landmarker.task"
 # Saved calibrations, gaze checks, blink scores, history. From source: the project's
 # data/ (this file sits in the project root). Installed: the user's local app data,
 # because an installed program may not write next to its own files.
+def _user_data() -> Path:
+    """Where an installed app keeps its files on this OS: %LOCALAPPDATA% on Windows,
+    ~/Library/Application Support on macOS, $XDG_DATA_HOME (~/.local/share) on Linux."""
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+
+
 if FROZEN:
-    DATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "StudyAssistant" / "data"
+    DATA_DIR = _user_data() / "StudyAssistant" / "data"
 else:
     DATA_DIR = _MODULE_PATH.parent / "data"
 

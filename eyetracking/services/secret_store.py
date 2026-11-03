@@ -18,13 +18,12 @@ from __future__ import annotations
 import base64
 import ctypes
 import sys
-from ctypes import wintypes
 
 PREFIX = "dpapi:"
 
 
 class _Blob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_char))]   # DWORD, 32-bit on every OS
 
 
 def _call(fn, data: bytes) -> bytes:

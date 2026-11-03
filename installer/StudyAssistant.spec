@@ -4,10 +4,12 @@ PyInstaller recipe for Study Assistant (run by installer/build.py).
 
 One folder (dist/StudyAssistant/), not one file: a one-file .exe unpacks
 everything to %TEMP% at every start (slow, and antivirus programs dislike it),
-and the installer hides the folder anyway. No console window. See
+and the installer hides the folder anyway. No console window. On macOS the
+folder is also wrapped as dist/StudyAssistant.app (BUNDLE, below). See
 docs/installer_dev_log.md for why each line is here.
 """
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -22,7 +24,9 @@ datas = [
 binaries = []
 # Imported inside functions, so PyInstaller can't see them: the OCR, the screenshot,
 # and the AI providers other than Claude.
-hiddenimports = ["mediapipe.tasks.c", "winocr", "PIL.ImageGrab", "openai", "google.genai"]
+hiddenimports = ["mediapipe.tasks.c", "PIL.ImageGrab", "openai", "google.genai"]
+if sys.platform == "win32":
+    hiddenimports += ["winocr", "pygrabber.dshow_graph", "comtypes.client"]   # Windows-only packages
 
 # MediaPipe: its native libraries and data files, as MediaPipe's guide recommends.
 d, b, h = collect_all("mediapipe")
@@ -67,3 +71,20 @@ exe = EXE(
     upx=False,              # UPX slows the start and makes antivirus programs suspicious
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="StudyAssistant", upx=False)
+
+if sys.platform == "darwin":
+    # a real macOS app: Finder, the Dock and Launchpad know it, and macOS asks for the camera with this
+    # sentence (without NSCameraUsageDescription macOS refuses the camera outright)
+    app = BUNDLE(
+        coll,
+        name="StudyAssistant.app",
+        icon=os.path.join(ROOT, "installer", "app.ico"),      # PyInstaller turns it into an .icns (Pillow)
+        bundle_identifier="com.william20100221.studyassistant",
+        info_plist={
+            "CFBundleDisplayName": "Study Assistant",
+            "CFBundleShortVersionString": os.environ.get("APP_VERSION", "0.0.0"),
+            "NSCameraUsageDescription": "Study Assistant tracks where you look on the screen with your webcam. "
+                                        "Nothing is recorded or sent anywhere.",
+            "NSHighResolutionCapable": True,
+        },
+    )

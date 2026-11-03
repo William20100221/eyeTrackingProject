@@ -61,7 +61,7 @@ def run() -> int:
     check("MediaPipe face landmarker", landmarker)
     check("logo + Qt SVG plugin", logo)
     check("data folder writable", data_dir)
-    for name in ("cv2", "sklearn", "anthropic", "winocr"):
+    for name in ("cv2", "sklearn", "anthropic", "openai", "google.genai") + (("winocr",) if sys.platform == "win32" else ()):
         check(f"package {name}", package(name))
 
     lines = [f"Study Assistant self-test ({'installed' if FROZEN else 'from source'}, Python {sys.version.split()[0]})",
