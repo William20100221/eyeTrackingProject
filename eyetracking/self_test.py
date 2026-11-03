@@ -58,7 +58,12 @@ def run() -> int:
         return lambda: getattr(importlib.import_module(name), "__version__", "imported")
 
     check("model file", lambda: str(find_model()))
-    check("MediaPipe face landmarker", landmarker)
+    if os.environ.get("SELF_TEST_NO_LANDMARKER"):
+        # GitHub's macOS machines are virtual, with no GPU: MediaPipe aborts the whole process there (see
+        # .github/workflows/release.yml). The CI sets this; a real Mac runs the check.
+        results.append(("MediaPipe face landmarker", True, "skipped (SELF_TEST_NO_LANDMARKER: a machine without a GPU)"))
+    else:
+        check("MediaPipe face landmarker", landmarker)
     check("logo + Qt SVG plugin", logo)
     check("data folder writable", data_dir)
     for name in ("cv2", "sklearn", "anthropic", "openai", "google.genai") + (("winocr",) if sys.platform == "win32" else ()):
