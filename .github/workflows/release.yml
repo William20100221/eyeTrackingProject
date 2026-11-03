@@ -68,5 +68,6 @@ jobs:
         run: |
           cd downloads
           sha256sum StudyAssistant-* > SHA256SUMS.txt
+          sed "s/<version>/${GITHUB_REF_NAME#v}/g" ../installer/release-notes.md > notes.md   # the file names in the notes
           gh release create "$GITHUB_REF_NAME" StudyAssistant-* SHA256SUMS.txt \
-            --title "Study Assistant ${GITHUB_REF_NAME#v}" --notes-file ../installer/release-notes.md --prerelease
+            --title "Study Assistant ${GITHUB_REF_NAME#v}" --notes-file notes.md --prerelease
