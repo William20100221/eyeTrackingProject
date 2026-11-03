@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"   # as .python-version: 3.15's lazy imports break MediaPipe in the frozen app,
+                                   # and matplotlib has no Windows wheel for it yet
       - name: Linux libraries Qt and MediaPipe load (the self-test runs Qt offscreen)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libgles2 libxkbcommon0 libfontconfig1 libdbus-1-3
