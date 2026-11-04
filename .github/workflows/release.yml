@@ -27,7 +27,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3   # setup-uv has no major-version tags: an exact release
         with:
           python-version: "3.14"   # as .python-version: 3.15's lazy imports break MediaPipe in the frozen app,
                                    # and matplotlib has no Windows wheel for it yet
