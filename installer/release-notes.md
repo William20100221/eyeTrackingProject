@@ -3,6 +3,20 @@ of a text you read and which you skipped, and an AI summarises what you missed a
 
 **This is a pre-release.** The installers aren't code-signed yet, so your system will warn you once (see below).
 
+## What's new in <version>
+
+- **A new look.** A sidebar like Claude's: New reading, Calibrate, Tests, Data, your recent readings, and Settings
+  at the bottom. Drawn in the App Store's style: neutral greys, bold titles, coloured icon tiles, and your theme
+  colour as the one accent (made darker where needed so white text on it stays readable), in light and dark.
+- **Three start pages** to choose from in Settings > Appearance > Start page: **Clean** (the default: the input
+  box with Go Reading and three test shortcuts), **Hero card** (a big Go Reading card beside your calibration
+  and last gaze-check error) and **Dashboard** (your tests as rows with Start buttons, and your readings with
+  how much of each you read).
+- **Tests and Data** have tabs instead of a second sidebar; the calibrations are one list with Active, Off,
+  Not usable and Removed tabs, each with its count.
+- New reading brings the start page back; this run's messages stay under **Today** in the sidebar, and the
+  sidebar's search finds a past reading by its title.
+
 ## Download
 
 | System | File |
