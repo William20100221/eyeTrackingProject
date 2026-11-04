@@ -38,13 +38,10 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install innosetup -y --no-progress
       - run: uv sync --locked
-      - name: MediaPipe from source (macOS, a check of the machine)
-        if: runner.os == 'macOS'
-        continue-on-error: true   # GitHub's Macs are VMs without a GPU, where MediaPipe aborts: this shows whether it's
-                                  # the machine (it fails from source too) or the packaging (it passes here)
-        run: uv run python -c "import numpy as np; from eyetracking.services.landmarker import FaceLandmarker; lm = FaceLandmarker(); print('from source:', lm.detect(np.zeros((480, 640, 3), dtype=np.uint8)).face_found)"
       - run: uv run python installer/build.py
         env:
+          # GitHub's Macs are VMs without a GPU, where MediaPipe aborts (from source too, 3 Nov): the face
+          # landmarker check is skipped there; try the .dmg on a real Mac
           SELF_TEST_NO_LANDMARKER: ${{ runner.os == 'macOS' && '1' || '' }}
       - uses: actions/upload-artifact@v7
         with:
