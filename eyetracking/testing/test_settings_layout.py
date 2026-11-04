@@ -1,8 +1,8 @@
 """
 Self-check for issue #14 (no camera):  python -m eyetracking.testing.test_settings_layout
 
-Opening the Theme colour sheet narrows the settings page; the rows must reflow to
-the new width instead of being clipped (the subtitles wrap). The sheet starts closed.
+Opening the Theme colour sheet must not clip the settings rows: since the sidebar (4 Nov) the
+sheet lies over the page instead of narrowing it, and the rows fit their viewport. The sheet starts closed.
 """
 import os
 import tempfile

@@ -1,23 +1,25 @@
-"""Study Assistant main window: direction 3 ("Toolbar") in PySide6.
+"""Study Assistant main window in PySide6 (layout and look from 4 Nov: docs/ui-layouts-2026-11-04/combo.html).
 
-Four tabs in the title bar: Chat, Testing, Calibration, Settings. Calibration (and
-check) pages fill the screen with no title bar or buttons, then the window goes
-back to the Chat tab. pick_camera() is the small camera popup used at first start.
+Claude's layout drawn in the App Store's style: a sidebar on the left (New reading, Calibrate, Tests,
+Data, the recent readings, Settings) beside the pages; neutral greys, bold titles, coloured icon tiles,
+grey pill buttons. Calibration (and check) pages fill the screen with no sidebar or buttons, then the
+window goes back to the chat. pick_camera() is the small camera popup used at first start.
 
-ChatPage looks like ChatGPT, but with a "Go Reading" button instead of an input
-bar: it closes the window; the floating ball stays on the whole time.
+ChatPage looks like Claude's chat, with a "Go Reading" button in the input box: it closes the window;
+the floating ball stays on the whole time. Its start page has three looks (Settings > Start page):
+Clean, Hero card and Dashboard.
 
-Every colour comes from one seed colour through the Material 3 Fidelity
-scheme, in light and dark. Pick a colour in the side sheet and the whole
-window re-themes live.
+The accent comes from one seed colour (the M3 Fidelity scheme for the accent roles), made readable
+for white text; everything else is neutral grey, in light and dark. Pick a colour in the side sheet
+and the whole window re-themes live.
 
-    pip install PySide6 materialyoucolor
-    python settings_window.py
+    python -m eyetracking.ui.control_window
 """
 import ctypes
 import threading
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from string import Template
 
@@ -31,14 +33,15 @@ from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication, QIc
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
                                QColorDialog, QFileDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
-                               QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
+from eyetracking.core.reading import mark_unread, unread_word_count, word_count
 from eyetracking.services.camera import camera_names
 from eyetracking.services.reading_ai import (DEFAULT_HOSTS, KEY_URLS, KNOWN_MODELS, MAKERS, MODELS, PROVIDER_NAMES,
                                              default_model, list_models, provider_for_key)
 from eyetracking.services.screen_text import install_ocr, reading_languages
 from eyetracking.services.secret_store import protect, unprotect
-from eyetracking.services.storage import (blink_score_lines, calibration_lines, calibration_log, calibration_usable,
+from eyetracking.services.storage import (blink_score_lines, calibration_lines, check_error, read_gaze_check, calibration_log, calibration_usable,
                                           file_date, gaze_check_lines, list_blink_scores, list_calibrations,
                                           list_gaze_checks, load_reading, trash_file,
                                           list_disabled, list_removed, restore, set_calibration_enabled,
@@ -57,12 +60,10 @@ DEFAULTS = {
     "ball_ring": "",            # the thin ring around a still ball; "" = the theme colour
     "summary_words": 150,
     "camera": "",               # webcam NAME (Windows can renumber cameras between restarts)
+    "home_style": "clean",      # the chat's start page: clean | hero | dashboard (HOME_STYLES)
 }
 BALL_LOOKS = ["logo", "water", "image"]
 SWATCHES = ["#3D6CF6", "#00897B", "#2E8B57", "#E8B400", "#E5483B", "#D32F2F", "#D81B60", "#7E57C2"]
-
-PAGE_OF_TAB = {0: 0, 1: 1, 3: 2}          # title-bar tab -> page in the stack (tab 2, Calibration, is full screen)
-TAB_OF_PAGE = {v: k for k, v in PAGE_OF_TAB.items()}
 
 TEXT_FONTS = ["Segoe UI Variable Text", "Segoe UI", "Segoe Fluent Icons", "Segoe MDL2 Assets"]
 ICON_FONTS = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]   # built into Windows 11 / Windows 10
@@ -111,10 +112,57 @@ ROLES = ["primary", "onPrimary", "primaryContainer", "onPrimaryContainer", "seco
 _MDC = MaterialDynamicColors(spec="2021")
 
 
+# The look (4 Nov, docs/ui-layouts-2026-11-04/combo.html): neutral greys as the App Store's, the theme colour
+# only as the accent. The M3 neutral roles are replaced by these; primary becomes the accent made readable.
+NEUTRALS = {
+    False: dict(surface="#FFFFFF", onSurface="#1D1D1F", onSurfaceVariant="#6E6E73", surfaceContainerLowest="#FFFFFF",
+                surfaceContainerLow="#F5F5F7", surfaceContainer="#F2F2F5", surfaceContainerHigh="#EEEEF3",
+                surfaceContainerHighest="#E3E3E8", outline="#C7C7CC", outlineVariant="#E5E5EA",
+                secondaryContainer="#E3E3E8", onSecondaryContainer="#1D1D1F", inverseSurface="#1D1D1F",
+                inverseOnSurface="#F5F5F7"),
+    True: dict(surface="#1C1C1E", onSurface="#F5F5F7", onSurfaceVariant="#A1A1A6", surfaceContainerLowest="#2C2C2E",
+               surfaceContainerLow="#232325", surfaceContainer="#2C2C2E", surfaceContainerHigh="#3A3A3C",
+               surfaceContainerHighest="#48484A", outline="#636366", outlineVariant="#38383A",
+               secondaryContainer="#3A3A3C", onSecondaryContainer="#F5F5F7", inverseSurface="#F5F5F7",
+               inverseOnSurface="#1D1D1F"),
+}
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG contrast ratio of two colours (1 to 21)."""
+    def lum(h: str) -> float:
+        c = QColor(h)
+        ch = [x / 255 for x in (c.red(), c.green(), c.blue())]
+        ch = [x / 12.92 if x <= .04045 else ((x + .055) / 1.055) ** 2.4 for x in ch]
+        return .2126 * ch[0] + .7152 * ch[1] + .0722 * ch[2]
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + .05) / (lo + .05)
+
+
+def readable(colour: str, against: str, ratio: float = 4.5) -> str:
+    """`colour`, darkened (or lightened, against a dark colour) until it reads on `against` at `ratio`."""
+    c, darker = QColor(colour), QColor(against).lightnessF() > .5
+    h, s, l, _ = c.getHslF()
+    while contrast(c.name(), against) < ratio and 0 < l < 1:
+        l = max(0.0, l - .02) if darker else min(1.0, l + .02)
+        c = QColor.fromHslF(h, s, l)
+    return c.name().upper()
+
+
 def make_scheme(seed: str, dark: bool) -> dict:
-    """Seed hex -> {M3 role: hex}. Same spec as the HTML mockup (material-color-utilities 0.3)."""
+    """Seed hex -> {M3 role: hex}: the M3 Fidelity roles (material-color-utilities 0.3), with the neutral ones
+    swapped for plain greys and the accent kept readable: white text on primary, accentText on the grey pills."""
     s = SchemeFidelity(Hct.from_int(0xFF000000 | int(seed[1:], 16)), dark, 0.0, spec_version="2021")
-    return {r: "#%06X" % (getattr(_MDC, r).get_argb(s) & 0xFFFFFF) for r in ROLES}
+    c = {r: "#%06X" % (getattr(_MDC, r).get_argb(s) & 0xFFFFFF) for r in ROLES}
+    c.update(NEUTRALS[dark])
+    c["primary"] = readable(seed, "#FFFFFF")                       # buttons and cards: white text on it
+    c["onPrimary"] = "#FFFFFF"
+    c["accentText"] = readable(seed, c["surfaceContainerHigh"])    # the accent as text, on a grey pill
+    c["secondary"] = c["accentText"]                               # the keyboard focus ring
+    c["primaryContainer"] = mix(seed, c["surface"], .16)
+    c["onPrimaryContainer"] = c["accentText"]
+    c["seed"] = seed
+    return c
 
 
 def mix(fg: str, bg: str, a: float) -> str:
@@ -150,17 +198,12 @@ QWidget { color: $onSurface; font-size: 14px; }
 QToolTip { background: $inverseSurface; color: $inverseOnSurface; border: none; padding: 4px 8px; font-size: 12px; }
 
 /* title bar */
-#titlebar { background: $surfaceContainer; }
+#titlebar { background: $surface; }
 #appname { font-size: 12px; }
 #caps QPushButton { font-family: "Segoe Fluent Icons"; font-size: 10px; font-weight: 400; border: none; border-radius: 0;
     min-width: 46px; max-width: 46px; min-height: 48px; max-height: 48px; padding: 0; background: transparent; }
 #caps QPushButton:hover { background: $hover; }
 #caps QPushButton#close:hover { background: #C42B1C; color: white; }
-QPushButton#settingsBtn:checked { background: $secondaryContainer; color: $onSecondaryContainer; }
-QPushButton#settingsBtn { font-family: "Segoe Fluent Icons"; font-size: 16px; font-weight: 400; min-width: 40px; max-width: 40px;
-    min-height: 32px; max-height: 32px; padding: 0; border-radius: 8px; background: transparent; }
-QPushButton#settingsBtn:hover { background: $hover; }
-QPushButton#settingsBtn:checked:hover { background: $secContainerHover; }
 
 /* toolbar */
 #toolbar { background: $surface; border-bottom: 1px solid $outlineVariant; }
@@ -170,25 +213,29 @@ QLineEdit#find { min-height: 34px; max-height: 34px; min-width: 280px; max-width
 QLineEdit#find:focus { border-bottom: 2px solid $primary; }
 
 /* buttons */
-QPushButton { border: none; border-radius: 12px; min-height: 36px; max-height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600; background: transparent; }
+QPushButton { border: none; border-radius: 18px; min-height: 36px; max-height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600; background: transparent; }
 QPushButton[kind="filled"] { background: $primary; color: $onPrimary; }
 QPushButton[kind="filled"]:hover { background: $primaryHover; }
 QPushButton[kind="filled"]:pressed { background: $primaryPress; }
-QPushButton[kind="outlined"] { border: 1px solid $outlineVariant; padding-left: 12px; }
-QPushButton[kind="text"] { color: $primary; padding: 0 12px; }
+QPushButton[kind="outlined"] { background: $surfaceContainerHigh; border: 1px solid $surfaceContainerHigh; padding-left: 12px; }
+QPushButton[kind="pill"] { background: $surfaceContainerHigh; color: $accentText; font-weight: 700; padding: 0 18px;
+    min-height: 32px; max-height: 32px; border-radius: 16px; }
+QPushButton[kind="pill"]:hover { background: $surfaceContainerHighest; }
+QPushButton[kind="pill"]:focus { border: 2px solid $secondary; padding: 0 16px; }
+QPushButton[kind="text"] { color: $accentText; padding: 0 12px; }
 QPushButton[kind="outlined"]:hover, QPushButton[kind="text"]:hover, QPushButton[kind="icon"]:hover { background: $hover; }
 QPushButton[kind="outlined"]:pressed, QPushButton[kind="text"]:pressed, QPushButton[kind="icon"]:pressed { background: $press; }
 QPushButton[kind="icon"] { font-family: "Segoe Fluent Icons"; font-size: 14px; font-weight: 400; min-width: 40px; max-width: 40px;
     min-height: 40px; max-height: 40px; padding: 0; border-radius: 20px; color: $onSurfaceVariant; }
 
 /* chips */
-QPushButton[kind="chip"], QPushButton[kind="assist"] { min-height: 30px; max-height: 30px; border-radius: 8px;
-    border: 1px solid $outlineVariant; padding: 0 14px; color: $onSurfaceVariant; }
+QPushButton[kind="chip"], QPushButton[kind="assist"] { min-height: 30px; max-height: 30px; border-radius: 15px;
+    border: 1px solid $surfaceContainerHigh; background: $surfaceContainerHigh; padding: 0 14px; color: $onSurface; font-weight: 400; }
 QPushButton[kind="assist"] { color: $onSurface; padding: 0 10px 0 8px; }
 QPushButton[kind="assist"]::menu-indicator { image: none; width: 0; }
 QPushButton[kind="chip"]:hover, QPushButton[kind="assist"]:hover { background: $hover; }
-QPushButton[kind="chip"]:checked { background: $secondaryContainer; color: $onSecondaryContainer; border-color: $secondaryContainer; padding-left: 8px; }
-QPushButton[kind="chip"]:checked:hover { background: $secContainerHover; }
+QPushButton[kind="chip"]:checked { background: $primary; color: $onPrimary; border-color: $primary; padding-left: 8px; }
+QPushButton[kind="chip"]:checked:hover { background: $primaryHover; }
 
 /* keyboard focus: a 2px ring on every button. The ring is a border, which eats into the text's room,
    so each kind's padding gives that width back: focused text never moves or clips (19 Oct: a focused
@@ -198,11 +245,11 @@ QPushButton[kind="text"]:focus { padding: 0 10px; }
 QPushButton[kind="outlined"]:focus { border: 2px solid $secondary; padding: 0 15px 0 11px; }
 QPushButton[kind="icon"]:focus { padding: 0; }
 QPushButton[kind="nav"]:focus { padding: 0 10px; }
-QPushButton[kind="go"]:focus { padding: 0 14px; }
+QPushButton[kind="go"]:focus { padding: 0 18px; }
 QPushButton[kind="chip"]:focus { border: 2px solid $secondary; padding: 0 13px; }
 QPushButton[kind="chip"]:checked:focus { padding: 0 13px 0 7px; }
 QPushButton[kind="assist"]:focus { border: 2px solid $secondary; padding: 0 9px 0 7px; }
-#caps QPushButton:focus, QPushButton#settingsBtn:focus { padding: 0; }
+#caps QPushButton:focus { padding: 0; }
 
 /* setting groups */
 #content { background: transparent; }
@@ -213,7 +260,7 @@ QScrollBar::handle:vertical { background: $outlineVariant; border-radius: 3px; m
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 #gh { font-size: 14px; font-weight: 600; }
-#group { background: $surfaceContainerLowest; border: 1px solid $outlineVariant; border-radius: 8px; }
+#group { background: $surfaceContainerLowest; border: 1px solid $outlineVariant; border-radius: 12px; }
 #divider { background: $outlineVariant; border: none; min-height: 1px; max-height: 1px; }
 #rowicon { font-family: "Segoe Fluent Icons"; font-size: 16px; color: $onSurfaceVariant; }
 #rowsub, #hex, #unit { font-size: 12px; color: $onSurfaceVariant; }
@@ -257,34 +304,74 @@ QListWidget#modelList::item:hover { background: $hover; }
 QListWidget#modelList::item:selected { background: $selected; color: $onSurface; }
 
 /* chat page */
-#side { background: $surfaceContainerLow; border-right: 1px solid $outlineVariant; }
-#sideTitle { font-size: 12px; font-weight: 600; color: $onSurfaceVariant; padding: 8px 12px 4px 12px; }
 QPushButton[kind="nav"] { text-align: left; padding: 0 12px; border-radius: 8px; font-weight: 400; font-size: 14px; }
 QPushButton[kind="nav"]:hover { background: $hover; }
 QPushButton[kind="nav"]:checked, QPushButton[kind="nav"]:checked:hover { background: $selected; color: $onSurface; }
 #lead { font-size: 15px; }
-#sideLabel { font-size: 14px; padding: 6px 12px 2px 12px; }
-QListWidget#sideList { background: transparent; border: none; outline: none; font-size: 13px; }
-QListWidget#sideList::item { padding: 6px 12px 6px 36px; border-radius: 8px; color: $onSurfaceVariant; }
-QListWidget#sideList::item:hover { background: $hover; }
-QListWidget#sideList::item:selected { background: $selected; color: $onSurface; }
-QListWidget#sideList[wrap="true"] { padding: 0 12px 0 36px; }   /* wrapped titles: the side padding on the list, */
-QListWidget#sideList[wrap="true"]::item { padding: 6px 0; }     /* so a wrapped row is measured at the width it is drawn at */
-QListWidget#linesList { background: transparent; border: none; outline: none; font-size: 14px; }
-QListWidget#linesList::item { padding: 4px 12px; color: $onSurface; }
-QListWidget#linesList::item:selected { background: $selected; }
-#hero { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 32px; font-weight: 600; }
+#hero { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 34px; font-weight: 700; }
 #heroSub { font-size: 14px; color: $onSurfaceVariant; }
 QLabel#theirs { font-size: 15px; }
-#mine { background: $surfaceContainerHigh; border-radius: 18px; }
+#mine { background: $surfaceContainerLow; border-radius: 18px; }
 #mine QLabel { font-size: 15px; background: transparent; }
-QPushButton[kind="go"] { background: $primary; color: $onPrimary; min-height: 56px; max-height: 56px;
-    border-radius: 28px; font-size: 16px; }
+QPushButton[kind="go"] { background: $primary; color: $onPrimary; min-height: 40px; max-height: 40px;
+    border-radius: 20px; font-size: 14px; font-weight: 700; padding: 0 20px; }
 QPushButton[kind="go"]:hover { background: $primaryHover; }
 QPushButton[kind="go"]:pressed { background: $primaryPress; }
-#answerBox { background: $surfaceContainerHigh; border-radius: 28px; }
+#answerBox { background: transparent; }
 QLineEdit#answer { border: none; background: transparent; font-size: 15px; min-height: 40px;
     selection-background-color: $primary; selection-color: $onPrimary; }
+
+/* the sidebar (as Claude's), drawn as the App Store's: brand, search, places, recent readings, Settings */
+#sidebar { background: $surfaceContainerLow; border-right: 1px solid $outlineVariant; }
+#brand { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 15px; font-weight: 700; }
+QLineEdit#sideFind { min-height: 32px; max-height: 32px; padding: 0 6px; border: none; border-radius: 8px;
+    background: $surfaceContainerHighest; selection-background-color: $primary; selection-color: $onPrimary; }
+QPushButton[kind="sidenav"] { text-align: left; padding: 0 10px; border-radius: 8px; font-weight: 400; font-size: 14px;
+    min-height: 34px; max-height: 34px; }
+QPushButton[kind="sidenav"]:hover { background: $hover; }
+QPushButton[kind="sidenav"]:checked { background: $secondaryContainer; font-weight: 600; }
+QPushButton[kind="sidenav"]:focus { border: 2px solid $secondary; padding: 0 8px; }
+#sideSec { font-size: 11px; font-weight: 600; color: $onSurfaceVariant; padding: 14px 10px 4px 10px; }
+QListWidget#recents { background: transparent; border: none; outline: none; font-size: 14px; }
+QListWidget#recents::item { padding: 4px 6px; border-radius: 8px; }
+QListWidget#recents::item:hover { background: $hover; }
+QListWidget#recents::item:selected { background: $secondaryContainer; color: $onSurface; }
+
+/* the start page and the chat's input box */
+#eyebrow { font-size: 12px; font-weight: 600; color: $onSurfaceVariant; }
+#big { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 34px; font-weight: 700; }
+#h2 { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 20px; font-weight: 700; }
+#composer { background: $surfaceContainerLow; border-radius: 20px; }
+#composerHint { font-size: 15px; color: $onSurfaceVariant; }
+#badge { background: $okBg; color: $okText; border-radius: 10px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+#heroCard { background: $primary; border-radius: 16px; }
+#heroCard QLabel { color: $onPrimary; background: transparent; }
+#heroCard #cardTitle { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 30px; font-weight: 700; }
+QPushButton[kind="onhero"] { background: $onPrimary; color: $primary; font-weight: 700; padding: 0 18px;
+    min-height: 34px; max-height: 34px; border-radius: 17px; }
+QPushButton[kind="onhero"]:focus { border: 2px solid $onSurface; padding: 0 16px; }
+#statCard, #readCard { background: $surfaceContainerLow; border-radius: 16px; }
+#statBig { font-family: "Segoe UI Variable Display", "Segoe UI"; font-size: 36px; font-weight: 700; }
+#cardName { font-size: 15px; font-weight: 600; }
+#appRow { border: none; border-bottom: 1px solid $outlineVariant; background: transparent; }
+#appTitle { font-size: 15px; }
+QProgressBar { background: $surfaceContainerHighest; border: none; border-radius: 3px; max-height: 6px; min-height: 6px; }
+QProgressBar::chunk { background: $primary; border-radius: 3px; }
+
+/* tabs drawn as a segmented control (Tests, Data, a calibration's state) */
+#seg { background: $surfaceContainerHigh; border-radius: 9px; }
+QPushButton[kind="seg"] { min-height: 28px; max-height: 28px; border-radius: 7px; padding: 0 12px; font-weight: 400;
+    color: $onSurfaceVariant; }
+QPushButton[kind="seg"]:hover { color: $onSurface; }
+QPushButton[kind="seg"]:checked { background: $surfaceContainerLowest; color: $onSurface; font-weight: 600; }
+QPushButton[kind="seg"]:focus { border: 2px solid $secondary; padding: 0 10px; }
+QListWidget#rowList { background: $surfaceContainerLowest; border: 1px solid $outlineVariant; border-radius: 12px;
+    outline: none; font-size: 14px; padding: 2px 0; }
+QListWidget#rowList::item { padding: 9px 12px; border-bottom: 1px solid $outlineVariant; color: $onSurface; }
+QListWidget#rowList::item:hover { background: $hover; }
+QListWidget#rowList::item:selected { background: $selected; color: $onSurface; }
+#stepNo { background: $surfaceContainerHigh; color: $onSurfaceVariant; border-radius: 12px; font-size: 12px; font-weight: 600; }
+#rowtile { border-radius: 8px; color: white; font-family: "Segoe Fluent Icons"; font-size: 16px; }
 
 /* side sheet */
 #sheet { background: $surfaceContainerLow; border-left: 1px solid $outlineVariant; border-top-left-radius: 12px; }
@@ -310,6 +397,8 @@ def build_qss(c: dict) -> str:
         secContainerHover=mix(c["onSecondaryContainer"], c["secondaryContainer"], .08),
         warnBg=mix("#E8B400", c["surface"], .14),   # amber over the surface: a warning in either theme
         warnLine=mix("#E8B400", c["surface"], .55),
+        okBg=mix("#34A853", c["surface"], .16),         # a green badge ("Calibrated"), in either theme
+        okText=readable("#2E9E5B", mix("#34A853", c["surface"], .16)),
     )
 
 
@@ -555,31 +644,24 @@ class Switch(QAbstractButton):
         self.update()
 
     def paintEvent(self, _):
-        c, on, t = self.window().c, self.isChecked(), self._t
+        """An iOS-style switch (4 Nov): a pill track, the accent when on, with a white thumb that slides."""
+        c, t = self.window().c, self._t
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.translate(3, 4)
-        p.scale(.84, .84)
+        track = QRectF(4, 5, 42, 24)
         if self.hasFocus():
-            p.setPen(QPen(QColor(c["secondary"]), 3))
+            p.setPen(QPen(QColor(c["secondary"]), 2))
             p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(QRectF(-3, -3, 58, 38), 19, 19)
-        if on:
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(c["primary"]))
-        else:
-            p.setPen(QPen(QColor(c["outline"]), 2))
-            p.setBrush(QColor(c["surfaceContainerHighest"]))
-        p.drawRoundedRect(QRectF(1, 1, 50, 30), 15, 15)
-        d = 28 if self.isDown() else 16 + 8 * t
-        cx = 16 + 20 * t
-        hover = self.underMouse()
-        thumb = (c["primaryContainer"] if hover else c["onPrimary"]) if on else (c["onSurfaceVariant"] if hover else c["outline"])
+            p.drawRoundedRect(track.adjusted(-3, -3, 3, 3), 15, 15)
+        off, on = QColor(c["surfaceContainerHighest"]), QColor(c["primary"])
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(thumb))
-        p.drawEllipse(QPointF(cx, 16), d / 2, d / 2)
-        if on and t > .6:
-            draw_check(p, cx, 16, 10, QColor(c["onPrimaryContainer"]))
+        p.setBrush(QColor.fromRgbF(*(a + (b - a) * t for a, b in zip(off.getRgbF()[:3], on.getRgbF()[:3]))))
+        p.drawRoundedRect(track, 12, 12)
+        cx = track.left() + 12 + 18 * t
+        p.setBrush(QColor(0, 0, 0, 40))                       # the thumb's soft edge
+        p.drawEllipse(QPointF(cx, track.center().y() + .8), 10.5, 10.5)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(QPointF(cx, track.center().y()), 10 if not self.isDown() else 9, 10)
 
 
 class Swatch(QAbstractButton):
@@ -730,7 +812,7 @@ class Grip(QWidget):
 
 def side_list(on_open) -> QListWidget:
     """A list of dated files; double-click (or Enter) calls on_open(path). Ctrl / Shift-click picks several."""
-    lst = QListWidget(objectName="sideList")
+    lst = QListWidget(objectName="rowList")
     lst.setToolTip("Double-click to open. Ctrl- or Shift-click to pick several, then right-click or Delete")
     lst.setSelectionMode(QListWidget.ExtendedSelection)
     lst.itemActivated.connect(lambda it: it.data(Qt.UserRole) and on_open(Path(it.data(Qt.UserRole))))
@@ -750,20 +832,13 @@ def count(paths: list[Path], what: str) -> str:
     return f"{len(paths)} {what}s" if len(paths) != 1 else paths[0].name
 
 
-def fill_list(lst: QListWidget, paths: list[Path], empty: str, name=None):
-    """One item per dated file; name(path), if given, is shown after the date (full name in the tooltip)."""
+def fill_list(lst: QListWidget, paths: list[Path], empty: str):
+    """One item per dated file."""
     lst.clear()
-    if name and not lst.property("wrap"):         # a title: wrapped to the list's width, never cut at its edge
-        lst.setProperty("wrap", True)
-        lst.style().unpolish(lst)                 # the [wrap] rules apply from now on
-        lst.style().polish(lst)
-        lst.setWordWrap(True)
-        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lst.setResizeMode(QListWidget.Adjust)
     for path in paths:
         when = f"{file_date(path):%d %b %Y   %H:%M}"
-        item = QListWidgetItem(f"{file_date(path):%d %b %H:%M}  {name(path)}" if name else when)
-        item.setToolTip(f"{when}\n{name(path)}" if name else when)
+        item = QListWidgetItem(when)
+        item.setToolTip(when)
         item.setData(Qt.UserRole, str(path))
         lst.addItem(item)
     if not paths and empty:
@@ -801,15 +876,14 @@ class DataPage(QWidget):
         super().__init__()
         self._list, self._lines, self._empty = list_files, to_lines, empty
         h = QHBoxLayout(self)
-        h.setContentsMargins(24, 20, 24, 24)
+        h.setContentsMargins(0, 8, 0, 20)
         h.setSpacing(24)
         left = QVBoxLayout()
         left.setSpacing(8)
-        left.addWidget(label(title, "sheetTitle"))
         text = label(hint, "sheetText")
         text.setWordWrap(True)
         left.addWidget(text)
-        self.files = QListWidget(objectName="sideList")
+        self.files = QListWidget(objectName="rowList")
         self.files.currentItemChanged.connect(lambda it, _: self._show(it))
         self.files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.files.customContextMenuRequested.connect(self._menu)
@@ -818,8 +892,9 @@ class DataPage(QWidget):
         col.setLayout(left)
         col.setFixedWidth(320)
         h.addWidget(col)
-        self.lines = QListWidget(objectName="linesList")
+        self.lines = QListWidget(objectName="rowList")
         self.lines.setWordWrap(True)
+        self.lines.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.lines.setSelectionMode(QListWidget.NoSelection)
         h.addWidget(self.lines, 1)
 
@@ -849,73 +924,91 @@ class DataPage(QWidget):
 # ---------------------------------------------------------------- testing page
 
 class TestingPage(QWidget):
-    """Testing tab. The sidebar picks a page on the right. Tests: what the sample text,
-    the gaze check and the blink test do, with the button that starts them. Data: the
-    calibrations (active / non-active / not usable), the gaze checks and the blink
-    scores, each by date and readable in words."""
+    """Tests and Data (the sidebar's two places). A segmented control picks the page underneath. Tests: what
+    the sample text, the gaze check and the blink test do, with the button that starts them. Data: the
+    calibrations (active / non-active / not usable / removed), the calibration log, the gaze checks and the
+    blink scores, each by date and readable in words."""
 
     command = Signal(str)          # a start button: "read" | "check" | "blink"
     data_changed = Signal()        # samples or a file removed / disabled / enabled / restored: the app retrains
     undo_requested = Signal()      # the Undo button (or Ctrl+Z): the last calibration / gaze check goes
+    section_changed = Signal(str)  # "tests" or "data" came up: the sidebar follows
+
+    SECTIONS = {"tests": [(I_READ, "Sample text", 0), (I_EYE, "Gaze check", 1), (I_BLINK, "Blink test", 2)],
+                "data": [(I_LINES, "Calibrations", 3), (I_LOG, "Calibration log", 7), (I_CHART, "Gaze checks", 4),
+                         (I_BLINK, "Blink scores", 5)]}
+    NAMES = {0: "Sample text", 1: "Gaze check", 2: "Blink test", 3: "Calibrations", 4: "Gaze checks",
+             5: "Blink scores", 6: "Calibrations", 7: "Calibration log"}
 
     def __init__(self):
         super().__init__()
-        h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(0)
-
-        side = QFrame(objectName="side")
-        side.setFixedWidth(260)
-        sv = QVBoxLayout(side)
-        sv.setContentsMargins(12, 12, 12, 12)
-        sv.setSpacing(2)
-        self.side_nav = QButtonGroup(self)               # the chosen entry stays highlighted: it is the page on the right
-        # (glyph, name, page index on the right): the index stays when an entry is added (a saved page still fits)
-        sections = [("Tests", [(I_READ, "Sample text", 0), (I_EYE, "Gaze check", 1), (I_BLINK, "Blink test", 2)]),
-                    ("Data", [(I_LINES, "Calibrations", 3), (I_LOG, "Calibration log", 7), (I_CHART, "Gaze checks", 4),
-                              (I_BLINK, "Blink scores", 5)])]
-        for section, items in sections:
-            sv.addWidget(label(section, "sideTitle"))
-            for glyph, text, i in items:
-                b = button(f"{glyph}   {text}", "nav")
-                b.setCheckable(True)
-                self.side_nav.addButton(b, i)                # its id = the page index on the right
-                sv.addWidget(b)
-            sv.addSpacing(8)
-        sv.addStretch(1)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 18, 36, 0)
+        outer.setSpacing(10)
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        self.eyebrow, self.title = label("", "eyebrow"), label("", "big")
+        titles.addWidget(self.eyebrow)
+        titles.addWidget(self.title)
+        head.addLayout(titles, 1)
+        side = QVBoxLayout()
+        side.setSpacing(4)
         self.status = label("", "rowsub")                # the latest word from the app (the model, a saved file)
         self.status.setWordWrap(True)
-        sv.addWidget(self.status)
+        self.status.setMaximumWidth(440)
+        self.status.setAlignment(Qt.AlignRight)
+        side.addWidget(self.status)
         # Undo the last calibration or gaze check (a snackbar's action, M3): shown while there is one to undo
-        self.undo_btn = button(f"{I_UNDO}  Undo", "text")
+        self.undo_btn = button(f"{I_UNDO}  Undo", "pill")
         self.undo_btn.clicked.connect(self.undo_requested.emit)
         self.undo_btn.hide()
-        sv.addWidget(self.undo_btn, 0, Qt.AlignLeft)
+        side.addWidget(self.undo_btn, 0, Qt.AlignRight)
+        head.addLayout(side)
+        outer.addLayout(head)
         QShortcut(QKeySequence.Undo, self, lambda: self.undo_btn.isVisible() and self.undo_requested.emit(),
                   context=Qt.WidgetWithChildrenShortcut)
-        h.addWidget(side)
+
+        # the tabs: a segmented control per place; a tab's id is its page index on the right, which stays when
+        # one is added (a saved page still fits)
+        self.side_nav = QButtonGroup(self)
+        self.tab_bars: dict[str, QFrame] = {}
+        tabs = QHBoxLayout()
+        for section, items in self.SECTIONS.items():
+            bar = QFrame(objectName="seg")
+            bh = QHBoxLayout(bar)
+            bh.setContentsMargins(3, 3, 3, 3)
+            bh.setSpacing(2)
+            for _glyph, text, i in items:
+                b = button(text, "seg")
+                b.setCheckable(True)
+                self.side_nav.addButton(b, i)
+                bh.addWidget(b)
+            self.tab_bars[section] = bar
+            tabs.addWidget(bar)
+        tabs.addStretch(1)
+        outer.addLayout(tabs)
 
         # 0-2: the tests (what they do + a start button); 3: calibrations; 4: gaze checks; 5: blink scores;
-        # 6: one calibration's detail (from 3)
+        # 6: one calibration's detail (from 3); 7: the calibration log
         self.main = QStackedWidget()
         self.main.addWidget(self._intro(
             I_READ, "Sample text", "Read a short text while the tracker watches where you look.",
             ["Each paragraph turns green once your eyes have rested on it long enough: about a tenth of a second per word.",
              "Press Done, or stare at it, when you finish. The AI then summarises what you skipped and asks you about it, "
-             "in the Chat tab.",
+             "in the chat.",
              "Open .txt loads a text of your own. Esc leaves without the AI part."],
             "Open the sample text", "read"))
         self.main.addWidget(self._intro(
-            I_EYE, "Gaze check", "A full-screen test of the gaze model on 16 rings (4×4): how accurate is it today?",
+            I_EYE, "Gaze check", "How accurate is the gaze model today? A full-screen test on 16 rings (4×4).",
             ["One ring is lit (white). Look at it and press Enter: that records where the model says you look, and "
              "the next ring lights up. A sample's error is its distance to the lit ring.",
              "A green dot follows where the model thinks you look; it turns grey while your face is lost or you blink.",
-             "Do a full round (16) for a fair number. Space pauses. Esc saves and leaves: the file goes to "
-             "data/gaze_checks, and Data > Gaze checks shows the average error. Undo (under this sidebar, or Ctrl+Z) "
-             "takes it back. It needs a calibration first."],
+             "Do a full round (16) for a fair number. Space pauses. Esc saves and leaves: Data > Gaze checks shows the "
+             "average error. Undo (top right, or Ctrl+Z) takes it back. It needs a calibration first."],
             "Start the gaze check", "check"))
         self.main.addWidget(self._intro(
-            I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off can be set from "
+            I_BLINK, "Blink test", "Record your blink scores in six eye states, so the blink cut-off is set from "
             "your own numbers instead of a guess.",
             ["A blink score is a number MediaPipe gives for each eye every frame: 0 = wide open, 1 = shut. The app uses "
              "it to skip frames where the eyes are closing or closed: calibration doesn't record them, and the live gaze "
@@ -927,43 +1020,53 @@ class TestingPage(QWidget):
             "Start the blink test", "blink"))
         lists = QWidget()
         mv = QVBoxLayout(lists)
-        mv.setContentsMargins(24, 20, 24, 24)
+        mv.setContentsMargins(0, 8, 0, 20)
         mv.setSpacing(8)
-        mv.addWidget(label("Calibrations", "sheetTitle"))
-        hint = label("Saved calibrations by date. Double-click one to read it in words. Ctrl- or Shift-click to pick "
-                     "several; right-click (or Delete) to disable them (kept, but they stop training the gaze model), "
-                     "enable them again, remove them, or restore removed ones. Removed calibrations wait in the trash. "
-                     "Only the active ones train the gaze model.", "sheetText")
-        hint.setWordWrap(True)
-        mv.addWidget(hint)
-        cols = QHBoxLayout()
-        cols.setSpacing(24)
+        states = QHBoxLayout()
+        seg = QFrame(objectName="seg")
+        sh = QHBoxLayout(seg)
+        sh.setContentsMargins(3, 3, 3, 3)
+        sh.setSpacing(2)
+        self.state_group = QButtonGroup(self)
+        self.state_stack = QStackedWidget()
+        self.state_note = label("", "rowsub")
         self.active_list = side_list(self.open_detail)
         self.disabled_list = side_list(self.open_detail)
         self.inactive_list = side_list(self.open_detail)
         self.removed_list = side_list(self.open_detail)
-        for title, sub, lst in [("Active", "Trains the gaze model", self.active_list),
-                                ("Non-active", "Works, but you turned it off", self.disabled_list),
-                                ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list),
-                                ("Removed", "In the trash: restore them any time", self.removed_list)]:
+        self.states = [("Active", "They train the gaze model", self.active_list),
+                       ("Off", "They work, but you turned them off", self.disabled_list),
+                       ("Not usable", "Another calibration version, or the file can't be read", self.inactive_list),
+                       ("Removed", "In the trash: restore them any time", self.removed_list)]
+        for i, (title, _sub, lst) in enumerate(self.states):
+            b = button(title, "seg")
+            b.setCheckable(True)
+            self.state_group.addButton(b, i)
+            sh.addWidget(b)
+            lst.setObjectName("rowList")
+            lst.setIconSize(QSize(28, 28))
             lst.setContextMenuPolicy(Qt.CustomContextMenu)
             lst.customContextMenuRequested.connect(lambda pos, lst=lst: self._list_menu(lst, pos))
             QShortcut(QKeySequence.Delete, lst, lambda lst=lst: self.remove_files(picked(lst)),
                       context=Qt.WidgetShortcut)                    # Delete = Remove the picked ones
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            col.addWidget(label(title, "gh"))
-            note = label(sub, "rowsub")
-            note.setWordWrap(True)                 # unwrapped, the longest subtitle took its column's width from the others
-            col.addWidget(note)
-            col.addWidget(lst, 1)
-            cols.addLayout(col, 1)
-        mv.addLayout(cols, 1)
+            self.state_stack.addWidget(lst)
+        self.state_group.idClicked.connect(self.show_state)
+        states.addWidget(seg)
+        states.addSpacing(10)
+        states.addWidget(self.state_note, 1)
+        mv.addLayout(states)
+        mv.addWidget(self.state_stack, 1)
+        hint = label("Double-click a calibration to read it in words. Ctrl- or Shift-click picks several; right-click "
+                     "(or Delete) turns them off or on, removes them, or restores removed ones. Removed calibrations "
+                     "wait in the trash. Only the active ones train the gaze model.", "sheetText")
+        hint.setWordWrap(True)
+        mv.addWidget(hint)
+        self.show_state(0)
         self.main.addWidget(lists)
 
         detail = QWidget()                               # one calibration, every sample in words
         dv = QVBoxLayout(detail)
-        dv.setContentsMargins(24, 20, 24, 24)
+        dv.setContentsMargins(0, 8, 0, 20)
         dv.setSpacing(8)
         head = QHBoxLayout()
         back = button(f"{I_BACK}  Back", "text")
@@ -976,9 +1079,10 @@ class TestingPage(QWidget):
                      "the gaze model retrained. The untouched original stays in data/trash.", "sheetText")
         hint.setWordWrap(True)
         dv.addWidget(hint)
-        self.detail = QListWidget(objectName="linesList")
+        self.detail = QListWidget(objectName="rowList")
         self.detail.setSelectionMode(QListWidget.ExtendedSelection)
         self.detail.setWordWrap(True)                    # a sample's words are long
+        self.detail.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         dv.addWidget(self.detail, 1)
         self.remove_btn = button(f"{I_DELETE}  Remove selected", "outlined")
         self.remove_btn.clicked.connect(self.remove_selected)
@@ -995,47 +1099,104 @@ class TestingPage(QWidget):
         self.main.addWidget(detail)
         log = QWidget()                                  # 7: what every calibration gave, newest first
         lv = QVBoxLayout(log)
-        lv.setContentsMargins(24, 20, 24, 24)
+        lv.setContentsMargins(0, 8, 0, 20)
         lv.setSpacing(8)
-        lv.addWidget(label("Calibration log", "sheetTitle"))
         hint = label("What each calibration gave: how many good samples it kept, what the checks cleaned out, why "
                      "one was rejected, and undone calibrations. Newest first.", "sheetText")
         hint.setWordWrap(True)
         lv.addWidget(hint)
-        self.log_list = QListWidget(objectName="linesList")
+        self.log_list = QListWidget(objectName="rowList")
         self.log_list.setWordWrap(True)
+        self.log_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.log_list.setSelectionMode(QListWidget.ExtendedSelection)   # select lines to copy them (Ctrl+C)
         QShortcut(QKeySequence.Copy, self.log_list, lambda: QApplication.clipboard().setText(
             "\n".join(it.text() for it in self.log_list.selectedItems())), context=Qt.WidgetShortcut)
         lv.addWidget(self.log_list, 1)
         self.main.addWidget(log)
         self.detail_path: Path | None = None
-        h.addWidget(self.main, 1)
-        self.side_nav.idClicked.connect(lambda i: cross_fade(self.main, i))
+        outer.addWidget(self.main, 1)
+        self.side_nav.idClicked.connect(lambda i: self.show_page(i, fade=True))
+        self.main.currentChanged.connect(self._page_changed)
         self.show_page(3)                                # Calibrations first: what the model learns from
 
-    def show_page(self, i: int):
-        """Open sidebar entry `i` (0-5, 7 the calibration log; the calibration detail, 6, opens as its list)."""
+    def show_page(self, i: int, fade: bool = False):
+        """Open tab `i` (0-5, 7 the calibration log; the calibration detail, 6, opens as its list)."""
         i = 3 if i == 6 else max(0, min(i, 7))
         self.side_nav.button(i).setChecked(True)
-        self.main.setCurrentIndex(i)
+        cross_fade(self.main, i) if fade else self.main.setCurrentIndex(i)
+        self._page_changed(i)
+
+    def section(self) -> str:
+        """"tests" or "data": the place the page on the right belongs to."""
+        return "tests" if self.main.currentIndex() in (0, 1, 2) else "data"
+
+    def _page_changed(self, i: int):
+        """The header follows the page: the place (Tests / Data), the page's name, and only that place's tabs."""
+        section = self.section()
+        self.eyebrow.setText(section.upper())
+        self.title.setText(self.NAMES.get(i, ""))
+        for name, bar in self.tab_bars.items():
+            bar.setVisible(name == section)
+        if i != 6:
+            self.side_nav.button(i).setChecked(True)
+        self.section_changed.emit(section)
+
+    def show_state(self, i: int):
+        """The calibrations in one state: Active, Off, Not usable or Removed."""
+        self.state_group.button(i).setChecked(True)
+        self.state_stack.setCurrentIndex(i)
+        self.state_note.setText(self.states[i][1])
 
     def _intro(self, glyph: str, title: str, lead: str, steps: list[str], action: str, cmd: str) -> QWidget:
-        """An instruction page: what the test does, then the button that starts it."""
-        page = QWidget()
-        v = QVBoxLayout(page)
-        v.setContentsMargins(24, 20, 24, 24)
-        v.setSpacing(12)
-        v.addWidget(label(f"{glyph}   {title}", "sheetTitle"))
-        for i, text in enumerate([lead] + [f"•   {s}" for s in steps]):
-            w = label(text, "lead" if i == 0 else "sheetText")
-            w.setWordWrap(True)
-            v.addWidget(w)
+        """A test's page, as a System Settings pane: its tile, what it does, the button that starts it, then
+        its steps numbered in a group."""
+        page = QScrollArea()
+        page.setWidgetResizable(True)
+        page.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page.viewport().setAutoFillBackground(False)
+        inner = QWidget(objectName="content")
+        outer = QHBoxLayout(inner)
+        outer.setContentsMargins(0, 16, 0, 20)
+        col = QWidget()
+        col.setMaximumWidth(660)
+        v = QVBoxLayout(col)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
+        colour = next(c for k, _g, c, *_ in TESTS if k == cmd)
+        v.addWidget(tile(glyph, colour, 60), 0, Qt.AlignHCenter)
+        head = label(lead, "h2")
+        head.setWordWrap(True)
+        head.setAlignment(Qt.AlignCenter)
+        v.addWidget(head)
         go = button(action, "filled")
         go.clicked.connect(lambda: self.command.emit(cmd))
-        v.addSpacing(8)
-        v.addWidget(go, 0, Qt.AlignLeft)
+        v.addWidget(go, 0, Qt.AlignHCenter)
+        v.addSpacing(10)
+        box = QFrame(objectName="group")
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(1, 1, 1, 1)
+        bv.setSpacing(0)
+        for n, text in enumerate(steps, 1):
+            if n > 1:
+                bv.addWidget(QFrame(objectName="divider"))
+            row = QWidget()
+            rh = QHBoxLayout(row)
+            rh.setContentsMargins(14, 10, 14, 10)
+            rh.setSpacing(12)
+            no = label(str(n), "stepNo")
+            no.setFixedSize(24, 24)
+            no.setAlignment(Qt.AlignCenter)
+            rh.addWidget(no, 0, Qt.AlignTop)
+            words = label(text, "sheetText")
+            words.setWordWrap(True)
+            rh.addWidget(words, 1)
+            bv.addWidget(row)
+        v.addWidget(box)
         v.addStretch(1)
+        outer.addStretch(1)
+        outer.addWidget(col, 30)
+        outer.addStretch(1)
+        page.setWidget(inner)
         return page
 
     def open_detail(self, path: Path):
@@ -1143,6 +1304,12 @@ class TestingPage(QWidget):
         fill_list(self.disabled_list, list_disabled(), "None")
         fill_list(self.inactive_list, [p for p, ok in usable.items() if not ok], "None")
         fill_list(self.removed_list, list_removed(), "None")
+        icon = QIcon(tile_pixmap(I_LINES, "#E5483B", 28))
+        for i, (title, _sub, lst) in enumerate(self.states):     # a tile on each file; its count on its tab
+            files = [lst.item(r) for r in range(lst.count()) if lst.item(r).data(Qt.UserRole)]
+            for item in files:
+                item.setIcon(icon)
+            self.state_group.button(i).setText(f"{title} · {len(files)}")
         self.log_list.clear()
         for when, text in calibration_log():
             self.log_list.addItem(f"{when:%d %b %Y, %H:%M}    {text}")
@@ -1160,47 +1327,139 @@ class TestingPage(QWidget):
 
 # ---------------------------------------------------------------- chat page
 
+HOME_STYLES = {"clean": "Clean", "hero": "Hero card", "dashboard": "Dashboard"}   # Settings > Start page
+TILE_COLOURS = ["#F29D38", "#E5483B", "#1BA39C", "#3478F6", "#8E5CF0", "#34A853", "#E2457A"]
+TESTS = [("read", I_READ, "#3478F6", "Sample text", "Read, then a quiz", "Open"),          # the start page's tests
+         ("check", I_EYE, "#34A853", "Gaze check", "16 rings, about 2 min", "Start"),
+         ("blink", I_BLINK, "#8E5CF0", "Blink test", "Six eye states", "Start")]
+
+
+def tile_pixmap(glyph: str, colour: str, px: int = 24) -> QPixmap:
+    """A coloured rounded square with a white glyph: the App Store's icon tiles."""
+    pm = QPixmap(px * 2, px * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(colour))
+    p.drawRoundedRect(QRectF(0, 0, px, px), px * .27, px * .27)
+    f = QFont()
+    f.setFamilies(ICON_FONTS)
+    f.setPixelSize(round(px * .55))
+    p.setFont(f)
+    p.setPen(QColor("#FFFFFF"))
+    p.drawText(QRectF(0, 0, px, px), Qt.AlignCenter, glyph)
+    p.end()
+    return pm
+
+
+def tile(glyph: str, colour: str, px: int) -> QLabel:
+    t = QLabel()
+    t.setPixmap(tile_pixmap(glyph, colour, px))
+    t.setFixedSize(px, px)
+    return t
+
+
+ROW_TILES = {I_THEME: "#8E8E93", I_PALETTE: "#E5483B", I_FONT: "#3478F6", I_SPARKLE: "#E2457A", I_BALL: "#F29D38",
+             I_LAYERS: "#8E5CF0", I_FULLSCREEN: "#1BA39C", I_KEY: "#E2457A", I_LINES: "#3478F6", I_CAMERA: "#34A853"}
+
+
+def round_pixmap(glyph: str, colour: str, px: int = 20) -> QPixmap:
+    """A disc of `colour` with a white glyph: New reading's mark in the sidebar."""
+    pm = QPixmap(px * 2, px * 2)
+    pm.setDevicePixelRatio(2)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(colour))
+    p.drawEllipse(QRectF(0, 0, px, px))
+    f = QFont()
+    f.setFamilies(ICON_FONTS)
+    f.setPixelSize(round(px * .5))
+    p.setFont(f)
+    p.setPen(QColor("#FFFFFF"))
+    p.drawText(QRectF(0, 0, px, px), Qt.AlignCenter, glyph)
+    p.end()
+    return pm
+
+
+def tile_colour(text: str) -> str:
+    """The same colour for the same title, every time."""
+    return TILE_COLOURS[sum(map(ord, text)) % len(TILE_COLOURS)]
+
+
+def day_line(when: datetime) -> str:
+    return f"{when:%A} {when.day} {when:%B}".upper()
+
+
+def reading_facts(path: Path) -> tuple[str, str, float | None]:
+    """(title, "when · how much was read", the share read or None) for a saved reading."""
+    r = load_reading(path) or {}
+    full, read = r.get("full_text") or "", r.get("read_text") or ""
+    share = None
+    if word_count(full):
+        share = 1 - unread_word_count(mark_unread(full, read)) / word_count(full)
+    when = f"{file_date(path):%d %b, %H:%M}"
+    return reading_title(path), f"{when} · {share:.0%} read" if share is not None else when, share
+
+
+def gaze_facts() -> tuple[str, str, str]:
+    """The start page's calibration card: (headline, its date line, the last gaze check's error)."""
+    cals = list_calibrations()
+    head = f"{len(cals)} calibration{'s' * (len(cals) != 1)}" if cals else "Not calibrated yet"
+    when = f"Last one {file_date(cals[0]):%d %b, %H:%M}" if cals else "Calibrate once: about two minutes"
+    checks = list_gaze_checks()
+    try:
+        error = check_error(read_gaze_check(checks[0])) if checks else None
+    except (OSError, ValueError, IndexError):
+        error = None
+    return head, when, f"{error:.1%}" if error is not None else "—"
+
+
 class ChatPage(QWidget):
-    """ChatGPT-style page. The app talks to it like the old chat panel:
-    reply(text) to speak, message_sent(str) for quiz answers."""
+    """The chat, as Claude's: a start page (three looks, Settings > Start page) with the input box in it, then
+    the messages with the input box under them. The app talks to it like the old chat panel: reply(text) to
+    speak, message_sent(str) for quiz answers. Its list of past readings (chat_list) is shown in the window's
+    sidebar; the live chat ("Today") is its first row, hidden until something is said."""
 
     message_sent = Signal(str)     # a quiz answer (or "skip")
     go_reading = Signal()          # the big button: close the window (the ball is still there)
     chats_deleted = Signal(list)   # past readings moved to the trash: their paths
     retry_requested = Signal(str)  # Try again / Ask again on a reading: its file's path
+    test_requested = Signal(str)   # a test on the start page: "read" | "check" | "blink"
+    shown_changed = Signal()       # the live chat or a past reading came up: the sidebar follows
 
     def __init__(self):
         super().__init__()
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(0)
-
-        side = QFrame(objectName="side")
-        side.setFixedWidth(260)
-        sv = QVBoxLayout(side)
-        sv.setContentsMargins(12, 12, 12, 12)
-        sv.setSpacing(2)
-        sv.addWidget(label("Chats", "sideTitle"))
         # the live chat first, then past readings (summary + quiz): one click shows it on the right
-        self.chat_list = QListWidget(objectName="sideList")
+        self.chat_list = QListWidget(objectName="recents")
+        self.chat_list.setIconSize(QSize(24, 24))
+        self.chat_list.setTextElideMode(Qt.ElideRight)
+        self.chat_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.chat_list.currentItemChanged.connect(lambda it, _: self._show_chat(it))
+        self.chat_list.itemClicked.connect(self._clicked)
         self.chat_list.setSelectionMode(QListWidget.ExtendedSelection)   # Ctrl / Shift-click: several to delete
         self.chat_list.setToolTip("Right-click (or Delete) to delete a past reading. Ctrl- or Shift-click picks several")
         self.chat_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.chat_list.customContextMenuRequested.connect(self._chat_menu)
         QShortcut(QKeySequence.Delete, self.chat_list, lambda: self.delete_chats(picked(self.chat_list)),
                   context=Qt.WidgetShortcut)
-        sv.addWidget(self.chat_list, 1)
-        h.addWidget(side)
         self.said: list[str] = []                # every message shown this run, newest last
+        self.home_style, self.home_mode, self.answering = "clean", True, False
+        self.home: QWidget | None = None         # the start page, rebuilt by _build_home
+        self.home_slot: QVBoxLayout | None = None   # where the start page holds the input box
+        self.find_text = ""
 
         col = QWidget()
-        self.v = v = QVBoxLayout(col)
-        v.setContentsMargins(24, 24, 24, 32)
-        v.setSpacing(16)
-        v.addStretch(1)                                  # 0: centres the hero while empty
-
-        self.scroll = QScrollArea()                      # 1: messages, once there are some
+        v = QVBoxLayout(col)
+        v.setContentsMargins(28, 4, 28, 20)
+        v.setSpacing(12)
+        self.scroll = QScrollArea()                      # the messages, once there are some
         self.scroll.setWidgetResizable(True)
         self.scroll.viewport().setAutoFillBackground(False)
         host = QWidget(objectName="content")
@@ -1210,23 +1469,24 @@ class ChatPage(QWidget):
         self.msgs.addStretch(1)
         self.scroll.setWidget(host)
         self.scroll.hide()
-        v.addWidget(self.scroll)
+        v.addWidget(self.scroll, 1)
+        self.home_box = QVBoxLayout()                    # the start page, while nothing is said
+        v.addLayout(self.home_box, 1)
+        self.dock = QVBoxLayout()                        # the input box under the messages
+        v.addLayout(self.dock)
 
-        self.hero = QWidget()                            # 2: "What should we read?"
-        hv = QVBoxLayout(self.hero)
-        hv.setContentsMargins(0, 0, 0, 8)
-        title = label("What should we read?", "hero")
-        title.setAlignment(Qt.AlignCenter)
         self.status = label("", "heroSub")              # the app puts the gaze model status here
-        self.status.setAlignment(Qt.AlignCenter)
         self.status.setWordWrap(True)
-        hv.addWidget(title)
-        hv.addWidget(self.status)
-        v.addWidget(self.hero)
-
-        self.answer_box = QFrame(objectName="answerBox")   # 3: only while a quiz question waits
+        self.composer = QFrame(objectName="composer")    # the input box: Go Reading, or a quiz answer
+        cv = QVBoxLayout(self.composer)
+        cv.setContentsMargins(18, 14, 14, 12)
+        cv.setSpacing(10)
+        self.composer_hint = label("Press Go Reading, then read anything on your screen.", "composerHint")
+        self.composer_hint.setToolTip("The AI then sums up what you skipped and asks you about it")
+        cv.addWidget(self.composer_hint)
+        self.answer_box = QFrame(objectName="answerBox")   # only while a quiz question waits
         ah = QHBoxLayout(self.answer_box)
-        ah.setContentsMargins(20, 8, 8, 8)
+        ah.setContentsMargins(0, 0, 0, 0)
         self.answer = QLineEdit(objectName="answer", placeholderText="Type your answer, then Enter")
         self.answer.returnPressed.connect(self._send_answer)
         skip = button(f"{I_SKIP}  Skip", "text")
@@ -1234,10 +1494,7 @@ class ChatPage(QWidget):
         ah.addWidget(self.answer, 1)
         ah.addWidget(skip)
         self.answer_box.hide()
-        v.addWidget(self.answer_box)
-
-        self.go = button(f"{I_READ}   Go Reading", "go")   # instead of an input bar
-        self.go.clicked.connect(self.go_reading)
+        cv.addWidget(self.answer_box)
         self.model_btn = button("", "assist")            # which key and model answer, like Ollama's model picker
         self.model_btn.setToolTip("The AI that writes summaries and marks quizzes")
         self.model_btn.setMenu(QMenu(self.model_btn))
@@ -1245,37 +1502,311 @@ class ChatPage(QWidget):
         self.lang_btn.setToolTip("The language of the text you will read: the screen is read in it when the app "
                                  "has to read its picture (PDFs, some apps)")
         self.lang_btn.setMenu(QMenu(self.lang_btn))
-        bottom = QHBoxLayout()                           # 4: the AI and language pickers, then Go Reading
-        bottom.setSpacing(12)
-        bottom.addWidget(self.model_btn)
-        bottom.addWidget(self.lang_btn)
-        bottom.addWidget(self.go, 1)
-        v.addLayout(bottom)
-        v.addStretch(1)                                  # 5
+        self.go = button(f"{I_READ}   Go Reading", "go")   # instead of a send button
+        self.go.clicked.connect(self.go_reading)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(self.lang_btn)
+        row.addWidget(self.model_btn)
+        row.addStretch(1)
+        row.addWidget(self.go)
+        cv.addLayout(row)
+        self._composer_in: QVBoxLayout | None = None
 
         self.archive = QScrollArea()                     # a past reading, read-only, in place of the live chat
         self.archive.setWidgetResizable(True)
         self.archive.viewport().setAutoFillBackground(False)
         self.view = QStackedWidget()                     # 0: the live chat, 1: a past reading
-        self.view.setMaximumWidth(760)
+        self.view.setMaximumWidth(960)
         self.view.addWidget(col)
         self.view.addWidget(self.archive)
+        self.view.currentChanged.connect(lambda _: self.shown_changed.emit())
         h.addStretch(1)
-        h.addWidget(self.view, 20)
+        h.addWidget(self.view, 30)
         h.addStretch(1)
+        self._build_home()
+
+    # ----- the start page: three looks
+
+    def set_home_style(self, style: str):
+        self.home_style = style if style in HOME_STYLES else "clean"
+        self._build_home()
+
+    def _build_home(self):
+        """(Re)build the start page around the input box and the status line, which are kept."""
+        if self._composer_in is self.home_slot and self._composer_in is not None:
+            self._composer_in.removeWidget(self.composer)
+            self.composer.setParent(None)
+            self._composer_in = None
+        self.status.setParent(None)
+        if self.home is not None:
+            self.home_box.removeWidget(self.home)
+            self.home.hide()                             # gone now: deleteLater only frees it later
+            self.home.deleteLater()
+        self.home, self.home_slot = {"clean": self._home_clean, "hero": self._home_hero,
+                                     "dashboard": self._home_dashboard}[self.home_style]()
+        self.home_box.addWidget(self.home)
+        self._set_mode(self.home_mode)
+
+    def _slot(self, width: int | None) -> tuple[QWidget, QVBoxLayout]:
+        holder = QWidget()
+        if width:
+            holder.setMaximumWidth(width)
+        slot = QVBoxLayout(holder)
+        slot.setContentsMargins(0, 0, 0, 0)
+        return holder, slot
+
+    def _badge(self) -> QLabel:
+        cals = list_calibrations()
+        b = label(f"●  Calibrated · {file_date(cals[0]):%d %b}" if cals else "Not calibrated yet", "badge")
+        return b
+
+    def _test_pill(self, cmd: str, glyph: str, text: str) -> QPushButton:
+        b = button(f"{glyph}  {text}", "pill")
+        b.clicked.connect(lambda: self.test_requested.emit(cmd))
+        return b
+
+    def _home_clean(self):
+        """V1: the title, the input box, three tests as pills. Nothing else competes with Go Reading."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        v.addStretch(1)
+        for w in (label(day_line(datetime.now()), "eyebrow"), label("What should we read?", "big"), self.status):
+            w.setAlignment(Qt.AlignCenter)
+            v.addWidget(w)
+        v.addSpacing(16)
+        holder, slot = self._slot(700)
+        v.addWidget(holder, 0, Qt.AlignHCenter)
+        holder.setMinimumWidth(560)
+        pills = QHBoxLayout()
+        pills.setSpacing(8)
+        pills.addStretch(1)
+        for cmd, glyph, _, text, _, _ in TESTS:
+            pills.addWidget(self._test_pill(cmd, glyph, text))
+        pills.addStretch(1)
+        v.addSpacing(10)
+        v.addLayout(pills)
+        v.addSpacing(10)
+        badge = self._badge()
+        v.addWidget(badge, 0, Qt.AlignHCenter)
+        v.addStretch(1)
+        return page, slot
+
+    def _home_hero(self):
+        """V2: a greeting, Go Reading as a big card beside the calibration, the input box, recent readings."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 18, 0, 0)
+        v.setSpacing(6)
+        now = datetime.now()
+        v.addWidget(label(day_line(now), "eyebrow"))
+        v.addWidget(label("Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 18 else "Good evening",
+                          "big"))
+        self.status.setAlignment(Qt.AlignLeft)
+        v.addWidget(self.status)
+        v.addSpacing(10)
+        cards = QHBoxLayout()
+        cards.setSpacing(16)
+        hero = QFrame(objectName="heroCard")
+        hero.setMinimumHeight(210)
+        hv = QVBoxLayout(hero)
+        hv.setContentsMargins(22, 20, 22, 20)
+        hv.setSpacing(4)
+        hv.addWidget(label("READY WHEN YOU ARE", "eyebrow"))
+        hv.addWidget(label("Go Reading", "cardTitle"))
+        text = label("Open any text in Chrome, Word or a PDF. The app follows where you look and asks you about "
+                     "what you skipped.", "lead")
+        text.setWordWrap(True)
+        hv.addWidget(text)
+        hv.addStretch(1)
+        start = button("Start reading", "onhero")
+        start.clicked.connect(self.go_reading)
+        hv.addWidget(start, 0, Qt.AlignLeft)
+        cards.addWidget(hero, 17)
+        head, when, error = gaze_facts()
+        stat = QFrame(objectName="statCard")
+        sv = QVBoxLayout(stat)
+        sv.setContentsMargins(20, 20, 20, 20)
+        sv.setSpacing(2)
+        sv.addWidget(label("CALIBRATION", "eyebrow"))
+        sv.addWidget(label(head, "cardName"))
+        sv.addWidget(label(when, "rowsub"))
+        sv.addStretch(1)
+        sv.addWidget(label(error, "statBig"))
+        sv.addWidget(label("average gaze-check error, of the screen", "rowsub"))
+        cards.addWidget(stat, 10)
+        v.addLayout(cards)
+        v.addSpacing(10)
+        holder, slot = self._slot(None)
+        v.addWidget(holder)
+        v.addSpacing(14)
+        v.addWidget(label("Recent readings", "h2"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        readings = list_readings()[:3]
+        for i, path in enumerate(readings):
+            title, sub, _ = reading_facts(path)
+            grid.addWidget(self._app_row(I_READ, tile_colour(title), title, sub, None, path), 0, i)
+        if not readings:
+            grid.addWidget(label("Your readings show here, with their summary and quiz.", "rowsub"), 0, 0)
+        v.addLayout(grid)
+        v.addStretch(1)
+        return page, slot
+
+    def _home_dashboard(self):
+        """V3: the title and the input box, then the tests as App Store rows and your readings with how much
+        of each you read."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 18, 0, 0)
+        v.setSpacing(6)
+        top = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        titles.addWidget(label(day_line(datetime.now()), "eyebrow"))
+        titles.addWidget(label("What should we read?", "big"))
+        top.addLayout(titles, 1)
+        top.addWidget(self._badge(), 0, Qt.AlignBottom)
+        v.addLayout(top)
+        self.status.setAlignment(Qt.AlignLeft)
+        v.addWidget(self.status)
+        v.addSpacing(8)
+        holder, slot = self._slot(None)
+        v.addWidget(holder)
+        v.addSpacing(14)
+        v.addWidget(label("Tests", "h2"))
+        tests = QGridLayout()
+        tests.setHorizontalSpacing(24)
+        for i, (cmd, glyph, colour, text, sub, action) in enumerate(TESTS):
+            tests.addWidget(self._app_row(glyph, colour, text, sub, (action, cmd), None), 0, i)
+        v.addLayout(tests)
+        v.addSpacing(14)
+        v.addWidget(label("Pick up where you left off", "h2"))
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
+        readings = list_readings()[:3]
+        for path in readings:
+            title, sub, share = reading_facts(path)
+            card = QFrame(objectName="readCard")
+            card.setCursor(Qt.PointingHandCursor)
+            card.mousePressEvent = lambda _e, p=path: self.open_reading(p)
+            cv = QVBoxLayout(card)
+            cv.setContentsMargins(16, 14, 16, 14)
+            cv.setSpacing(8)
+            head = QHBoxLayout()
+            head.setSpacing(10)
+            head.addWidget(tile(I_READ, tile_colour(title), 32))
+            name = label(title, "cardName")
+            name.setMinimumWidth(1)                       # long titles are cut, not the card widened
+            head.addWidget(name, 1)
+            cv.addLayout(head)
+            cv.addWidget(label(sub, "rowsub"))
+            bar = QProgressBar(textVisible=False, maximum=100, value=round((share or 0) * 100))
+            cv.addWidget(bar)
+            cards.addWidget(card, 1)
+        if not readings:
+            cards.addWidget(label("Your readings show here, with how much of each you read.", "rowsub"))
+        cards.addStretch(0 if readings else 1)
+        v.addLayout(cards)
+        v.addStretch(1)
+        return page, slot
+
+    def _app_row(self, glyph: str, colour: str, title: str, sub: str, action, path) -> QFrame:
+        """An App Store row: a tile, a title and a line under it, then a pill (a test) or nothing (a reading)."""
+        row = QFrame(objectName="appRow")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 10, 0, 10)
+        h.setSpacing(12)
+        h.addWidget(tile(glyph, colour, 44))
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        name = label(title, "appTitle")
+        name.setMinimumWidth(1)
+        text.addWidget(name)
+        text.addWidget(label(sub, "rowsub"))
+        h.addLayout(text, 1)
+        if action:
+            b = button(action[0], "pill")
+            b.clicked.connect(lambda: self.test_requested.emit(action[1]))
+            h.addWidget(b)
+        if path is not None:
+            row.setCursor(Qt.PointingHandCursor)
+            row.mousePressEvent = lambda _e: self.open_reading(path)
+        return row
+
+    def _set_mode(self, home: bool):
+        """The start page (home) or the messages; the input box moves to where it belongs."""
+        self.home_mode = home
+        if self.home is not None:
+            self.home.setVisible(home)
+        self.scroll.setVisible(not home)
+        self.composer_hint.setVisible(home)
+        target = self.home_slot if home and self.home_slot is not None else self.dock
+        if self._composer_in is not target:
+            if self._composer_in is not None:
+                self._composer_in.removeWidget(self.composer)
+            target.addWidget(self.composer)
+            self._composer_in = target
+        self.composer.show()
+        self.go.setVisible(not self.answering and not (home and self.home_style == "hero"))   # the card has its own
+        self.shown_changed.emit()
+
+    def show_home(self):
+        """New reading: the start page again (this run's messages stay, under Today in the sidebar)."""
+        if self.answering:                               # a quiz question is waiting: stay on it
+            self.show_live()
+            return
+        self.chat_list.blockSignals(True)
+        self.chat_list.setCurrentRow(0)
+        self.chat_list.blockSignals(False)
+        self.view.setCurrentIndex(0)
+        self._build_home()                               # today's date, the newest readings
+        self._set_mode(True)
+        self.shown_changed.emit()
+
+    def open_reading(self, path: Path):
+        """A reading picked on the start page: shown as from the sidebar."""
+        for i in range(self.chat_list.count()):
+            if self.chat_list.item(i).data(Qt.UserRole) == str(path):
+                self.chat_list.setCurrentRow(i)
+                return
+
+    # ----- the sidebar's list
 
     def refresh(self):
         """Re-read data/history (a reading is written once the AI answers). Runs whenever the page shows."""
         current = self.chat_list.currentItem()
         chosen = current.data(Qt.UserRole) if current else None
         self.chat_list.blockSignals(True)
-        fill_list(self.chat_list, list_readings(), "", reading_title)
-        live = QListWidgetItem(f"{I_CHAT}   Today")           # the live chat: no path
-        self.chat_list.insertItem(0, live)
+        self.chat_list.clear()
+        live = QListWidgetItem(QIcon(tile_pixmap(I_CHAT, "#8E8E93")), "Today")   # the live chat: no path
+        live.setToolTip("This run's messages")
+        self.chat_list.addItem(live)
+        for path in list_readings():
+            title = reading_title(path)
+            item = QListWidgetItem(QIcon(tile_pixmap(I_READ, tile_colour(title))), title)
+            item.setToolTip(f"{file_date(path):%d %b %Y   %H:%M}\n{title}")
+            item.setData(Qt.UserRole, str(path))
+            self.chat_list.addItem(item)
         rows = [self.chat_list.item(i) for i in range(self.chat_list.count())]
         self.chat_list.setCurrentItem(next((r for r in rows if r.data(Qt.UserRole) == chosen), live))
         self.chat_list.blockSignals(False)
+        self.filter_recents(self.find_text)
         self._show_chat(self.chat_list.currentItem())
+        if self.home_mode:
+            self._build_home()                           # new readings, a new calibration
+
+    def filter_recents(self, text: str):
+        """The sidebar's search: readings whose title has the text; Today once something was said."""
+        self.find_text = text.strip().lower()
+        for i in range(self.chat_list.count()):
+            item = self.chat_list.item(i)
+            if item.data(Qt.UserRole):
+                item.setHidden(self.find_text not in item.text().lower())
+            else:
+                item.setHidden(not self.said)
 
     def _chat_menu(self, pos):
         paths = picked(self.chat_list, pos)                 # past readings only: "Today" has no file
@@ -1298,8 +1829,15 @@ class ChatPage(QWidget):
         self.refresh()                                       # the one on screen gone: back to Today
         self.chats_deleted.emit(paths)
 
+    def _clicked(self, item):
+        """A click in the sidebar, even on the row already chosen: Today shows this run's messages."""
+        if item is not None and not item.data(Qt.UserRole):
+            self.view.setCurrentIndex(0)
+            self._set_mode(not self.said)
+        self.shown_changed.emit()
+
     def _show_chat(self, item):
-        """One click in the sidebar: the live chat, or a past reading on the right."""
+        """The live chat, or a past reading on the right."""
         path = item.data(Qt.UserRole) if item else None
         if not path:
             self.view.setCurrentIndex(0)
@@ -1309,7 +1847,7 @@ class ChatPage(QWidget):
         col = QVBoxLayout(host)
         col.setContentsMargins(24, 24, 32, 32)
         col.setSpacing(20)
-        title = label(reading_title(path), "sheetTitle")
+        title = label(reading_title(path), "h2")
         title.setWordWrap(True)
         col.addWidget(title)
         col.addWidget(label(f"{file_date(path):%d %b %Y, %H:%M}", "sheetText"))
@@ -1329,8 +1867,11 @@ class ChatPage(QWidget):
         self.refresh()
         super().showEvent(e)
 
+    # ----- the live chat
+
     def set_answering(self, on: bool):
         """Swap Go Reading for the answer box while the quiz waits for an answer."""
+        self.answering = on
         self.answer_box.setVisible(on)
         self.go.setVisible(not on)
         if on:
@@ -1347,13 +1888,12 @@ class ChatPage(QWidget):
         self.message_sent.emit(text)
 
     def _first_message(self):
-        """The first message: the hero makes way, the messages fill (isHidden, not isVisible: the window may be hidden)."""
-        if not self.hero.isHidden():
-            self.hero.hide()
-            self.scroll.show()
-            self.v.setStretch(0, 0)
-            self.v.setStretch(1, 1)
-            self.v.setStretch(5, 0)
+        """A message: the start page makes way for the messages; Today shows in the sidebar."""
+        if self.home_mode:
+            self._set_mode(False)
+        live = self.chat_list.item(0)
+        if live is not None and not live.data(Qt.UserRole):
+            live.setHidden(False)
 
     def add_message(self, text: str, mine: bool) -> QLabel:
         self._first_message()
@@ -1367,9 +1907,11 @@ class ChatPage(QWidget):
         bar.setValue(bar.maximum())
 
     def show_live(self):
-        """Back to the live chat ("Today"), from a past reading."""
+        """Back to the live chat ("Today"), from a past reading or the start page."""
         self.chat_list.setCurrentRow(0)
         self.view.setCurrentIndex(0)
+        if self.said:
+            self._set_mode(False)
 
     def _add(self, w: QWidget):
         """A widget (an error card, Ask again) in the live chat, after the messages."""
@@ -1449,7 +1991,7 @@ class ChatPage(QWidget):
 
 class SettingsWindow(QWidget):
     saved = Signal(dict)              # Save changes pressed: every setting, see DEFAULTS
-    calibrate_requested = Signal()    # Calibration tab clicked
+    calibrate_requested = Signal()    # Calibrate clicked in the sidebar
     shown = Signal(bool)              # the window appeared / went away (the ball's eye follows it)
     ai_changed = Signal()             # a key added / removed / renamed, or another key or model chosen
     language_changed = Signal(str)    # the reading language picked in the chat: its tag ("en-US", "zh-Hans-CN"...)
@@ -1461,6 +2003,7 @@ class SettingsWindow(QWidget):
         self.setWindowTitle("Study Assistant")
         self.resize(1100, 700)
         self.setMinimumSize(920, 560)
+        self.setFocusPolicy(Qt.ClickFocus)              # holds the focus at start, so no button shows a ring
         self.store = QSettings("StudyAssistant", "StudyAssistant")
         self.found_key: tuple[str, str] | None = None   # (provider, key) from the environment: set by the app, not saved
         self.found_ollama: list[list[str]] = []          # the models a running Ollama has installed (set_found)
@@ -1468,14 +2011,19 @@ class SettingsWindow(QWidget):
         self.seed = self.store.value("seed", DEFAULTS["seed"])
         self.c = make_scheme(self.seed, False)
 
-        root = QVBoxLayout(self)
+        root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        self.titlebar = self._title_bar()
-        root.addWidget(self.titlebar)
-        # pages: 0 = chat, 1 = testing, 2 = settings; a calibration / check page is added while it runs
+        # pages: 0 = chat, 1 = testing (Tests and Data), 2 = settings; a calibration / check page is added while
+        # it runs. The sidebar (as Claude's) leads to them and holds the chat's recent readings.
         self.chat = ChatPage()
         self.testing = TestingPage()
+        self.sidebar = self._sidebar()
+        root.addWidget(self.sidebar)
+        right = QVBoxLayout()
+        right.setSpacing(0)
+        self.titlebar = self._title_bar()
+        right.addWidget(self.titlebar)
         self.settings_page = QWidget()
         sp = QVBoxLayout(self.settings_page)
         sp.setContentsMargins(0, 0, 0, 0)
@@ -1484,13 +2032,22 @@ class SettingsWindow(QWidget):
         body = QHBoxLayout()
         body.setSpacing(0)
         body.addWidget(self._content(), 1)
-        body.addWidget(self._sheet())
+        self._sheet().setParent(self.settings_page)       # the colour sheet lies over the settings (M3's modal
+        self.settings_page.installEventFilter(self)       # side sheet): beside the sidebar there's no room for both
         sp.addLayout(body, 1)
         self.pages = QStackedWidget()
         self.pages.addWidget(self.chat)
         self.pages.addWidget(self.testing)
         self.pages.addWidget(self.settings_page)
-        root.addWidget(self.pages, 1)
+        right.addWidget(self.pages, 1)
+        root.addLayout(right, 1)
+        self.chat.test_requested.connect(self.testing.command.emit)   # a test from the start page
+        self.chat.shown_changed.connect(self._sync_nav)
+        self.chat.chat_list.itemClicked.connect(lambda _: QTimer.singleShot(0, self._to_chat))
+        self.testing.section_changed.connect(lambda _: self._sync_nav())
+        self.testing.side_nav.idClicked.connect(lambda i: self.last_tab.update({self.testing.section(): i}))
+        self.pages.currentChanged.connect(lambda _: self._sync_nav())
+        self.last_tab = {"tests": 0, "data": 3}       # the tab each place reopens on
         self.busy = BusyBar(self)                    # runs under the title bar while the app works (run_busy)
         self._before_page = None          # (was visible, was maximized) while a full-screen page runs
 
@@ -1511,39 +2068,20 @@ class SettingsWindow(QWidget):
         # the window reopens where it was left (page, and the Testing entry); an AI answer still opens the chat
         self.pages.currentChanged.connect(lambda i: i < 3 and self.store.setValue("last_page", i))
         self.testing.side_nav.idClicked.connect(lambda i: self.store.setValue("testing_page", i))
+        saved = self.store.value("testing_page", 3, type=int)
+        self.last_tab["tests" if saved in (0, 1, 2) else "data"] = saved
         QGuiApplication.styleHints().colorSchemeChanged.connect(lambda _: self.apply_theme())
 
     # ----- layout pieces
 
     def _title_bar(self):
+        """Over the pages: an empty strip to drag the window by, and the window's buttons."""
         bar = TitleBar(objectName="titlebar")
-        bar.setFixedHeight(48)
+        bar.setFixedHeight(40)
         h = QHBoxLayout(bar)
         h.setContentsMargins(16, 0, 0, 0)
         h.setSpacing(0)
-        h.addWidget(AppMark())
-        h.addSpacing(12)
-        h.addWidget(label("Study Assistant", "appname"))
         h.addStretch(1)
-
-        self.nav = QButtonGroup(self)   # exclusive, so clicking the selected tab can't un-select it
-        for i, (glyph, name) in enumerate([(I_CHAT, "Chat"), (I_TESTING, "Testing"), (I_EYE, "Calibration"),
-                                           (I_SETTINGS, "Settings")]):
-            b = QPushButton(glyph, objectName="settingsBtn")
-            b.setCheckable(True)
-            b.setToolTip(name)
-            b.setAccessibleName(name)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setFocusPolicy(Qt.TabFocus)
-            self.nav.addButton(b, i)
-            h.addWidget(b)
-            h.addSpacing(4)
-        self.nav.button(0).setChecked(True)
-        # Calibration (tab 2) runs full screen; the other tabs are pages in the stack
-        self.nav.idClicked.connect(lambda i: self.calibrate_requested.emit() if i == 2
-                                   else cross_fade(self.pages, PAGE_OF_TAB[i]))
-        h.addSpacing(4)
-
         caps = QWidget(objectName="caps")
         ch = QHBoxLayout(caps)
         ch.setContentsMargins(0, 0, 0, 0)
@@ -1558,6 +2096,100 @@ class SettingsWindow(QWidget):
         self.max_btn = caps.findChild(QPushButton, "max")
         h.addWidget(caps)
         return bar
+
+    def _side_button(self, glyph: str, text: str, round_: bool = False, checkable: bool = True) -> QPushButton:
+        b = button(f"  {text}", "sidenav")
+        b.setCheckable(checkable)
+        b.setIconSize(QSize(20, 20))
+        b.setAccessibleName(text)
+        self.nav_glyphs.append((b, glyph, round_))       # its icon takes the theme colour (apply_theme)
+        return b
+
+    def _sidebar(self) -> QFrame:
+        """As Claude's sidebar, drawn as the App Store's: the app's name (drag the window by it), a search over
+        the readings, New reading, Calibrate, Tests, Data, the recent readings, and Settings at the bottom."""
+        side = QFrame(objectName="sidebar")
+        side.setFixedWidth(256)
+        v = QVBoxLayout(side)
+        v.setContentsMargins(10, 0, 10, 10)
+        v.setSpacing(2)
+        brand = TitleBar()
+        brand.setFixedHeight(52)
+        bh = QHBoxLayout(brand)
+        bh.setContentsMargins(8, 0, 4, 0)
+        bh.setSpacing(10)
+        bh.addWidget(AppMark())
+        bh.addWidget(label("Study Assistant", "brand"))
+        bh.addStretch(1)
+        v.addWidget(brand)
+        self.side_find = QLineEdit(objectName="sideFind", placeholderText="Search readings")
+        self.side_find.setAccessibleName("Search readings")
+        self.side_find.setFocusPolicy(Qt.ClickFocus)    # the window doesn't open with the cursor in it
+        self.side_find_action = self.side_find.addAction(QIcon(), QLineEdit.LeadingPosition)
+        self.side_find.textChanged.connect(self.chat.filter_recents)
+        v.addWidget(self.side_find)
+        v.addSpacing(8)
+        self.nav = QButtonGroup(self)                    # exclusive: the place on the right stays marked
+        self.nav_glyphs: list[tuple[QPushButton, str, bool]] = []
+        new = self._side_button(I_ADD, "New reading", round_=True)
+        self.nav.addButton(new, 0)
+        v.addWidget(new)
+        calibrate = self._side_button(I_EYE, "Calibrate", checkable=False)   # full screen: not a place to stay
+        calibrate.clicked.connect(self.calibrate_requested.emit)
+        v.addWidget(calibrate)
+        for i, glyph, text in [(1, I_TESTING, "Tests"), (4, I_CHART, "Data")]:
+            b = self._side_button(glyph, text)
+            self.nav.addButton(b, i)
+            v.addWidget(b)
+        v.addWidget(label("RECENTS", "sideSec"))
+        v.addWidget(self.chat.chat_list, 1)
+        settings = self._side_button(I_SETTINGS, "Settings")
+        self.nav.addButton(settings, 3)
+        v.addWidget(settings)
+        self.nav.button(0).setChecked(True)
+        self.nav.idClicked.connect(self._nav)
+        return side
+
+    def _nav(self, i: int):
+        """A place in the sidebar: 0 New reading (the start page), 1 Tests, 4 Data, 3 Settings."""
+        if i == 0:
+            cross_fade(self.pages, 0)
+            self.chat.show_home()
+        elif i in (1, 4):
+            cross_fade(self.pages, 1)
+            self.testing.show_page(self.last_tab["tests" if i == 1 else "data"])
+        elif i == 3:
+            cross_fade(self.pages, 2)
+        self._sync_nav()
+
+    def _to_chat(self):
+        """A recent reading clicked while another place was up: the chat comes up with it."""
+        if self.pages.currentWidget() is not self.chat:
+            cross_fade(self.pages, 0)
+        self._sync_nav()
+
+    def _sync_nav(self):
+        """The sidebar marks where you are: a place, or (a past reading up) the reading in Recents alone."""
+        page = self.pages.currentWidget()
+        home = page is self.chat and self.chat.view.currentIndex() == 0 and self.chat.home_mode
+        want = 0 if home else None if page is self.chat else \
+            (1 if self.testing.section() == "tests" else 4) if page is self.testing else \
+            3 if page is self.settings_page else None
+        if want is None:
+            self.nav.setExclusive(False)
+            for b in self.nav.buttons():
+                b.setChecked(False)
+            self.nav.setExclusive(True)
+        else:
+            self.nav.button(want).setChecked(True)
+        lst = self.chat.chat_list
+        lst.blockSignals(True)
+        if page is self.chat and self.chat.view.currentIndex() == 0 and not home:   # this run's messages: Today
+            lst.setCurrentRow(0)
+            lst.item(0).setSelected(True)
+        elif page is not self.chat or home:
+            lst.clearSelection()                         # a reading is marked only while it is shown
+        lst.blockSignals(False)
 
     def _toolbar(self):
         bar = QFrame(objectName="toolbar")
@@ -1608,8 +2240,21 @@ class SettingsWindow(QWidget):
         for name in FONTS:                           # each name in its own font
             self.font_menu.addAction(name, lambda n=name: self.set_font_choice(n)).setFont(text_font(name))
         self.font_btn.setMenu(self.font_menu)
+        self.home_group = QButtonGroup(self)
+        homes = QWidget()
+        hl = QHBoxLayout(homes)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
+        for i, name in enumerate(HOME_STYLES.values()):
+            b = CheckButton(name, "chip")
+            hl.addWidget(b)
+            self.home_group.addButton(b, i)
+        self.home_group.idClicked.connect(lambda i: self.set_home_style(list(HOME_STYLES)[i]))
         self.group("Appearance", [
             self.row(I_THEME, "Theme", "Follow Windows, or always use one", chips),
+            self.row(I_SPARKLE, "Start page", "What the chat shows before you read: Clean (the input box alone), "
+                     "Hero card (a big Go Reading card and your calibration) or Dashboard (your tests and readings)",
+                     homes),
             self.row(I_PALETTE, "Theme colour", "Every colour in the app is made from this one", self.dot, self.hex_label, change),
             self.row(I_FONT, "Font", "The text's typeface. Light and Semilight are thinner", self.font_btn),
         ])
@@ -1804,8 +2449,10 @@ class SettingsWindow(QWidget):
         h = QHBoxLayout(w)
         h.setContentsMargins(16, 6, 16, 6)
         h.setSpacing(16)
-        ic = label(icon, "rowicon")
-        ic.setFixedWidth(20)
+        ic = label(icon, "rowtile")
+        ic.setFixedSize(30, 30)
+        ic.setAlignment(Qt.AlignCenter)
+        ic.setStyleSheet(f"background: {ROW_TILES.get(icon, '#8E8E93')};")
         h.addWidget(ic)
         text = QVBoxLayout()
         text.setSpacing(0)
@@ -2335,6 +2982,7 @@ class SettingsWindow(QWidget):
         self.set_ball_image(values["ball_image"])
         self.set_ball_ring(values["ball_ring"])
         self.set_camera(values["camera"])
+        self.set_home_style(values["home_style"])
         self.words.setValue(values["summary_words"])
         self.mode = values["theme"]
         self.theme_group.button(["system", "light", "dark"].index(self.mode)).setChecked(True)
@@ -2345,12 +2993,19 @@ class SettingsWindow(QWidget):
     def save(self):
         values = {k: sw.isChecked() for k, sw in self.switches.items()}
         values.update(seed=self.seed, theme=self.mode, font=self.font_name, summary_words=self.words.value(),
-                      camera=self.camera, ball_look=self.ball_look, ball_image=self.ball_image, ball_ring=self.ball_ring)
+                      camera=self.camera, ball_look=self.ball_look, ball_image=self.ball_image, ball_ring=self.ball_ring,
+                      home_style=self.home_style)
         for k, v in values.items():
             self.store.setValue(k, v)
         self.saved.emit(values)
         self.save_btn.setText("Saved")
         QTimer.singleShot(1500, lambda: self.save_btn.setText("Save changes"))
+
+    def set_home_style(self, style: str):
+        """Settings > Start page: the chat's start page changes at once (kept with Save changes)."""
+        self.home_style = style if style in HOME_STYLES else DEFAULTS["home_style"]
+        self.home_group.button(list(HOME_STYLES).index(self.home_style)).setChecked(True)
+        self.chat.set_home_style(self.home_style)
 
     def set_camera(self, name: str):
         self.camera = name
@@ -2368,6 +3023,7 @@ class SettingsWindow(QWidget):
         When the page closes (it's deleted), the window goes back to how it was."""
         self._before_page = (self.isVisible(), self.isMaximized())
         self.titlebar.hide()
+        self.sidebar.hide()
         for g in self.grips:
             g.hide()
         self.pages.addWidget(page)
@@ -2380,6 +3036,7 @@ class SettingsWindow(QWidget):
         was_visible, was_max = self._before_page or (False, False)
         self._before_page = None
         self.titlebar.show()
+        self.sidebar.show()
         self.pages.setCurrentWidget(self.chat)    # results (e.g. calibration) land in the chat
         self.nav.button(0).setChecked(True)
         if not was_visible:
@@ -2398,7 +3055,7 @@ class SettingsWindow(QWidget):
     def show_page(self, page: QWidget):
         """Bring the window up on `page` (self.chat, self.testing or self.settings_page)."""
         self.pages.setCurrentWidget(page)
-        self.nav.button(TAB_OF_PAGE[self.pages.currentIndex()]).setChecked(True)
+        self._sync_nav()
         if not self.isVisible() or self.isMinimized():
             self.showNormal()
         self.raise_()
@@ -2431,8 +3088,20 @@ class SettingsWindow(QWidget):
         if len(text) == 7:
             self.set_seed(text)
 
+    def eventFilter(self, obj, ev):
+        if obj is self.settings_page and ev.type() == QEvent.Resize:
+            self._place_sheet()
+        return False
+
+    def _place_sheet(self):
+        """Along the page's right edge, under the toolbar."""
+        page, top = self.settings_page, 60
+        self.sheet.setGeometry(page.width() - self.sheet.width(), top, self.sheet.width(), page.height() - top)
+        self.sheet.raise_()
+
     def open_sheet(self):
         self.seed_before_sheet = self.seed
+        self._place_sheet()
         self.sheet.show()
 
     def cancel_sheet(self):
@@ -2452,6 +3121,9 @@ class SettingsWindow(QWidget):
             pal.setColor(QPalette.PlaceholderText, QColor(c["onSurfaceVariant"]))
             edit.setPalette(pal)
         self.find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
+        self.side_find_action.setIcon(glyph_icon(I_SEARCH, c["onSurfaceVariant"]))
+        for b, glyph, round_ in self.nav_glyphs:          # the sidebar's icons: the accent, New reading's on a disc
+            b.setIcon(QIcon(round_pixmap(glyph, c["primary"], 20)) if round_ else glyph_icon(glyph, c["accentText"], 18))
         self.key_eye.setIcon(glyph_icon(I_EYE, c["onSurfaceVariant"]))
         if hasattr(self, "chat"):                    # the providers' marks take the new colours
             self.refresh_providers()
@@ -2475,7 +3147,8 @@ class SettingsWindow(QWidget):
 
     def place_busy(self):
         """The bar sits right under the title bar (at the very top on a full-screen page)."""
-        self.busy.setGeometry(0, self.titlebar.height() if self.titlebar.isVisible() else 0, self.width(), 3)
+        x = self.sidebar.width() if self.sidebar.isVisible() else 0
+        self.busy.setGeometry(x, self.titlebar.height() if self.titlebar.isVisible() else 0, self.width() - x, 3)
 
     def resizeEvent(self, e):
         self.place_busy()
@@ -2490,7 +3163,13 @@ class SettingsWindow(QWidget):
     def showEvent(self, e):
         self._dwm(33, 2)    # Windows 11: round the corners of the frameless window
         super().showEvent(e)
+        # no focus ring on the sidebar as the window opens: it shows for keyboard users once they press Tab
+        QTimer.singleShot(0, self._calm_focus)
         self.shown.emit(True)
+
+    def _calm_focus(self):
+        if self.focusWidget() is None or self.focusWidget() in self.nav.buttons():
+            self.setFocus(Qt.OtherFocusReason)           # the window itself: nothing ringed
 
     def hideEvent(self, e):
         super().hideEvent(e)

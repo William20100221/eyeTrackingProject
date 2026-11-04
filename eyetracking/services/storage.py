@@ -247,7 +247,7 @@ def remove_calibration(path: Path) -> Path:
 
 
 def log_calibration(text: str) -> None:
-    """One line in the calibration log (Testing > Data > Calibration log): what a calibration gave, or why
+    """One line in the calibration log (Data > Calibration log): what a calibration gave, or why
     it was rejected, or that it was undone. Kept beside the calibrations it is about."""
     CALIB_DIR.mkdir(parents=True, exist_ok=True)
     with open(CALIB_DIR / "log.jsonl", "a", encoding="utf-8") as f:

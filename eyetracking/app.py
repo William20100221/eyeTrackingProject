@@ -219,7 +219,7 @@ class App(QObject):
         super().__init__()
         self.mouse, self.forced_provider = mouse, provider
 
-        # the main window: Chat + Settings + Calibration tabs (ui/control_window.py)
+        # the main window: a sidebar beside the chat, Tests, Data and Settings (ui/control_window.py)
         self.control = SettingsWindow()
         self.panel = self.control.chat
         self.ball = FloatingBall()
@@ -457,7 +457,7 @@ class App(QObject):
         return model
 
     def _say(self, text: str) -> None:
-        """What happened (a calibration, a gaze check, an undo): in the chat, and in the Testing sidebar's status."""
+        """What happened (a calibration, a gaze check, an undo): in the chat, and in the Tests / Data header's status."""
         self.panel.reply(text)
         self.control.testing.say(text)
 
@@ -502,7 +502,7 @@ class App(QObject):
         if self.mouse:
             return "Mouse mode: the mouse plays your eyes."
         if self.model is None:
-            return "No calibration yet: open the Calibration tab first."
+            return "No calibration yet: press Calibrate in the sidebar first."
         return (f"Gaze model trained on {self.samples_used} samples, the newest calibration counting most, "
                 f"head turns corrected with {self.model.k_source}.")
 
@@ -601,7 +601,7 @@ class App(QObject):
             self._release_camera("screen")
             self._show_window(self.panel)
             self.panel.reply("Go Reading reads other apps' text on Windows only, for now. Here, try "
-                             "Testing > Sample text: calibration, the gaze check and the sample text work on every system.")
+                             "Tests > Sample text: calibration, the gaze check and the sample text work on every system.")
             return
         self.reader, self.reader_hwnd, self.reader_title = ReadingTracker(), 0, ""
         self.ball.eyes_open = True
@@ -802,14 +802,14 @@ class App(QObject):
 
     def _log_calibration(self, text: str) -> None:
         """What a calibration gave (or why it was rejected, or that it was undone): said, and kept in
-        Testing > Data > Calibration log."""
+        Data > Calibration log."""
         log_calibration(text)
         self.control.testing.refresh()
         self._say(text)
 
     def check(self) -> None:
         if not self.mouse and self.model is None:
-            self.panel.reply("Calibrate first: open the Calibration tab.")
+            self.panel.reply("Calibrate first: press Calibrate in the sidebar.")
             return
         if not self._use_camera("check"):
             return
@@ -834,10 +834,10 @@ class App(QObject):
     def _gaze_logged(self, path: str) -> None:
         self._did("the gaze check", [Path(path)])
         self.control.testing.refresh()            # Data > Gaze checks lists it
-        self._say(f"Gaze samples saved: {Path(path).name}. See Testing > Data > Gaze checks.")
+        self._say(f"Gaze samples saved: {Path(path).name}. See Data > Gaze checks.")
 
     def blink_test(self) -> None:
-        """Testing > Blink test: record blink scores in six eye states, saved under data/blink_scores."""
+        """Tests > Blink test: record blink scores in six eye states, saved under data/blink_scores."""
         if not self._use_camera("blink"):
             return
         if self.mouse:
@@ -862,7 +862,7 @@ class App(QObject):
 
     def read(self) -> None:
         if self.model is None and not self.mouse:
-            self.panel.reply("Calibrate first: open the Calibration tab.")
+            self.panel.reply("Calibrate first: press Calibrate in the sidebar.")
             return
         if not self._use_camera("reading"):
             return
